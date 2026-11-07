@@ -10,6 +10,7 @@
       @dblclick.prevent="onDblClick"
       @contextmenu.prevent="onContext"
     >
+      <div v-show="baseLayer === 'vector'" ref="vectorEl" class="vector-map" />
       <!-- the base layer, then the roads & labels over it; each with its coarser tiles stretched under the missing ones -->
       <template v-for="L in tileLayers" :key="L.id">
         <img
@@ -178,11 +179,12 @@
         <button class="map-btn" :class="{ on: layersPanel }" @click="layersPanel = !layersPanel; playersPanel = false" title="Base map and overlays">Layers</button>
         <div v-if="layersPanel" class="layers-panel" @mousedown.stop @wheel.stop @dblclick.stop>
           <div class="panel-sub">Base map</div>
+          <label class="layer-opt"><input type="radio" value="vector" v-model="baseLayer" /> Vector (OpenFreeMap)</label>
           <label class="layer-opt"><input type="radio" value="sat" v-model="baseLayer" /> Satellite</label>
           <label class="layer-opt"><input type="radio" value="map" v-model="baseLayer" /> Map</label>
           <label class="layer-opt"><input type="radio" value="dark" v-model="baseLayer" /> Dark</label>
           <div class="panel-sub">Overlays</div>
-          <label class="layer-opt"><input type="checkbox" v-model="labelsOn" /> Roads &amp; labels</label>
+          <label v-if="baseLayer !== 'vector'" class="layer-opt"><input type="checkbox" v-model="labelsOn" /> Roads &amp; labels</label>
           <label class="layer-opt"><input type="checkbox" v-model="layersOn" /> Borders &amp; places
             <span class="layer-hint">(world to city zoom)</span></label>
           <label class="layer-opt" title="What is downloaded on this computer, and at what detail (LB / RB: the next view)">
@@ -470,9 +472,9 @@ function centreOn(lat, lon, z) {
 const TILE_DIR = "/temp/beamngEarth/maptiles/"
 function stored(key, def) { try { const v = localStorage.getItem(key); return v === null ? def : v } catch (e) { return def } }
 function store(key, v) { try { localStorage.setItem(key, v) } catch (e) { /* storage blocked: not kept */ } }
-const BASE_LAYERS = new Set(["sat", "map", "dark"])
-const storedBase = stored("beamngEarth.map.base", "sat")
-const baseLayer = ref(BASE_LAYERS.has(storedBase) ? storedBase : "sat")
+const BASE_LAYERS = new Set(["sat", "map", "dark", "vector"])
+const storedBase = stored("beamngEarth.map.base", "vector")
+const baseLayer = ref(BASE_LAYERS.has(storedBase) ? storedBase : "vector")
 const labelsOn = ref(stored("beamngEarth.map.labels", "0") === "1")
 watch(baseLayer, v => store("beamngEarth.map.base", v))
 watch(labelsOn, on => store("beamngEarth.map.labels", on ? "1" : "0"))
@@ -480,7 +482,7 @@ const layersPanel = ref(false)
 // "Dark" is not a tile source of its own: the "map" tiles (terrain-light, already hillshaded) through a CSS
 // filter (.tile-dark below) - the usual trick for a dark map without a dark-themed tile set of its own.
 const tileBaseLayer = computed(() => (baseLayer.value === "dark" ? "map" : baseLayer.value))
-const activeLayers = computed(() => (labelsOn.value ? [tileBaseLayer.value, "labels"] : [tileBaseLayer.value]))
+const activeLayers = computed(() => baseLayer.value === "vector" ? [] : (labelsOn.value ? [tileBaseLayer.value, "labels"] : [tileBaseLayer.value]))
 
 const readyTiles = ref({})                // layer -> Set of "z/x/y" whose file is there
 const NONE = new Set()
@@ -555,6 +557,7 @@ const notice = computed(() => {
   const s = state.value
   if (s.missing) return "BeamNG.Earth is not loaded"
   if (!s.connected) return "Companion server not connected: map tiles unavailable (places and the grid still work)"
+  if (baseLayer.value === "vector") return vectorError.value
   if (!s.mapPort) return "Map tiles unavailable (the companion server is older or has --map-tiles off)"
   if (tileErrors.value > 8 && tileLoads.value === 0) return "Map tiles unavailable (no imagery from the server: offline?)"
   return ""
@@ -572,6 +575,7 @@ const weatherBadge = computed(() => {
 
 const creditsFull = ref(false)          // the credits' whole text (else two lines)
 const attributionText = computed(() => {
+  if (baseLayer.value === "vector") return "OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors"
   if (!state.value.mapPort) return ""
   const sat = baseLayer.value === "sat"
   const parts = [mm.layerCredits(tileBaseLayer.value, labelsOn.value)]   // the EOX map / labels layers shown
@@ -1005,6 +1009,52 @@ function padButton(name, value) {
 }
 
 const mapEvents = useEvents()
+// MapLibre is under the existing geographic overlays and uses the same 256px-world camera.
+const vectorEl = ref(null), vectorError = ref("")
+let vectorMap = null, vectorLoading = false, vectorClosed = false
+function loadVectorScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script")
+    script.src = src
+    script.onload = resolve
+    script.onerror = () => { script.remove(); reject(new Error("Cannot load " + src)) }
+    document.head.appendChild(script)
+  })
+}
+async function syncVector() {
+  if (baseLayer.value !== "vector" || vectorClosed) return
+  if (!vectorMap) {
+    if (vectorLoading || !vectorEl.value) return
+    vectorLoading = true
+    try {
+      if (!window.maplibregl) {
+        const css = document.createElement("link")
+        css.rel = "stylesheet"; css.href = "/vehicles/common/maplibre/maplibre-gl.css"
+        document.head.appendChild(css)
+        await loadVectorScript("/vehicles/common/maplibre/maplibre-gl.js")
+      }
+      if (!window.EarthVector) await loadVectorScript("/vehicles/common/earth_vector.js")
+      if (vectorClosed) return
+      vectorMap = window.EarthVector.createMap(vectorEl.value, message => { vectorError.value = "Vector map: " + message })
+      vectorMap.on("idle", () => { vectorError.value = "" })
+    } catch (error) { vectorError.value = "Vector map unavailable: " + error.message; return }
+    finally { vectorLoading = false }
+  }
+  vectorMap.resize()
+  const v = view.value
+  vectorMap.jumpTo({ center: [v.lon, v.lat], zoom: v.z - 1, bearing: 0 })
+}
+mapEvents.on("BeamNGEarthVectorResource", msg => {
+  if (window.EarthVector) window.EarthVector.resourceData(msg)
+})
+watch([view, w, h, baseLayer], () => nextTick(syncVector))
+onMounted(() => nextTick(syncVector))
+onUnmounted(() => {
+  vectorClosed = true
+  if (vectorMap) vectorMap.remove()
+  if (window.EarthVector) window.EarthVector.dispose()
+})
+
 mapEvents.on("BeamNGEarthMapInput", d => {
   if (!d) return
   const a = Number(d.a) || 0
@@ -1888,6 +1938,7 @@ const fmtLatLon = mm.fmtLatLon
   cursor: crosshair;
   background: #2a3038;
 }
+.vector-map { position: absolute; inset: 0; pointer-events: none; }
 .map-tile {
   position: absolute;
   pointer-events: none;

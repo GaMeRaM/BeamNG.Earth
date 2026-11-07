@@ -1235,6 +1235,13 @@ local function onMessage(msg)
   elseif t == 'cache_map_result' then
     -- the map's cache view: a grid of levels for the asked box (EarthMap.vue polls takeCacheMap)
     if msg.id then M._cacheMapResults = { [msg.id] = msg } end
+  elseif t == 'vector_resource' then
+    if type(msg.id) == 'string' and msg.id:match('^dashboard%-') then
+      local dashboard = extensions.beamngEarth_dashboard
+      if dashboard and dashboard.onResource then dashboard.onResource(msg) end
+    else
+      guihooks.trigger('BeamNGEarthVectorResource', msg)
+    end
   elseif t == 'map_tiles_ready' then
     -- a world map tile file is written (settings.mapTiles: the map polls every 250 ms while it misses tiles)
   elseif t == 'traffic_tile' or t == 'traffic_drop' or t == 'traffic_far_tile' or t == 'traffic_far_drop' then
@@ -2817,6 +2824,12 @@ end
 
 -- The world map asks for its tiles as files (settings.mapTiles; {{z, x, y, layer}, ...}, the most wanted first;
 -- an empty list cancels the last one). Whether it went out.
+function M.requestVectorResource(id, url)
+  if not net.isConnected() then return false end
+  net.send({ type = 'vector_resource', id = id, url = url })
+  return true
+end
+
 function M.requestMapTiles(tiles)
   if not net.isConnected() then return false end
   net.send({ type = 'map_tiles', tiles = tiles })
@@ -2826,8 +2839,8 @@ end
 function M._state() return st end -- read-only: the dev tools and the settings page
 function M._rebaseLag() return rebaseLag end -- for tests
 function M._governor() return gov end
--- The in-vehicle map app's session context. Read-only snapshot: map tiles are obtained through
--- settings.mapTiles(list), which requests files under /temp rather than using CEF HTTP.
+-- The in-vehicle map app's session context. The vector map obtains resources through
+-- requestVectorResource rather than CEF HTTP.
 function M.dashboardContext()
   local player
   local pl = st.player

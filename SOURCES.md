@@ -128,3 +128,12 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 The server never asks OpenStreetMap's own servers (the Overpass API, OSM's vector tiles) or Protomaps at runtime: they
 are run by volunteers for other uses, and the data above already covers what they would give.
+
+## Experimental vector maps
+
+The vehicle navigator and the M map's **Vector (OpenFreeMap)** layer request
+Liberty style, TileJSON, vector tiles, fonts and sprites from `tiles.openfreemap.org`.
+The companion fetches these on demand through netfetch and relays base64 data over
+the game connection, because CEF HTTP requests are unavailable. There is no bulk
+download; a bounded 64-resource memory cache is shared by both maps. Errors appear
+on the relevant screen. The existing raster layers remain available on the M map.

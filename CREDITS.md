@@ -185,3 +185,12 @@ BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic 
 Dynamic Damage Particles, Dynamic Scratches, SparkMod: other authors' mods the project owner uses;
 BeamNG.Earth only coexists with them (e.g. the weather module backs off when BWM_Weather drives the
 weather). The pause-menu integration follows the pattern of the TAA Standalone mod.
+
+## Experimental vector maps
+
+- MapLibre GL JS 4.7.1 (BSD-3-Clause), bundled under
+  `mod/beamng_earth/vehicles/common/maplibre/`; full license is included as `LICENSE.txt`.
+  Source: https://github.com/maplibre/maplibre-gl-js/tree/v4.7.1
+- OpenFreeMap Liberty style, tiles, glyphs and sprites: https://openfreemap.org/
+  © OpenMapTiles; map data © OpenStreetMap contributors (ODbL).
+  Attribution is shown on both map screens.

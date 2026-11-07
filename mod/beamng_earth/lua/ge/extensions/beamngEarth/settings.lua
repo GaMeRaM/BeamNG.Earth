@@ -92,7 +92,7 @@ M.SCHEMA = {
   models3dmr = { kind = 'bool', default = true, label = '3D models from 3dmr.eu' },
   directionSigns = { kind = 'bool', default = true, label = 'Direction signs' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
-  dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
+  dashboardSatellite = { kind = 'bool', default = true, label = 'Vector map on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
   profilerMode = { kind = 'enum', default = 'essential', values = { 'essential', 'full' }, label = 'Profiler mode' },

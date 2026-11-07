@@ -140,6 +140,7 @@ import heightmap  # noqa: E402
 import staging  # noqa: E402
 import imagery as imagerymod  # noqa: E402
 import matslots as matslotsmod  # noqa: E402
+import vectorresources
 import maptiles as maptilesmod  # noqa: E402
 import geocode as geocodemod  # noqa: E402
 import routing as routingmod  # noqa: E402
@@ -4754,6 +4755,23 @@ class Connection:
         self.lod_scale = self.tree_scale = self.building_scale = 1.0
         self.view_cap = None                    # the far field's radius at most (m): the mod's fixed view distance
 
+    async def vector_resource(self, msg):
+        request_id = msg.get("id")
+        if not isinstance(request_id, str) or len(request_id) > 100:
+            return
+        out = {"type": "vector_resource", "id": request_id}
+        try:
+            url = vectorresources.validate_url(msg.get("url"))
+            # At most four outstanding requests per connection, independent of other UI work.
+            if not hasattr(self, "_vector_slots"):
+                self._vector_slots = asyncio.Semaphore(4)
+            async with self._vector_slots:
+                out["data"] = await self.loop.run_in_executor(
+                    self.s.ui_pool, vectorresources.resource, self.s.net, url)
+        except Exception as exc:
+            out["error"] = str(exc)[:200]
+        self.send(out)
+
     async def map_tiles(self, msg):
         """The world map's tiles {"tiles": [[z, x, y, layer?], ...]} (layer "sat" by default, "map", "labels"; the
         most wanted first): each written once under <user>/temp/beamngEarth/maptiles/ (maptiles.tile_path; the
@@ -5521,6 +5539,8 @@ class Connection:
             self.commit_terrain(msg)
         elif kind == "pose":
             self.on_pose(msg)
+        elif kind == "vector_resource":
+            self.spawn(self.vector_resource(msg))
         elif kind == "map_tiles":               # the in-game map's tiles, as files (the UI cannot fetch http)
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
