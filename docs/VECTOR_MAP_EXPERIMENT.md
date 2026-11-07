@@ -4,7 +4,10 @@ Branch: `experiment/maplibre-dashboard` in https://github.com/GaMeRaM/BeamNG.Ear
 
 Both the vehicle navigator and the M map use OpenFreeMap's Liberty style:
 https://tiles.openfreemap.org/styles/liberty. No API key is needed.
-MapLibre GL JS 4.7.1 is bundled locally, including its BSD license. This version
+MapLibre GL JS 4.7.1 is bundled locally, including its BSD license.
+When WebGL is unavailable (as in BeamNG CEF), OpenLayers 10.11.0 with
+ol-mapbox-style 13.9.0 draws the same vector tiles and Liberty style through
+Canvas2D. Canvas labels use the local Arial font instead of remote PBF glyphs. This version
 supports WebGL 1 fallback, chosen for the game's embedded CEF rather than requiring WebGL 2.
 
 Install the mod and run the companion **from the same branch**. The new
@@ -34,9 +37,26 @@ lifecycle. The Vue script and template compile successfully. Live companion
 fetches have been checked for style, TileJSON, a vector tile, sprite JSON/PNG and
 a glyph range.
 
-Still requires BeamNG validation: WebGL/worker availability in the vehicle
-WebView, visible rendering on an actual car screen, alignment of M-map overlays,
-reopening M, switching cars, and frame time while driving. In particular, this
-experiment does not establish that MapLibre works in the game's CEF runtime.
-If a vehicle WebView cannot create WebGL, the screen reports the initialization
-error; disabling its dashboard switch restores the stock navigation page.
+A browser smoke test with WebGL disabled and browser HTTP requests blocked
+rendered real OpenFreeMap vector tiles, buildings, labels and sprites through the
+Lua-bridge API shim. It confirmed `webgl: false`, Canvas2D rendering and no page
+errors. Resource HTTP was handled by the test harness, representing the companion.
+
+Still requires BeamNG validation: visible rendering on an actual car screen,
+alignment of M-map overlays, reopening M, switching cars, and frame time while
+driving. The supplied screenshot showed `GL_VENDOR = Disabled` in BeamNG; this
+is why the Canvas2D fallback is now used there. If initialization fails, the
+screen reports the error; disabling its dashboard switch restores the stock page.
+
+## Rebuilding the Canvas bundle
+
+```
+cd tools/vector_canvas
+npm ci
+npm run build
+```
+
+The pinned lockfile and source produce `earth_canvas.js`, `earth_canvas.css` and
+`earth_canvas.LICENSES.txt` under the mod's `vehicles/common/` directory. The
+Windows experiment workflow rebuilds them before packaging. No npm installation
+is needed by the player.

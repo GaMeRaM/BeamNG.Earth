@@ -194,3 +194,8 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
 - OpenFreeMap Liberty style, tiles, glyphs and sprites: https://openfreemap.org/
   © OpenMapTiles; map data © OpenStreetMap contributors (ODbL).
   Attribution is shown on both map screens.
+
+- Canvas2D fallback: OpenLayers 10.11.0 (BSD-2-Clause), ol-mapbox-style 13.9.0
+  (BSD-2-Clause) and their dependencies. Source and pinned build manifest:
+  `tools/vector_canvas/`. Bundled dependency license texts:
+  `mod/beamng_earth/vehicles/common/earth_canvas.LICENSES.txt`.

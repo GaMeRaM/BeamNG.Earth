@@ -32,3 +32,10 @@ build/
 native/serverlist/target/
 server/earthfast.FAST-BUILD-do-not-commit
 *.prof
+
+# Vector renderer build dependencies
+tools/vector_canvas/node_modules/
+
+# Local browser verification artifacts
+.playwright-cli/
+output/playwright/

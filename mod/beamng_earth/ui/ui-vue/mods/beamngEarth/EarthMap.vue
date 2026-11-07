@@ -1033,6 +1033,12 @@ async function syncVector() {
         document.head.appendChild(css)
         await loadVectorScript("/vehicles/common/maplibre/maplibre-gl.js")
       }
+      if (!window.EarthCanvas) {
+        const css = document.createElement("link")
+        css.rel = "stylesheet"; css.href = "/vehicles/common/earth_canvas.css"
+        document.head.appendChild(css)
+        await loadVectorScript("/vehicles/common/earth_canvas.js")
+      }
       if (!window.EarthVector) await loadVectorScript("/vehicles/common/earth_vector.js")
       if (vectorClosed) return
       vectorMap = window.EarthVector.createMap(vectorEl.value, message => { vectorError.value = "Vector map: " + message })
@@ -1938,7 +1944,7 @@ const fmtLatLon = mm.fmtLatLon
   cursor: crosshair;
   background: #2a3038;
 }
-.vector-map { position: absolute; inset: 0; pointer-events: none; }
+.vector-map { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
 .map-tile {
   position: absolute;
   pointer-events: none;

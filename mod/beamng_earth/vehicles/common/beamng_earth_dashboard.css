@@ -24,3 +24,5 @@ body {
 #status { position: absolute; top: 3px; left: 3px; background: #222b; }
 #credits { position: absolute; bottom: 0; left: 0; right: 0; padding: 2px;
   background: #000b; font-size: 8px; }
+
+#player, #status, #credits { z-index: 1; pointer-events: none; }

@@ -40,3 +40,18 @@ test('MapLibre bridge decodes JSON/binary, limits concurrency and handles aborts
   transport.dispose();
   assert.ok((await settled).every(result => result.status === 'rejected'));
 });
+
+test('CEF without WebGL selects Canvas2D without constructing MapLibre', () => {
+  let selected = false;
+  const adapter = { jumpTo() {}, resize() {}, remove() {} };
+  const window = { location: { pathname: '/beamng_earth_dashboard.html' },
+    EarthCanvas: { createMap: (container, request) => {
+      assert.equal(container, 'map'); assert.equal(typeof request, 'function'); selected = true; return adapter;
+    } } };
+  const context = vm.createContext({ window, document: { createElement: () => ({ getContext: () => null }) },
+    maplibregl: { Map: class { constructor() { throw new Error('WebGL must not be used'); } } },
+    Map, Promise, Uint8Array, TextDecoder, setTimeout, clearTimeout, atob });
+  vm.runInContext(fs.readFileSync(new URL('../beamng_earth/vehicles/common/earth_vector.js', import.meta.url), 'utf8'), context);
+  assert.equal(window.EarthVector.createMap('map'), adapter);
+  assert.equal(selected, true);
+});

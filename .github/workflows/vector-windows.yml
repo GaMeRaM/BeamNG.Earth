@@ -3,8 +3,6 @@ name: Vector maps Windows experiment
 on:
   push:
     branches: [experiment/maplibre-dashboard]
-    paths:
-      - .github/workflows/vector-windows.yml
   workflow_dispatch:
 
 permissions:
@@ -22,6 +20,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Build Canvas2D renderer
+        working-directory: tools/vector_canvas
+        run: |
+          npm ci
+          npm run build
       - name: Mark the experimental build
         shell: bash
         run: printf '1.8.2-beta.maplibre.%s\n' '${{ github.run_number }}' > VERSION

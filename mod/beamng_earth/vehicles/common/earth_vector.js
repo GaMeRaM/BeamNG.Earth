@@ -62,6 +62,13 @@
   }
   let registered = false;
   function createMap(container, onError) {
+    if (window.EarthCanvas) {
+      const probe = document.createElement('canvas');
+      const gl = probe.getContext('webgl2') || probe.getContext('webgl');
+      if (!gl) return window.EarthCanvas.createMap(container, request, onError);
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (lose) lose.loseContext();
+    }
     if (!registered) {
       maplibregl.addProtocol('earth', async (params, controller) => {
         const data = await request(params.url.replace(/^earth:\/\//, 'https://'), controller.signal);
