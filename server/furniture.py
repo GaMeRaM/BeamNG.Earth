@@ -11,6 +11,7 @@ generation"). Pure.
 """
 import hashlib
 import math
+import ruinfra
 
 import numpy as np
 
@@ -149,7 +150,7 @@ WIRE_R = 0.012                  # m half width of a wire's ribbons
 WIRE_VERTS_MAX = 60000          # a tile's wire mesh at most (the engine's 16-bit index buffers; railways.VERTS_MAX)
 
 
-def wire_lines(poles):
+def wire_lines(poles, anchors=None):
     """Polylines (k, 3) of the wires between consecutive poles [(x, y, z, yaw_deg)] of one road side."""
     out = []
     for (x0, y0, z0, w0), (x1, y1, z1, w1) in zip(poles[:-1], poles[1:]):
@@ -158,9 +159,11 @@ def wire_lines(poles):
             continue
         k = max(2, int(math.ceil(span / WIRE_SEG_M)))
         t = np.linspace(0.0, 1.0, k + 1)
-        for off in WIRE_ARMS:
-            a = np.array([x0 + math.cos(math.radians(w0)) * off, y0 + math.sin(math.radians(w0)) * off, z0 + WIRE_Z])
-            b = np.array([x1 + math.cos(math.radians(w1)) * off, y1 + math.sin(math.radians(w1)) * off, z1 + WIRE_Z])
+        for ox, oy, oz in (anchors if anchors is not None else [(off, 0., WIRE_Z) for off in WIRE_ARMS]):
+            def point(x, y, z, yaw):
+                c, sn = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
+                return np.array([x + c * ox - sn * oy, y + sn * ox + c * oy, z + oz])
+            a, b = point(x0, y0, z0, w0), point(x1, y1, z1, w1)
             p = a[None] + (b - a)[None] * t[:, None]
             p[:, 2] -= 4.0 * WIRE_SAG * span * t * (1.0 - t)
             out.append(p)
@@ -552,6 +555,7 @@ G_LENS = "lamplens"
 # and a glow at each (tools/build_lamp_glow.py: a ball growing with distance, drawn at night only, so lamps show far off)
 G_GLOW = "lampglow"
 LAMP_HEADS = {G_LAMP: (2.71130, -0.00032, 7.95393), G_POLELAMP: (-2.67592, 0.00012, 0.43511)}
+LAMP_HEADS.update({g: ruinfra.citylamps.HEAD for g in (*ruinfra.citylamps.GROUPS, ruinfra.BRACKET)})
 LENS_DROP_M = 0.03
 TOWN_POLE_CLASSES = {"residential", "tertiary", "unclassified", "secondary", "living_street", "primary", "trunk"}
 TOWN_POLE_SPACING = 40.0
@@ -607,6 +611,8 @@ COLLISION_BOXES = {
     G_BIN: (1.1, ((-0.264, -0.264, -0.003, 0.264, 0.264, 1.111),)),
     "pylon": (35.8, ((-3.893, -4.152, -5.873, 3.893, 4.152, 29.818),)),
 }
+COLLISION_BOXES.update(ruinfra.COLLISION_BOXES)
+COLLISION_BOXES[ruinfra.MARKER] = (1.25, ((-.10, -.10, 0., .10, .10, 1.25),))
 ROAD_PROP_GAP_M = 0.15
 
 
@@ -891,6 +897,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     sampled tapers and the generated decks' shifts / sidewalks; None builds one from these roads and decks.
     development: local built-environment samples (development.py) for the street trees, hydrants, benches and bins;
     None: none of those. Lighting and mapped infrastructure stay independent."""
+    ru = ruinfra.enabled(country)
+    wire_anchors = ruinfra.WIRE_ANCHORS if ru else None
+    pole_group, pole_height = (ruinfra.POLE, ruinfra.POLE_H) if ru else (G_POLE, 9.2)
     spacing_of = lamp_spacing(region, dense=not town)
     lighting = lighting or {}  # OSM way lighting; absent/unknown keeps the inferred rule
     x0, y0, x1, y1 = box
@@ -956,11 +965,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 for p, out in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
                     q = p[:2] - out * (w / 2 - 0.6)
                     yaw = _yaw(out[0], out[1])
-                    pole = [G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                            round(yaw, 1), 1.0, 9.2, 0.0]
+                    pole = [pole_group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                            round(yaw, 1), 1.0, pole_height, 0.0]
                     if not clearance.clear(pole):
                         if wires is not None and len(run_poles) > 1:
-                            wires.extend(_own_spans(run_poles, box))
+                            wires.extend(_own_spans(run_poles, box, wire_anchors))
                         run_poles = []
                         continue
                     run_poles.append((pole[1], pole[2], pole[3], pole[4]))
@@ -971,7 +980,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                             rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                                          round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
                 if wires is not None and len(run_poles) > 1:
-                    wires.extend(_own_spans(run_poles, box))
+                    wires.extend(_own_spans(run_poles, box, wire_anchors))
             rule = None
         if rule is not None and lighting.get(fid) != "no":
             spacing, both = rule
@@ -1053,11 +1062,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 continue
             # the cross-arm (local x) across the road, the wires (local y) along it
             yaw = _yaw(n[0], n[1])
-            pole = [G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                    round(yaw, 1), 1.0, 9.2, 0.0]
+            pole = [pole_group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                    round(yaw, 1), 1.0, pole_height, 0.0]
             if not clearance.clear(pole):
                 if len(run) > 1 and wires is not None:
-                    wires.extend(_own_spans(run, box))
+                    wires.extend(_own_spans(run, box, wire_anchors))
                 run = []
                 continue
             run.append((pole[1], pole[2], pole[3], pole[4]))
@@ -1067,17 +1076,20 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                                  round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
         if len(run) > 1 and wires is not None:
-            wires.extend(_own_spans(run, box))
+            wires.extend(_own_spans(run, box, wire_anchors))
+    if ru:
+        rows = ruinfra.localize(rows)
+        rows.extend(ruinfra.markers(roads, box, clearance, ground))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
     rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_STOP, G_YIELD) or clearance.clear(r)]
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
-def _own_spans(run, box):
+def _own_spans(run, box, wire_anchors=None):
     """The wires of the spans of a run of poles that start in the tile (each span drawn by one tile)."""
     x0, y0, x1, y1 = box
     out = []
     for a, b in zip(run[:-1], run[1:]):
         if _owns(box, a[0], a[1]):
-            out.extend(wire_lines([a, b]))
+            out.extend(wire_lines([a, b], wire_anchors))
     return out

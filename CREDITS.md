@@ -199,3 +199,16 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
   (BSD-2-Clause) and their dependencies. Source and pinned build manifest:
   `tools/vector_canvas/`. Bundled dependency license texts:
   `mod/beamng_earth/vehicles/common/earth_canvas.LICENSES.txt`.
+
+### Russian roadside experiment (this fork)
+
+The Russian pack adapts fuxau's [town entry/exit sign generator (PR #597)](https://github.com/TecnaGamer/BeamNG.Earth/pull/597),
+Robitnik's [ordinary sign rules/artwork (PR #882)](https://github.com/TecnaGamer/BeamNG.Earth/pull/882) and
+[procedural street lamps (PR #883)](https://github.com/TecnaGamer/BeamNG.Earth/pull/883), and exencendre's
+[concrete utility pole and reflector-post models (PR #505)](https://github.com/TecnaGamer/BeamNG.Earth/pull/505).
+These original assets and code retain the repository's MIT licence. The pinned import commits and
+limitations are recorded in `docs/RUSSIAN_SIGNS.md`. Town names/outlines come from Overture divisions
+(© OpenStreetMap contributors, ODbL; per-feature source attribution also includes the divisions theme's
+CC BY sources as reported in `overture.THEME_LICENCES`). Cyrillic uses the bundled OFL Overpass font.
+
+Overture divisions attribution (verbatim): ODbL. © OpenStreetMap contributors. Available under the Open Database License. geoBoundaries. Available under CC BY 4.0. Esri Community Maps contributors. Available under CC BY 4.0. Land Information New Zealand (LINZ). Available under CC BY 4.0.

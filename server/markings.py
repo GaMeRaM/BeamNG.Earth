@@ -66,11 +66,18 @@ _AU = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.12, edge_motorw
 _WHITE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
                centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
                lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
+# GOST R 51256-2018, table A.1: 1.5 has a 1:3 dash/gap ratio.
+# Select representative permitted patterns (urban 2/6, rural 3/9); actual
+# posted speeds and surveyed paint are not available at every segment.
+_RU = _WHITE._replace(w=0.15, w_urban=0.10, edge=0.15, edge_motorway=0.20,
+                     centre_rural=(3.0, 9.0), centre_urban=(2.0, 6.0),
+                     lane_rural=(3.0, 9.0), lane_urban=(2.0, 6.0), lane_motorway=(4.0, 12.0),
+                     double_gap=0.15)
 _YELLOW = _WHITE._replace(centre="line_yellow")
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
           "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
-          "SE": _SE}
+          "SE": _SE, "RU": _RU}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
 YELLOW_CENTRE = {"MX", "GT", "BZ", "HN", "SV", "NI", "CR", "PA", "CU", "DO", "HT", "PR", "JM", "BS", "TT", "CO", "VE",

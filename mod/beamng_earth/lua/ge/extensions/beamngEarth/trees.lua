@@ -15,6 +15,7 @@ local geotile = require('beamngEarth/geotile')
 -- collision (probe 2026-10-17), so a moved tile that must collide (within SOLID_M) has its items made again at the
 -- new placement first (flush), and only those: the far ones never collide.
 M.geoMoved, M.geoFlushed = 0, 0
+local townsigns = require('beamngEarth/townsigns')      -- the town signs' faces (their groups come with the tiles)
 
 M.PER_FRAME = 250       -- items made or removed per frame at most
 M.ROWS_PER_FRAME = 12000 -- rows of changing tiles looked at per frame at most (Lua time: 30000 averaged 2.5 ms)
@@ -50,7 +51,7 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { shrub = true, desert_shrub = true, door = true, lamplens = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { ru_delineator = true, ru_pole_lamp = true, shrub = true, desert_shrub = true, door = true, lamplens = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -192,6 +193,11 @@ M.CATALOG = {
   bin = { { '/art/shapes/garage_and_dealership/Clutter/clutter_city_bin_round', 1.1 }, { WCA .. 'objects/garbage_bin_a', 1.1 } },
   polelamp = { { ECA .. 'buildings/electrical_pole_lamp', 1.1 } },
   streetlight = { { '/art/shapes/garage_and_dealership/Clutter/eca_lamppost', 9.0 } },
+  ru_pole_concrete = { { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_concrete_three', 8.5 } },
+  ru_delineator = { { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_red_black', 1.25 } },
+  ru_pole_lamp = { { '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps/bne_lamp_ru_bracket', 9.0 } },
+  eu_lamp_steel = { { '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps/bne_lamp_eu_steel', 9.0 } },
+  eu_lamp_concrete = { { '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps/bne_lamp_eu_concrete', 9.0 } },
   pole = { { '/levels/automation_test_track/art/shapes/objects/s_powerpole_3wire', 9.2 } },
   -- high-voltage lines' towers (server powerlines.py): the stock lattice tower (West Coast USA's is the same shape)
   pylon = { { '/levels/automation_test_track/art/shapes/objects/pylon', 35.8 } },
@@ -299,6 +305,8 @@ end
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
 vienna.install(M)
 local MATERIALS = {
+  '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps',
+  '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure',
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',
   WCA .. 'trees/trees_conifer', WCA .. 'trees/trees_oak', WCA .. 'trees/trees_eucalyptus', WCA .. 'trees/trees_palm',
@@ -650,9 +658,9 @@ local function shapeOf(t, i)
   return s, sc
 end
 
--- group: a sign's group (vienna_convention_speed_signs.lua) also makes a second item at the same spot and scale, its
--- body, and takes the collision. Only the first shape is counted in pop (allow's budget): the body is shared by every
--- sign, spelled in the tile's variant like the rest, so its population is split.
+-- group: a sign's group (vienna_convention_speed_signs.lua, townsigns.lua) also makes a second item at the same spot
+-- and scale, its body, and takes the collision. Only the first shape is counted in pop (allow's budget): the body is
+-- shared by every sign, spelled in the tile's variant like the rest, so its population is split.
 -- One matrix and two vectors for every item made (from Madderose's PR #41): createNewItem copies the transform into
 -- the item, as the stock foliage scatter tool relies on (editor/toolUtilities/foliageScatter.lua reuses its pose and
 -- vectors for every item it plants). A new MatrixF and two to five vec3 an item were garbage for the Lua collector,
@@ -660,7 +668,7 @@ end
 -- before stays.
 local itemMat, itemVec, itemPos = nil, nil, nil
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
-  local d = itemType(shape, vienna.faceSolid(group, solid))
+  local d = itemType(shape, vienna.faceSolid(group, townsigns.faceSolid(group, solid)))
   if not d then M.errors = M.errors + 1; return nil end
   if not itemMat then itemMat, itemVec, itemPos = MatrixF(true), vec3(0, 0, 0), vec3(0, 0, 0) end
   local m = itemMat
@@ -697,7 +705,7 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   end
   local ok, it = pcall(function() return fd:createNewItem(d, m, sc) end)
   if not ok then M.errors = M.errors + 1; return nil end
-  local body = vienna.body(group)
+  local body = vienna.body(group) or townsigns.body(group)
   if body then
     local pair = vienna.addBody(fd, it, spelled(body, variant), m, sc, solid, itemType)
     if pair then it = pair else M.errors = M.errors + 1 end
@@ -888,6 +896,17 @@ M.tileThreshold = tileThreshold
 -- its graph changes, a few times a minute while driving: all 5,300 tiles of a drive through LA rescanned each time
 -- kept the tree passes at their time limit, the new tiles' trees waiting behind (2026-11-02).
 M.suppress = nil
+-- M.hiders[name](group, x, y, anchor) -> true hides one too, for the other modules that need it (townsigns.lua: the
+-- trees in front of a town sign), each under its own name; M.refreshNear re-runs the rows of the tiles near a spot
+-- that changed.
+M.hiders = {}
+local function hidden(g, x, y, anchor)
+  if M.suppress and M.suppress(g, x, y) then return true end
+  for _, fn in pairs(M.hiders) do
+    if fn(g, x, y, anchor) then return true end
+  end
+  return false
+end
 -- Pure but for its cache (t.hasGroup): does tile t hold an item of group g?
 function M.tileHasGroup(t, g)
   t.hasGroup = t.hasGroup or {}
@@ -911,6 +930,14 @@ function M.refresh(group)
     if group == nil or M.tileHasGroup(t, group) then t.pending, t.scan = true, nil end   -- (every row again)
   end
   dirty = true
+end
+-- The anchor's tiles (256 m squares) that reach within r (m) of (x, y): their rows looked at again.
+function M.refreshNear(anchor, x, y, r)
+  for _, t in pairs(tiles) do
+    if t.anchor == anchor and math.abs(t.cx - x) <= 128 + r and math.abs(t.cy - y) <= 128 + r then
+      t.pending, t.scan = true, nil
+    end
+  end
 end
 
 -- Which of the capped groups a tile at distance d still shows (changes re-run its rows).
@@ -1249,8 +1276,9 @@ function M.update(anchorId, player, view, frameMs)
           r = 2
           if not M.unknownGroups[g] then M.unknownGroups[g] = true; log('W', 'beamngEarth.trees', 'no shapes for group ' .. g) end
         end
-        -- an item something else stands in for (navgraph.lua's switchable signal heads)
-        if g and M.suppress and M.suppress(g, f[b + F_X], f[b + F_Y]) then r = 2 end
+        -- an item something else stands in for (navgraph.lua's switchable signal heads), or one in the way of
+        -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
+        if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor) then r = 2 end
         local solid = near and not M.NO_COLLIDE[g or '']
         if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
           local sh, sc = shapeOf(t, i)

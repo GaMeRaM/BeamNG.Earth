@@ -58,6 +58,7 @@ export const settingsSchema = [
       { id: "models3dmr", type: "bool", default: true, name: "3D models from 3dmr.eu", desc: "Landmarks such as the Eiffel Tower or the Dragon Bridge in Da Nang as real 3D models from the open library 3dmr.eu, downloaded when you first drive near them. Off: the usual generated buildings and bridges there. Your own models (local_models.json) stay.",
         note: "Takes effect the next time you start BeamNG.Earth." },
       { id: "directionSigns", type: "bool", default: true, name: "Direction signs", desc: "Direction boards before junctions in Russia, Ukraine, Czechia, Poland and Germany, inferred from the road network and nearby towns. Russian boards omit estimated distances and English names. Needs Roads and Highway signs." },
+      { id: "roadSigns", type: "bool", default: true, name: "Road signs", desc: "Ordinary signs where the road data implies them: no entry, dead end, crossings, bends, roundabouts, give way and stop, tunnels, bus stops. Russia, Ukraine, Czechia, Poland and Germany. Generated from road data; some signs are inferred. Needs Roads and Highway signs." },
       { id: "rebaseDistance", type: "float", min: 2000, max: 16000, step: 100, default: 15000, name: "Rebase distance (m)", desc: "Advanced. How far you drive before the world quietly moves back under you (keeps the physics precise). 15 km keeps precision at about 1 mm." },
     ],
   },
