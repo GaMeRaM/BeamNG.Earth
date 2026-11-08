@@ -1513,6 +1513,29 @@ def garage_drives(items, lines, x0, y0):
 GARAGE_DRIVE_W = 6.5        # m: a garage entrance's two lanes
 GARAGE_DRIVE_MAX_M = 25.0   # m from the outline to a road's edge at most
 
+OPEN_CANOPY_CLASSES = {"shelter", "carport", "roof"}
+
+
+def _canopy(m, spec, gmin, gmax, mat):
+    """An explicitly mapped open shelter: roof and posts, shared by rendering and collision."""
+    ring = np.asarray(spec.ring, np.float64)[:, :2]
+    z0 = base_z(spec, gmin, gmax) + (spec.min_h or 0.0)
+    z1 = z0 + spec.height
+    uv = (0.002, 0.995)
+    for r, z in ((ring, z1), (ring[::-1], z1 - 0.18)):
+        m.poly([(p[0], p[1], z) for p in r], [uv] * len(r), mat)
+    center = ring.mean(0)
+    for a, b in zip(ring, np.roll(ring, -1, axis=0)):
+        m.quad((a[0], a[1], z1 - 0.18), (b[0], b[1], z1 - 0.18),
+               (b[0], b[1], z1), (a[0], a[1], z1), uv, uv, uv, uv, mat)
+        length = float(np.hypot(*(b - a)))
+        posts = max(1, int(math.ceil(length / 6.0)))
+        for t in range(posts):
+            p = a + (b - a) * t / posts
+            inward = center - p
+            p = p + inward / max(float(np.hypot(*inward)), 1e-9) * 0.12
+            _box(m, p, np.array([1.0, 0.0]), 0.08, 0.08, z0 - FOUNDATION_M, z1 - 0.18, mat)
+
 
 def build(specs_and_ground, lite=False):
     """The tile's mesh from [(Spec, ground z min, ground z max)] with rings in the tile's local frame:
@@ -1526,6 +1549,9 @@ def build(specs_and_ground, lite=False):
             landmarks.build(m, spec, gmin, _landmark_token(spec), lite, _landmark_tokens())
             continue
         mat_idx = _Looks(spec.seed)
+        if spec.cls in OPEN_CANOPY_CLASSES:
+            _canopy(m, spec, gmin, gmax, mat_idx[spec.roof_mat])
+            continue
         if spec.cls in BRIDGE_CLASSES:
             _steel_frame(m, spec, gmin, mat_idx[spec.facade if spec.facade in LOOKS else STEEL], lite)
             continue
@@ -1609,6 +1635,9 @@ def collision_mesh(specs_and_ground):
     tok = (MATERIALS.index(PANEL), (128, 128, 128, 255))
     zero = (0.0, 0.0)
     for spec, gmin, gmax in specs_and_ground:
+        if spec.cls in OPEN_CANOPY_CLASSES:
+            _canopy(m, spec, gmin, gmax, tok)
+            continue
         if spec.cls in BRIDGE_CLASSES:          # its legs (the decks run between them)
             _steel_frame(m, spec, gmin, tok, True, legs_only=True)
             continue
@@ -1828,8 +1857,8 @@ OVER_TUNNEL_CLEAR_M = 7.5   # (the tube's vault is roadmesh.TUNNEL_H = 6.8 m ove
                             # east portal building closed the tunnel)
 
 
-def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
-    """Polylines (k, 2) relative to (x0, y0) of the public roads on the ground near the tile (for road_through)."""
+def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, with_width=False):
+    """Public ground-road lines relative to the tile. with_width adds half-width as a third column, for ML filtering."""
     import roads as roadsmod
     out = []
     for f in road_layers:
@@ -1860,6 +1889,10 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
                 if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
                         or xy[:, 1].min() > size + margin:
                     continue
+                if with_width:
+                    spec = roadsmod.road_specs(f)[i]
+                    half = spec.width / 2 if spec is not None else ML_ROAD_M
+                    xy = np.c_[xy, np.full(len(xy), half)]
                 out.append(xy)
     return out
 
@@ -1994,7 +2027,7 @@ def _line_dist(p, lines):
     """Distance from point p (2,) to the nearest of the polylines lines (k, 2), or inf."""
     best = np.inf
     for ln in lines:
-        a, b = ln[:-1], ln[1:]
+        a, b = ln[:-1, :2], ln[1:, :2]
         d = b - a
         t = np.clip(((p - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
         q = a + t[:, None] * d
@@ -2004,7 +2037,7 @@ def _line_dist(p, lines):
 
 def _nearest_on(p, ln):
     """(distance, unit direction of the segment) of polyline ln (k, 2) nearest point p (2,)."""
-    a, b = ln[:-1], ln[1:]
+    a, b = ln[:-1, :2], ln[1:, :2]
     d = b - a
     t = np.clip(((p - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
     q = a + t[:, None] * d
@@ -2032,6 +2065,23 @@ def _in_median(c, roads_xy):
     return False
 
 
+def _ml_on_road(ring, lines):
+    """An ML footprint on the carriageway, including a wall protruding at least 0.5 m into its width.
+
+    Only width-bearing lines enable the footprint test. Mapped OSM buildings do not use this filter.
+    """
+    c = ring.mean(0)
+    radius = float(np.hypot(*(ring - c).T).max())
+    for ln in lines:
+        half = float(ln[0, 2]) if ln.shape[1] > 2 else ML_ROAD_M
+        distance = _line_dist(c, [ln])
+        if distance <= max(ML_ROAD_M, half):
+            return True
+        if ln.shape[1] > 2 and distance < half + radius and any(_line_dist(p, [ln]) < half - 0.5 for p in ring):
+            return True
+    return False
+
+
 def _ml_false(ring, bridges_xy, water_xy, roads_xy=None):
     """A machine-learned footprint (Microsoft's, Google's) that is a bridge deck, a boat or a vehicle: a road bridge
     runs through it, its centre lies on mapped water (Tower Bridge's river: barges as brick buildings, 2026-10-18), on
@@ -2039,7 +2089,7 @@ def _ml_false(ring, bridges_xy, water_xy, roads_xy=None):
     carriageway's median (_in_median, GitHub #90)."""
     if bridges_xy and road_through(ring, bridges_xy) >= ML_BRIDGE_M:
         return True
-    if roads_xy and (_line_dist(ring.mean(0), roads_xy) <= ML_ROAD_M or _in_median(ring.mean(0), roads_xy)):
+    if roads_xy and (_ml_on_road(ring, roads_xy) or _in_median(ring.mean(0), roads_xy)):
         return True
     if water_xy:
         from polygon import Path
@@ -2763,7 +2813,7 @@ def collider_boxes(items, x0, y0):
     for spec, gmin, gmax in items:
         if deck_plan(spec, gmin, gmax) is not None:     # an open parking deck: driven into on purpose
             continue
-        if spec.cls in BRIDGE_CLASSES or spec.cls == landmarks.LANDMARK:   # a frame: driven through between its legs
+        if spec.cls in BRIDGE_CLASSES or spec.cls == landmarks.LANDMARK or spec.cls in OPEN_CANOPY_CLASSES:
             continue
         r = spec.ring
         out.append([round(float(r[:, 0].min() + x0), 2), round(float(r[:, 1].min() + y0), 2),
@@ -3445,6 +3495,7 @@ def road_tile_items(
         part_layers=[c.layers.get("building_parts") for c in cds],
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+        ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, with_width=True),
         ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         tunnels_xy=tunnel_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         garages_xy=garage_rings(
@@ -3763,7 +3814,7 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
                            supports=support_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
-                           ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+                           ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, with_width=True),
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
@@ -3948,6 +3999,9 @@ def _sky_mesh(items):
     ms = MATERIALS.index(SKY_WALL)
     uv = SKY_UV
     for spec, gmin, gmax in items:
+        if spec.cls in OPEN_CANOPY_CLASSES:
+            _canopy(m, spec, gmin, gmax, (mi, _sky_colour(spec.roof_mat or ROOF_FLAT, 1.0)))
+            continue
         if spec.cls == landmarks.LANDMARK:      # (its far-away model, not a box of its footprint's size)
             landmarks.build(m, spec, gmin, _landmark_token(spec), lite=True, tokens=_landmark_tokens())
             continue

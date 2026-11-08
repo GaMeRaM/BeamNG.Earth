@@ -23,8 +23,11 @@ MODULES = (
     "test_sketchfab_assets",
     "test_worldbundle", "test_world_cache", "test_peerwork",
     "test_host_package",
-    "test_ru_infrastructure", "test_furniture", "test_roads", "test_blockworker",
+    "test_ru_infrastructure", "test_furniture", "test_buildings", "test_roads", "test_blockworker",
     "test_roadsigns", "test_townsigns", "test_markings", "test_sign_packaging",
+    "test_walk_clearance", "test_sidewalk_collision", "test_islands", "test_roadcorners",
+    "test_junction_landing", "test_junction_corridor", "test_junction_pads",
+    "test_approaches", "test_bridge_junction_surface",
 )
 
 

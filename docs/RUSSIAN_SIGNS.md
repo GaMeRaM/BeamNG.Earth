@@ -146,3 +146,59 @@ Before production, compare a fixed route in Yekaterinburg, the Р-242/ЕКАД j
 and a rural road against the official build, with cold and warm caches, day/night,
 and reconnects. Check logs for failed tiles, visible holes and missing scenery.
 Until that acceptance is done, production stays on the official release.
+
+## Local roadside fixes (not released, 2026-11-09)
+
+At 56.66043, 61.16976, two Microsoft ML Buildings footprints (14 and 18 m²)
+lay 4.35–4.39 m from the road centre, inside its generated 9 m carriageway.
+The previous fixed 4 m centre-distance filter kept both. Near the second report,
+56.62750, 61.28645, another ML footprint's centre was 6.23 m away but its outline
+protruded over 1 m into the carriageway. Near and far building generation now use
+road-spec widths and reject ML footprints centred on the road or with vertices
+more than 0.5 m inside its edge. Explicit OSM buildings retain their existing
+handling. This is a collision-avoidance heuristic for ML footprints, not a claim
+that the source objects have been identified as vehicles or bus shelters.
+
+Buildings explicitly classified as `shelter`, `roof` or `carport` now have a thin
+roof and posts in the near, far, skyline and collision meshes, rather than closed
+house walls. Unclassified stop shelters cannot be distinguished reliably from
+other small ML footprints; this does not introduce a complete bus-stop model.
+
+The offline fixture `server/tests/fixtures/ekb_roadside_buildings.json` preserves
+the reported contours, road geometry and widths, plus adjacent buildings which
+must remain. Tests also exercise actual tile filtering (ML versus OSM) and cast
+rays through canopy entrances in all four mesh variants. The building module is
+included in the experimental Windows and local foundation gates. The targeted
+seven-module run passes 299 tests; in-game verification remains outstanding.
+
+### Raised sidewalks at merges and slip lanes
+
+The previous cut tested only the sidewalk centreline. At a shallow slip-lane fork,
+the remaining 2.5 m slab could protrude into the carriageway. The cut now samples
+the entire cross-section, including mitres and the sloping back of the slab, using
+the existing native blocker test. Joining two short runs checks the resulting
+slab too, so it cannot reconnect across the lane. The existing centreline cut is
+retained for sidewalk ownership at ordinary street corners.
+
+Corner returns had a separate sparse-probe failure: generated slabs near the
+Makarovsky bridge crossed their adjacent roads between the probes. Candidate
+corners now also check their actual mesh vertices, triangle edge midpoints and
+centroids against the carriageways. The radius search tries a tighter corner;
+a corner which cannot fit is omitted instead of placing a raised obstacle on the
+road. This does not change bridge deck elevations or road grading.
+
+`test_walk_clearance` checks shallow forks, a fork at a tile seam, slab backs,
+unsafe run joins, and captured Makarovsky corner geometry. It tests both visible
+and collision meshes; disabling full-width clipping reproduces the old failure.
+The Windows and local gates now include this and the existing sidewalk, island,
+corner, approach and junction modules. The targeted selection passes 403 tests.
+
+A headless replay checked four road tiles at each of Р-242/ЕКАД, Koltsovo
+(56.77166, 60.88242) and Makarovsky (56.8478, 60.5894). After the changes, the
+sampled raised mesh vertices and triangle centroids no longer intruded over
+0.15 m into the checked ground carriageways at 0.08–0.6 m above their road
+profiles. Р-242/ЕКАД generated no raised sidewalks in these four tiles, so that
+scene does not validate raised sidewalks there. Width measurement was disabled
+for this replay; it is a reproducible geometry check, not an in-game acceptance
+drive or a guarantee for every interchange. Local audit output is under
+`build/ekb-bridge-audit/walks-final.json`.

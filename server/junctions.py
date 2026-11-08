@@ -184,6 +184,26 @@ def _on_carriageway(pts, roads, near, margin=0.3, half=None, skip=()):
     return None
 
 
+def corner_on_carriageway(corner, roads, near, half=None):
+    """Validate the actual raised corner, not just two probe lines inside its curb.
+
+    Curved approaches and third branches can cross the slab between the former probes. Use the same mesh as
+    rendering/physics, including its curb face and outer fill, and sample triangle edges and interiors too.
+    """
+    import sidewalks
+    builder = sidewalks.Builder((0.0, 0.0, 0.0))
+    builder.add_corner(corner["arc"], corner["inward"], corner["outer"])
+    points, triangles, *_ = builder.arrays()
+    if not len(points):
+        return None
+    faces = points[triangles, :2]
+    probes = np.vstack([points[:, :2], faces.mean(axis=1),
+                        (faces[:, 0] + faces[:, 1]) / 2,
+                        (faces[:, 1] + faces[:, 2]) / 2,
+                        (faces[:, 2] + faces[:, 0]) / 2])
+    return _on_carriageway(probes, roads, near, margin=0.1, half=half)
+
+
 def _branch_len(pts, vi, step):
     k, acc = vi, 0.0
     while 0 <= k + step < len(pts):
@@ -272,7 +292,10 @@ def _across(roads, bi, bj, cr, X, walk_w, debug=None):
     for C, arc in ((C1, a1), (C2, a2)):
         if C is not None and len(arc) > 1:
             fills.append(np.vstack([np.r_[C, zo]] + [np.r_[q, zo] for q in arc]))
-    return {"arc": curb, "inward": nrm, "outer": outer, "fill": None, "fills": fills, "ramps": []}, ti, tj
+    corner = {"arc": curb, "inward": nrm, "outer": outer, "fill": None, "fills": fills, "ramps": []}
+    if walk_w != 0.0 and corner_on_carriageway(corner, roads, (X, 60.0)) is not None:
+        return None
+    return corner, ti, tj
 
 
 def _near_node_pairs(pos, radius):
@@ -544,6 +567,9 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                         debug.append(('on carriageway', hit[:8], hit in internal, roads[ri][0][:8], roads[rj][0][:8], round(theta), X.round(1).tolist()))
                     continue
                 corner = {"arc": curb, "inward": nrm, "outer": outer, "fill": fill, "ramps": []}
+                if not pavement and corner_on_carriageway(
+                        corner, roads, (X, 60.0), half={roads[r][0]: h for r, h in own.items()}) is not None:
+                    continue                    # try a tighter radius before accepting an unsafe slab
                 if pavement:
                     corner["road_sides"] = ((roads[ri][0], li), (roads[rj][0], -lj))
                     corner["edge_cuts"] = ((Pi.copy(), ui, ci), (Pj.copy(), uj, cj))

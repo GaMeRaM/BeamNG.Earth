@@ -1345,6 +1345,55 @@ class RoadAcrossTest(unittest.TestCase):
         self.assertLess(s.height, 5.0)
 
 
+class OpenCanopyTest(unittest.TestCase):
+    def test_shelter_has_a_roof_and_posts_but_no_wall_across_the_entrance(self):
+        from test_bridge_junction_surface import heights
+        for cls in ("shelter", "roof", "carport"):
+            spec = bld.plan(rect(0, 0, 6, 3), {"class": cls}, 0, 56.66, 61.17)
+            items = [(spec, 10.0, 10.0)]
+            for mesh in (bld.build(items), bld.build(items, lite=True), bld.collision_mesh(items), bld._sky_mesh(items)):
+                p, uv, tri, mi, mats, *_ = mesh
+                horizontal = (p[:, [0, 2, 1]], tri, uv, mats, mi)
+                self.assertEqual(len(heights(horizontal, [[3.0, 11.5]])[0]), 0,
+                                 f"{cls}: no wall at car height across the centre of the shelter")
+                roof = heights((p, tri, uv, mats, mi), [[3.0, 1.5]])[0]
+                self.assertTrue(len(roof))
+                self.assertGreater(float(roof.min()), 10.0 + spec.height - 0.2)
+            self.assertEqual(bld.collider_boxes(items, 0, 0), [])
+
+
+class EkatRoadsideBuildingsTest(unittest.TestCase):
+    def test_reported_ml_footprints_clear_the_carriageway_and_neighbours_stay(self):
+        path = Path(__file__).parent / "fixtures/ekb_roadside_buildings.json"
+        for row in json.loads(path.read_text())["rows"]:
+            ring = np.asarray(row["ring"])
+            lines = [np.asarray(ln) for ln in row["roads"]]
+            with self.subTest(id=row["id"]):
+                self.assertEqual(bld._ml_false(ring, None, None, lines), row["on_road"])
+
+    def test_tile_generation_filters_ml_but_preserves_mapped_osm_buildings(self):
+        import geodesy
+        row = json.loads((Path(__file__).parent / "fixtures/ekb_roadside_buildings.json").read_text())["rows"][0]
+        frame = geodesy.EnuFrame(*row["at"])
+        ring = np.asarray(row["ring"])
+        la, lo, _ = frame.enu_to_geodetic(ring[:, 0], ring[:, 1], 0.0)
+        ll = np.c_[lo, la]
+        ll = np.r_[ll, ll[:1]]
+        for source, count in (("Microsoft ML Buildings", 0), ("OpenStreetMap", 1)):
+            f = Feats([row["id"]], [ll], **{"class": ["house"], "height": [5.0], "src_dataset": [source]})
+            items = bld.tile_buildings(frame, -256, 0, 0, 256, [f], lambda la, lo: np.zeros(np.shape(la)),
+                                       ml_roads_xy=[np.asarray(ln) + [256, 0, 0] for ln in row["roads"]])
+            self.assertEqual(len(items), count)
+
+    def test_road_lines_carry_the_road_spec_width(self):
+        from test_roads import FRAME, features
+        import roads
+        f = features([[(0, 0), (200, 0)]], ["trunk"])
+        lines = bld.road_lines(FRAME, [f], 0, 0, with_width=True)
+        self.assertEqual(len(lines), 1)
+        np.testing.assert_allclose(lines[0][:, 2], roads.road_specs(f)[0].width / 2)
+
+
 class CurvatureTest(unittest.TestCase):
     def test_ground_in_the_anchor_frame(self):
         # 8 km from the anchor's origin the ground (h = 100 m everywhere) lies d^2 / 2R = ~5 m lower in the frame, as the

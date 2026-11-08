@@ -48,7 +48,7 @@ jobs:
           python -m unittest discover -s server/tests -p test_highway_signs.py
       - name: Road geometry and terrain integration gate
         run: |
-          python tools/run_tests.py test_ru_infrastructure test_furniture test_roads test_blockworker test_markings test_sign_packaging --par 2 --timeout 180 --logs build/road-integration-tests
+          python tools/run_tests.py test_ru_infrastructure test_furniture test_buildings test_roads test_blockworker test_markings test_sign_packaging test_walk_clearance test_sidewalk_collision test_islands test_roadcorners test_junction_landing test_junction_corridor test_junction_pads test_approaches test_bridge_junction_surface --par 2 --timeout 180 --logs build/road-integration-tests
       - name: Record tested dependency versions
         if: always()
         shell: bash

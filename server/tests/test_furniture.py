@@ -5,6 +5,7 @@ import math
 import re
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,29 @@ import roads  # noqa: E402
 def road(fid, cls, urban, x0=-300.0, x1=600.0, y=50.0, width=8.0):
     pts = np.array([(x0, y, 0.0), (x1, y, 0.0)])
     return (fid, roads.Spec(width, "paved", urban, cls, False), pts, 0.0)
+
+
+class RoadsideLampGroundTest(unittest.TestCase):
+    def test_highway_lamp_base_uses_verge_height_not_road_centre(self):
+        r = road('highway', 'trunk', True)
+        def ground(x, y):
+            # A raised verge next to a cut roadway: the road itself is z=0.
+            return np.full(np.shape(x), 4.4)
+        rows = furniture.place([r], [], (0., 0., 256., 256.), country='RU', ground=ground)
+        lamps = [q for q in rows if q[0] in ('streetlight', 'eu_lamp_steel', 'eu_lamp_concrete')]
+        self.assertTrue(lamps)
+        for lamp in lamps:
+            self.assertEqual(lamp[3], 4.4)
+            self.assertEqual(lamp[6], 11.)
+
+    def test_unavailable_verge_height_omits_lamp_without_breaking_tile(self):
+        r = road('highway', 'trunk', True)
+        def unavailable(x, y):
+            raise ValueError('verge terrain unavailable')
+        with unittest.mock.patch.object(furniture, '_warned_lamp_ground', -float('inf')), \
+                self.assertLogs('earthd.furniture', level='WARNING'):
+            rows = furniture.place([r], [], (0., 0., 256., 256.), country='RU', ground=unavailable)
+        self.assertFalse(any(q[0] in ('streetlight', 'eu_lamp_steel', 'eu_lamp_concrete') for q in rows))
 
 
 class ConstantDevelopment:

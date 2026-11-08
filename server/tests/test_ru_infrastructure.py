@@ -47,6 +47,16 @@ class RussianInfrastructure(unittest.TestCase):
         lens = next(r for r in lenses if r[0] == furniture.G_LENS)
         np.testing.assert_allclose(lens[1:4], [2.1, 0., 18.77 - furniture.LENS_DROP_M], atol=1e-6)
 
+    def test_scaled_highway_lamp_glow_follows_the_model_head(self):
+        for group in ruinfra.citylamps.GROUPS:
+            for height in (11., 13.5):
+                with self.subTest(group=group, height=height):
+                    row = [group, 20., 30., 100., 90., 1., height, 0.]
+                    lens = next(r for r in furniture.lamp_lenses([row]) if r[0] == furniture.G_LENS)
+                    scale = height / ruinfra.citylamps.HEIGHT
+                    np.testing.assert_allclose(lens[1:4],
+                        [20., 30. + 2.1 * scale, 100. + 8.77 * scale - furniture.LENS_DROP_M], atol=.006)
+
     def test_actual_furniture_pipeline_has_local_models_and_clear_roads(self):
         spec = roads.Spec(8., 'paved', False, 'secondary', False)
         line = np.array([[-200., 50., 0.], [600., 50., 0.]])

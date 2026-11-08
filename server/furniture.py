@@ -11,6 +11,8 @@ generation"). Pure.
 """
 import hashlib
 import math
+import logging
+import time
 import ruinfra
 
 import numpy as np
@@ -585,6 +587,9 @@ PARTIAL_END_M = 15.0        # m from a rural ramp's ends its two lamps stand (pa
                             # ramp lit end to end put 27 lamps on a Wyoming interchange of I-80, Discord 2026-10-28)
 HIGHWAY_LAMP_H = {"na": 13.5, None: 11.0}         # (ramps: the street post, NJDOT's 26 ft on ramps)
 LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
+# Local lamp models share their own 9 m catalog height, including when a
+# highway row scales the mesh above it. The lens/glow must use that same scale.
+LAMP_H.update({g: ruinfra.citylamps.HEIGHT for g in (*ruinfra.citylamps.GROUPS, ruinfra.BRACKET)})
 POLE_LAMP_Z = 7.0           # m above the pole's base
 HYDRANT_SPACING = 120.0
 BENCH_SPACING = 140.0
@@ -885,6 +890,39 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
     return [r for i, r in enumerate(rows) if i not in drop]
 
 
+_warned_lamp_ground = -float('inf')
+
+
+def _plant_roadside_lamps(rows, lamps, ground):
+    """Plant ground-road lamps on their verge, not the carriageway centre's Z.
+
+    Sidewalk lamps already use their support geometry. Pole-mounted lamps and
+    wires keep their common support; only the standalone road-edge rows enter here.
+    """
+    if not lamps or ground is None:
+        return rows
+    global _warned_lamp_ground
+    try:
+        xy = np.asarray([r[1:3] for r in lamps], np.float64)
+        heights = np.asarray(ground(xy[:, 0], xy[:, 1]), np.float64)
+        heights = np.broadcast_to(heights.reshape(-1), (len(lamps),))
+    except Exception as error:
+        now = time.monotonic()
+        if now - _warned_lamp_ground >= 60.:
+            _warned_lamp_ground = now
+            logging.getLogger('earthd.furniture').warning(
+                'Roadside lamps skipped; roads continue: %s: %s', type(error).__name__, error, exc_info=True)
+        drop = {id(r) for r in lamps}
+        return [r for r in rows if id(r) not in drop]
+    drop = set()
+    for row, height in zip(lamps, heights):
+        if np.isfinite(height):
+            row[3] = round(float(height), 2)
+        else:
+            drop.add(id(row))
+    return [r for r in rows if id(r) not in drop] if drop else rows
+
+
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
           clearance=None, development=None):
@@ -909,7 +947,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         return _h01(fid, "buried") >= buried
     clearance = clearance if clearance is not None else RoadClearance(
         [(spec.width / 2, pts) for _, spec, pts, _ in roads], decks, bounds=box)
-    rows = []
+    rows, roadside_lamps = [], []
     lit = set()
     for wk in walks:
         fid = wk.get("fid")
@@ -1057,8 +1095,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 if inside:
                     h = (HIGHWAY_LAMP_H["na" if _na(region) else None] if highway and not spec.link
                          else LAMP_H[G_LAMP])
-                    rows.append([G_LAMP, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                                 round(_yaw(-n[0], -n[1]), 1), 1.0, h, 0.0])
+                    lamp = [G_LAMP, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                            round(_yaw(-n[0], -n[1]), 1), 1.0, h, 0.0]
+                    rows.append(lamp)
+                    roadside_lamps.append(lamp)
                 continue
             # the cross-arm (local x) across the road, the wires (local y) along it
             yaw = _yaw(n[0], n[1])
@@ -1077,6 +1117,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                                  round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box, wire_anchors))
+    rows = _plant_roadside_lamps(rows, roadside_lamps, ground)
     if ru:
         rows = ruinfra.localize(rows)
         rows.extend(ruinfra.optional_markers(roads, box, clearance, ground))

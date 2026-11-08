@@ -4567,6 +4567,31 @@ def cut_outside(pts, blockers, spacing=2.0, min_piece=None):
     return _runs_outside(d, inside, MIN_PIECE_M if min_piece is None else min_piece)
 
 
+def _walk_blocked(pts, side, width, blockers, margin=0.05):
+    """Which sidewalk cross-sections touch a carriageway, including the slab's sloping back and mitres."""
+    import fast
+    import sidewalks
+    if not blockers:
+        return np.zeros(len(pts), bool)
+    fast.require(0, "inside_blockers")
+    curb, out = sidewalks.run_geometry(pts, side, width)
+    reach = float(sidewalks.profile(w=width)[-1, 0])
+    offsets = np.linspace(0.0, reach, max(2, int(math.ceil(reach / 0.5)) + 1))
+    queries = curb[:, None, :2] + out[:, None, :] * offsets[None, :, None]
+    segs, starts, half = _blocker_segments(blockers)
+    hit = fast._ef.inside_blockers(np.ascontiguousarray(queries.reshape(-1, 2)), segs, starts,
+                                   np.ascontiguousarray(np.maximum(half + margin, 0.0)))
+    return np.asarray(hit).reshape(len(pts), -1).any(axis=1)
+
+
+def cut_walk_outside(pts, side, width, blockers):
+    """Raised sidewalk runs wholly outside other carriageways; checking their centre alone leaves slab tips in lanes."""
+    if not blockers:
+        return [pts]
+    dense = densify(np.asarray(pts, np.float64), 0.5)
+    return _runs_outside(dense, _walk_blocked(dense, side, width, blockers))
+
+
 _BLOCKERS = ()                  # ((blockers list, its segment arrays), ...): the last few lists (a tile alternates
                                 # between its sidewalk and road blockers over many calls)
 
@@ -5020,8 +5045,10 @@ def join_walk_ends(runs, carriageways):
         if si != sj:
             continue                            # opposite sides of the streets: not one sidewalk
         gap_pts = np.linspace(pi_[-1], pj_[0], max(2, int(L / 2.0) + 2))[1:-1]
-        hw = 0.25 * (ri["w"] + rj["w"])
-        if any(_seg_dist_min(cl, q[:2]) < h + hw * 0.5 for cl, h in carriageways for q in gap_pts):
+        candidate = np.vstack([pi_[-2:], gap_pts, pj_[:2]]) if len(gap_pts) else np.vstack([pi_[-2:], pj_[:2]])
+        # Include both slab edges and the mitre created by the join. A centre-only gap check can reconnect a
+        # sidewalk across a slip lane after build_tile has correctly cut it. Allow the curb to touch its own road.
+        if _walk_blocked(densify(candidate, 0.5), si, max(ri["w"], rj["w"]), carriageways, margin=-0.03).any():
             continue                            # the gap would cross a road
         used.update((a, b))
         pts = np.vstack([pi_, gap_pts, pj_]) if len(gap_pts) else np.vstack([pi_, pj_])
@@ -9086,7 +9113,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 for piece in clip_polyline(line, *near):
                     for cpiece, (j0, j1) in junctions.apply_cuts(piece, jcuts.get((fid, side), [])):
                         for run in [r for r0 in cut_outside(cpiece, wb, 0.5)
-                                    for r in _on_level(frame, elev, densify(simplify(r0)))]:
+                                    for level in _on_level(frame, elev, densify(simplify(r0)))
+                                    for r in cut_walk_outside(level, side, w, curb_blockers)]:
                             if len(run) < 2:
                                 continue
                             at_j0 = j0 and np.hypot(*(run[0, :2] - cpiece[0, :2])) < 0.6
