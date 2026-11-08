@@ -79,7 +79,7 @@ class BuildingPassageTest(unittest.TestCase):
 
 class EkatMappedPassagesTest(unittest.TestCase):
     def test_real_covered_ranges_clear_the_reported_driveways(self):
-        data = json.loads((Path(__file__).parent / 'fixtures/ekb_building_passages.json').read_text())
+        data = json.loads((Path(__file__).parent / 'fixtures/ekb_building_passages.json').read_text(encoding='utf-8'))
         roads = roads_of(data['roads'])
         passages = buildingpassages.collect(FRAME, [roads], -256, -256, 512)
         self.assertEqual(len(passages), 3)

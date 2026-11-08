@@ -35,13 +35,13 @@ def fixture():
                     flags=[(2, "is_bridge", 0.45, 0.6)])
 
 
-def plans_digest():
+def plans_heights():
     g = grading.Grader(FRAME, FakeMD(fixture()), lambda la, lo: 10.0 + 0.002 * np.asarray(lo) * 0
                        + 0.0 * np.asarray(la))
     e, n = np.meshgrid(np.linspace(-380, 380, 77), np.linspace(-380, 380, 77))
     la, lo, _ = FRAME.enu_to_geodetic(e.ravel(), n.ravel(), 0.0)
     z = g.apply(la, lo, 10.0 + 0.01 * e.ravel())
-    return hashlib.sha1(np.round(np.asarray(z, np.float64), 4).tobytes()).hexdigest()
+    return np.asarray(z, np.float64)
 
 
 def facts_digest():
@@ -79,7 +79,18 @@ class FormatTest(unittest.TestCase):
             self.fail(f"{name}: format {fmt} has no golden digest yet: run with BNGE_UPDATE_GOLDEN=1")
 
     def test_plans_format(self):
-        self.check("plans", plancache.PLANS_FORMAT, plans_digest())
+        with open(GOLDEN, encoding='utf-8') as fh:
+            want = json.load(fh)['plans']
+        self.assertEqual(plancache.PLANS_FORMAT, want['format'], 'bump the golden plans with the format')
+        z = plans_heights()
+        path = os.path.join(os.path.dirname(GOLDEN), f"plans-{plancache.PLANS_FORMAT}.npy")
+        if os.environ.get('BNGE_UPDATE_GOLDEN') and not os.path.exists(path):
+            # Bootstrap the portable reference only from the already approved digest.
+            self.assertEqual(hashlib.sha1(np.round(z, 4).tobytes()).hexdigest(), want['digest'])
+            np.save(path, z)
+        # Hashing rounded floats changes at rounding boundaries across libm implementations.
+        # Compare every height instead, with the same 0.1 mm precision as the old digest.
+        np.testing.assert_allclose(z, np.load(path, allow_pickle=False), rtol=0, atol=1e-4)
 
     def test_facts_format(self):
         self.check("facts", roads.FACTS_FORMAT, facts_digest())

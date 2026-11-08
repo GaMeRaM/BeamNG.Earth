@@ -43,7 +43,7 @@ class DeryabinaBridgeTest(unittest.TestCase):
     ROADS = {'d059fbec-3d5a-490a-bda7-983476a5017e', 'd66bcc74-ab02-404b-861e-c60049a42db1'}
 
     def build(self):
-        fixture = json.loads((Path(__file__).parent / 'fixtures/ekb_deryabina_bridge.json').read_text())
+        fixture = json.loads((Path(__file__).parent / 'fixtures/ekb_deryabina_bridge.json').read_text(encoding='utf-8'))
         f = roads_of(fixture['roads'])
         flat = lambda la, lo: np.full(np.shape(la), 100.)
         g = grading.Grader(FRAME, FakeMD(f), flat)
