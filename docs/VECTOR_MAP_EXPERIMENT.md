@@ -62,6 +62,6 @@ Windows experiment workflow rebuilds them before packaging. No npm installation
 is needed by the player.
 
 The Canvas camera negates clockwise vehicle bearing to match OpenLayers view
-rotation. Regression tests use OL’s real coordinate-to-pixel transform at ten
+rotation. Regression tests use OL’s real coordinate-to-pixel transform at twelve
 headings and ensure forward stays up and right stays right. Run `npm test` in
 `tools/vector_canvas/`. Both renderers default to OpenFreeMap’s Dark style.

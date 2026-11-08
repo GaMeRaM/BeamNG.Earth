@@ -6,7 +6,7 @@ import {applyCamera} from './camera.mjs';
 
 // Use the actual OL coordinate-to-pixel transform, as MapRenderer does.
 // A point ahead of the car must stay up, and a point to its right must stay right.
-for (const bearing of [0, 30, 90, 135, 180, 225, 270, 330, -90, 360]) {
+for (const bearing of [0, 1, 30, 90, 135, 180, 225, 270, 330, 359, -90, 360]) {
   test(`heading-up camera at ${bearing} degrees`, () => {
     const view = new View({constrainRotation: false});
     applyCamera(view, {center: [60.6, 56.84], zoom: 15, bearing});

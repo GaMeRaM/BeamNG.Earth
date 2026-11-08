@@ -13,7 +13,7 @@ function createMap(container, request, onError, styleUrl = 'https://tiles.openfr
   let closed = false;
   const map = new Map({ target: container, controls: [], interactions: [],
     view: new View({ center: fromLonLat([0, 20]), zoom: 3, maxZoom: 23,
-      constrainResolution: false, multiWorld: true }), maxTilesLoading: 4 });
+      constrainResolution: false, constrainRotation: false, multiWorld: true }), maxTilesLoading: 4 });
   const emit = name => { if (!closed) for (const callback of listeners.get(name) || []) callback(); };
   const report = error => { if (!closed && onError) onError(error.message || String(error)); };
   async function response(url) {
