@@ -137,6 +137,40 @@ class RussianInfrastructure(unittest.TestCase):
         self.assertFalse(any(r[0] == ruinfra.MARKER for r in rows))
         self.assertIn('terrain unavailable', messages.output[0])
 
+    def test_road_tile_pipeline_writes_ru_objects_with_real_terrain_callback(self):
+        import roadmesh
+        from test_roads import FRAME, features
+        # Real production geometry/terrain code, synthetic roads and heights:
+        # no network and no prewarmed developer cache needed in CI.
+        feats = features([[(-300., 100.), (600., 100.)]], ['secondary'],
+                         surfaces=[(0, 'asphalt')])
+        for slope in (0., .01):
+            with self.subTest(slope=slope), tempfile.TemporaryDirectory() as folder:
+                def elev(lat, lon):
+                    return 10. + slope * FRAME.geodetic_to_enu(lat, lon, 0.)[0]
+                def ground(x, y):
+                    return roadmesh.drawn_ground(FRAME, elev, np.c_[x, y])
+                props, wires, walks = [], [], []
+                with self.assertNoLogs('earthd.ruinfra', level='WARNING'):
+                    chunks = roads.build_tile(FRAME, 0, 0, [feats], elev, walks=walks,
+                                              props=props, wires=wires, country='RU',
+                                              ground=ground)
+                self.assertTrue(chunks, 'a successful tile must contain drivable road geometry')
+                markers = [r for r in props if r[0] == ruinfra.MARKER]
+                self.assertTrue(markers, 'a swallowed decorative error must fail this test')
+                self.assertTrue(any(r[0] == ruinfra.POLE for r in props))
+                xy = np.array([r[1:3] for r in markers])
+                np.testing.assert_allclose([r[3] for r in markers], ground(xy[:,0], xy[:,1]))
+                mesh = roadmesh.build(FRAME, chunks, elev, (0.,0.,0.), .05,
+                                      clip=roads.tile_bbox(0,0), follow=True)
+                result = roads.write_tile(folder, '/temp/test', 1, 0, 0, chunks,
+                                          walks=walks, road_mesh=mesh, props=props, wires=wires)
+                self.assertGreater(result[1], 0)
+                data = json.loads((Path(folder)/'roads_1_0_0.json').read_text())
+                self.assertIn(ruinfra.MARKER, data['props']['groups'])
+                self.assertIn(ruinfra.POLE, data['props']['groups'])
+                self.assertTrue(list(Path(folder).glob('*.cdae')))
+
     def test_registered_scenery_models_and_materials_exist(self):
         import xml.etree.ElementTree as ET
         base=ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth'

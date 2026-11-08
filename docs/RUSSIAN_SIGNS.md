@@ -125,3 +125,24 @@ Yekaterinburg spawn, custom server plugin and shared cache. The fix remains on t
 experimental branch and is not deployed. Players must also run the official
 companion EXE: changing the BeamMP server alone cannot replace a running local
 maplibre.7 generator. Further production changes/restarts require explicit approval.
+
+## Checks before another experimental release
+
+The Windows build now runs the bounded road/terrain integration suite before
+packaging an EXE. The foundation gate also includes the Russian scenery, road,
+furniture, worker, sign and marking tests. Diagnostic artifacts retain per-module
+logs and the tested Python dependency versions, including on a failed build.
+
+The end-to-end synthetic scene uses real `roads.build_tile`, `drawn_ground`, native
+road meshes and `roads.write_tile` on flat and sloping terrain. It asserts that
+road geometry, Russian poles and reflector posts actually exist, that their
+heights agree with the terrain callback, and that no optional-layer warning was
+silently swallowed. Injecting the previous production failure makes the scene
+fail. This complements the failure-isolation test: decorative failures must not
+break drivable roads, but must still be detected by validation.
+
+Passing these automated checks does not replace an in-game acceptance drive.
+Before production, compare a fixed route in Yekaterinburg, the Р-242/ЕКАД junction
+and a rural road against the official build, with cold and warm caches, day/night,
+and reconnects. Check logs for failed tiles, visible holes and missing scenery.
+Until that acceptance is done, production stays on the official release.
