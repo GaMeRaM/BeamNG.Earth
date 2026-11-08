@@ -5,7 +5,7 @@ Reads Overture's divisions/division (one Parquet file, localities: city / town /
 names) through DuckDB over HTTPS, keeps the places a road sign would name, and writes them sorted, so the file is the
 same bytes every run. Players never run this tool: they use the bundled snapshot.
 
-    python tools/build_places.py --output server/data/places_<release>.json.gz [--countries UA,CZ,PL,DE]
+    python tools/build_places.py --output server/data/places_<release>.json.gz [--countries UA,CZ,PL,DE,RU]
 
 A place is kept when it is a city or a town, or a village of at least MIN_VILLAGE_POPULATION people. The English name
 is kept only where it differs from the local one (Overture has `names.common.en` where an exonym or a transliteration
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import overture  # noqa: E402
 RELEASE = overture.RELEASE    # (the pinned release: the snapshot is rebuilt with every bump)
 STAC_ITEM = f"https://stac.overturemaps.org/{RELEASE}/divisions/division/00000/00000.json"
-COUNTRIES = ("UA", "CZ", "PL", "DE")
+COUNTRIES = ("UA", "CZ", "PL", "DE", "RU")
 MIN_VILLAGE_POPULATION = 3000
 
 

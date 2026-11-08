@@ -158,6 +158,7 @@ MOD_TO_SERVER = {
     # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px
     "graphics": {"lodScale": F(NUM, OPT), "treeScale": F(NUM, OPT), "buildingScale": F(NUM, OPT),
                  "photoPx": F(NUM, OPT), "viewM": F(NUM, OPT)},
+    "vector_resource": {"id": F(str), "url": F(str)},
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "full": F(bool, OPT)},   # the map's search box
     # the map's cache view (covermap.py; additive): the zoom-z tiles x0..x1, y0..y1; mode summary / elevation /
@@ -226,6 +227,7 @@ SERVER_TO_MOD = {
                      "country": F(str, OPT)},   # the status bar's location
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
     "place_previews_ready": {"keys": F(list)},
+    "vector_resource": {"id": F(str), "data": F(str, OPT), "error": F(str, OPT)},
     "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
     "runtime_profiler_pong": {"probe": F(int)},
     "runtime_profiler": {"profile": F(dict)},
@@ -381,6 +383,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "navgraph",                                   # --traffic on: needs map data
                        "traffic_tile", "traffic_drop",                # visual traffic: negotiated, needs map data
                        "traffic_far_tile", "traffic_far_drop",        # major roads beyond the detailed stream
+                       "vector_resource",                           # test_vectorresources
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)
                        "geocode_result", "route_result",             # only when the map / GPS asks

@@ -73,6 +73,162 @@
       "networks": [
         {"network": "bab", "plate": "a"}, {"network": "de:national", "plate": "b"},
         {"network": "", "ref": "^[LK]\\s?\\d", "plate": "l"}, {"network": "e-road", "plate": "e"}]
+    },
+    "RU": {
+      "country": "RU",
+      "verified": false,
+      "show_en": false,
+      "show_distances": false,
+      "board": {
+        "freeway": {
+          "bg": [
+            0,
+            105,
+            60
+          ],
+          "ink": [
+            255,
+            255,
+            255
+          ],
+          "trim": [
+            255,
+            255,
+            255
+          ]
+        },
+        "road": {
+          "bg": [
+            0,
+            75,
+            145
+          ],
+          "ink": [
+            255,
+            255,
+            255
+          ],
+          "trim": [
+            255,
+            255,
+            255
+          ]
+        },
+        "urban": {
+          "bg": [
+            255,
+            255,
+            255
+          ],
+          "ink": [
+            0,
+            0,
+            0
+          ],
+          "trim": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "plates": {
+        "national": [
+          0,
+          [
+            0,
+            75,
+            145
+          ],
+          [
+            255,
+            255,
+            255
+          ],
+          [
+            255,
+            255,
+            255
+          ]
+        ],
+        "regional": [
+          0,
+          [
+            0,
+            75,
+            145
+          ],
+          [
+            255,
+            255,
+            255
+          ],
+          [
+            255,
+            255,
+            255
+          ]
+        ],
+        "e": [
+          0,
+          [
+            0,
+            110,
+            60
+          ],
+          [
+            255,
+            255,
+            255
+          ],
+          [
+            255,
+            255,
+            255
+          ]
+        ],
+        "exit": [
+          0,
+          [
+            255,
+            255,
+            255
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ]
+      },
+      "networks": [
+        {
+          "network": "ru:national",
+          "plate": "national"
+        },
+        {
+          "network": "ru:federal",
+          "plate": "national"
+        },
+        {
+          "network": "ru:*",
+          "plate": "regional"
+        },
+        {
+          "network": "",
+          "ref": "^[МMРPАA]\\s*-?\\s*\\d",
+          "plate": "national"
+        },
+        {
+          "network": "e-road",
+          "plate": "e"
+        }
+      ]
     }
   }
 }

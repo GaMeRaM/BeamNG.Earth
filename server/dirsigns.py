@@ -35,7 +35,7 @@ ON = os.environ.get("BNE_DIRSIGNS", "off") == "on"
 KERNEL = 141                    # earthfast VERSION with dirsign_place / dirsign_face / dirsign_mesh
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PLACES_FILE = os.path.join(DATA, "places_2026-10-21.0.json.gz")
-PLACES_SHA256 = "aea8360e2b1a5dc51c1b54700b355aa0dfb7e699fee5853f6a3ae0f0e223b989"
+PLACES_SHA256 = "3e245bc2ed118ff69720e14284ab5e7d42b701eaa512f8d7fdff6e0316fae14d"
 STYLES_FILE = os.path.join(DATA, "dirsigns_styles.json")
 FONTS = (os.path.join(DATA, "fonts", "Overpass-Bold.ttf"), os.path.join(DATA, "fonts", "FiraSansCondensed-Medium.ttf"))
 FACE_VERSION = 1                # (in every face's hash: a changed drawing is another file)
@@ -123,8 +123,10 @@ class RouteTable:
 
 def plate_for(style, network, ref):
     """(order, plate key) of a route in a country's style, or None (a route that has no plate there)."""
+    network = network.lower()
     for i, rule in enumerate(style["networks"]):
-        if rule["network"] != network:
+        pattern = rule["network"]
+        if not (network.startswith(pattern[:-1]) if pattern.endswith('*') else pattern == network):
             continue
         if rule["_ref"] is not None and not rule["_ref"].search(ref):
             continue
@@ -221,6 +223,9 @@ def _row_content(style, row, table, pl, factor, rounding, show_en):
             network, ref = table.items[int(row[k])]
             hit = plate_for(style, network, ref)
             if hit is not None:
+                if style.get('country') == 'RU' and hit[1] != 'e':
+                    from rusigns import route_ref
+                    ref = route_ref(ref)
                 marks.append((hit[0], hit[1], ref))
     marks = best_plates(sorted(set(marks)))
     dests = []
@@ -230,8 +235,8 @@ def _row_content(style, row, table, pl, factor, rounding, show_en):
             continue
         # a city or a town has its English name under the local one, a village only the local (the user, 2026-11-02)
         city = pl.array[i, 3] >= 1
-        en = pl.en[i] if (show_en and city) else ""
-        dests.append((pl.names[i], en, km_text(row[d_col], factor, rounding)))
+        en = pl.en[i] if (show_en and city and style.get("show_en", True)) else ""
+        dests.append((pl.names[i], en, km_text(row[d_col], factor, rounding) if style.get("show_distances", True) else ""))
     if not dests:
         return None
     return turn, marks, dests
@@ -264,7 +269,23 @@ def _face(out_dir, vfs_dir, style, plate_keys, kind, content, face):
     return name, f"{vfs_dir}/{name}.dds", w_m, h_m
 
 
-def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, show_en=True):
+def board_kind(style, kind, board, rows):
+    """RU trunk/divided roads are not automatically motorways (green boards)."""
+    if style.get('country') != 'RU' or kind != 'freeway':
+        return kind
+    q = np.asarray(board[4:6])
+    for _ll, pts, meta, *_ in rows.values():
+        if int(meta[2]) != 7:
+            continue
+        a, delta = pts[:-1], np.diff(pts, axis=0)
+        length2 = np.sum(delta * delta, axis=1)
+        frac = np.clip(np.sum((q - a) * delta, axis=1) / np.maximum(length2, 1e-9), 0., 1.)
+        if np.any(np.sum((a + frac[:, None] * delta - q) ** 2, axis=1) < 0.25):
+            return 'freeway'
+    return 'road'
+
+
+def _inferred_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, show_en=True, country=None):
     """(mesh, faces) of road tile (tx, ty)'s direction boards: the mesh as signstream.write_tile takes it
     (vertices, triangles, uv, materials, material per triangle) and {material: vfs path of its picture}; (None, {})
     where there is none."""
@@ -307,7 +328,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
         first, n = int(b[10]), int(b[11])
         mine = krows[first:first + n]
         # the country's style: where the board's first place is
-        cc = next((pl.cc[int(r[i])] for r in mine for i in (5, 7) if r[i] >= 0), None)
+        cc = country or next((pl.cc[int(r[i])] for r in mine for i in (5, 7) if r[i] >= 0), None)
         style = st["countries"].get(cc)
         if style is None:
             continue
@@ -318,7 +339,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
         flat = [(t, [(k, txt) for _, k, txt in marks], dests) for t, marks, dests in content]
         if len(faces) >= MAX_FACES:
             break
-        kind = kinds[int(b[7])]
+        kind = board_kind(style, kinds[int(b[7])], b, rows)
         name, tex, w, h = _face(out_dir, vfs_dir, style, plate_keys, kind, flat, face_cfg)
         if name not in mats_of:
             mats_of[name] = len(materials)
@@ -338,3 +359,21 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
     if not len(t):
         return None, {}
     return (p, t, uv, materials, mi), faces
+
+
+def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir,
+               show_en=True, country=None, directions=True):
+    meshes, faces = [], {}
+    if directions:
+        mesh, pictures = _inferred_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, show_en, country)
+        if mesh is not None:
+            meshes.append(mesh)
+        faces.update(pictures)
+    if country == 'RU':
+        import rusigns
+        mesh, pictures = rusigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, out_dir, vfs_dir)
+        if mesh is not None:
+            meshes.append(mesh)
+        faces.update(pictures)
+    from rusigns import join_meshes
+    return join_meshes(meshes), faces

@@ -37,6 +37,11 @@ jobs:
         run: |
           python -m unittest discover -s server/tests -p test_vectorresources.py
           node --test mod/tests/test_vectorresources.mjs mod/tests/test_mapmath.mjs
+      - name: Russian signs and native rendering checks
+        run: |
+          python -m unittest discover -s server/tests -p test_ru_signs.py
+          python -m unittest discover -s server/tests -p test_dirsigns.py
+          python -m unittest discover -s server/tests -p test_highway_signs.py
       - name: Bootloader from source
         run: python tools/build_bootloader.py
       - name: Build the exe
