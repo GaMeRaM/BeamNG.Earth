@@ -57,3 +57,15 @@ test('CEF without WebGL selects Canvas2D without constructing MapLibre', () => {
   assert.equal(window.EarthVector.createMap('map'), adapter);
   assert.equal(selected, true);
 });
+
+test('navigator route keeps geographic order and clears on GPS cancellation', () => {
+  const window = { location: { pathname: '/beamng_earth_dashboard.html' } };
+  const context = vm.createContext({window, Map, Promise, Uint8Array, TextDecoder, setTimeout, clearTimeout, atob});
+  vm.runInContext(fs.readFileSync(new URL('../beamng_earth/vehicles/common/earth_vector.js', import.meta.url), 'utf8'), context);
+  let feature;
+  const map = {setRoute: value => {feature = value;}};
+  window.EarthVector.setRoute(map, {points: [[56.84,60.6],[56.85,60.61]]});
+  assert.deepEqual(JSON.parse(JSON.stringify(feature.geometry.coordinates)), [[60.6,56.84],[60.61,56.85]]);
+  window.EarthVector.setRoute(map, null);
+  assert.equal(feature.geometry, null);
+});

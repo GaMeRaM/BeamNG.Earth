@@ -3,7 +3,11 @@
   const status = document.getElementById('status');
   document.getElementById('credits').textContent = EarthVector.CREDIT;
   let map = null;
-  let lastView = null, mapError = '';
+  let lastView = null, lastRoute = null, mapError = '';
+  function setRoute(route) {
+    lastRoute = route;
+    if (map) EarthVector.setRoute(map, route);
+  }
   function setView(view) {
     lastView = view;
     status.textContent = view.status || mapError;
@@ -15,11 +19,11 @@
     if (original && /^local:\/\//i.test(original)) window.location.replace(original);
   }
   window.map = { setData: function () {}, updateData: function () {}, setBootscreenImage: function () {} };
-  window.beamngEarthDashboard = { setView, restore, resourceData: EarthVector.resourceData };
+  window.beamngEarthDashboard = { setView, setRoute, restore, resourceData: EarthVector.resourceData };
   try {
     map = EarthVector.createMap('map', message => { mapError = 'Map: ' + message; status.textContent = mapError; });
     map.on('idle', () => { mapError = ''; if (lastView) status.textContent = lastView.status || ''; });
-    map.on('load', () => { if (lastView) setView(lastView); });
+    map.on('load', () => { if (lastView) setView(lastView); setRoute(lastRoute); });
   } catch (error) { status.textContent = 'MapLibre unavailable: ' + error.message; }
   window.addEventListener('resize', () => { if (map) map.resize(); });
   window.addEventListener('pagehide', () => { if (map) map.remove(); EarthVector.dispose(); });

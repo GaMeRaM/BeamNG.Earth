@@ -65,3 +65,26 @@ The Canvas camera negates clockwise vehicle bearing to match OpenLayers view
 rotation. Regression tests use OL’s real coordinate-to-pixel transform at twelve
 headings and ensure forward stays up and right stays right. Run `npm test` in
 `tools/vector_canvas/`. Both renderers default to OpenFreeMap’s Dark style.
+
+## Navigation reliability, readability and GPS
+
+Stock WebView re-registration invalidates the old takeover acknowledgement. A
+missing `screenReady` acknowledgement retries navigation up to three times,
+1.5 seconds apart. A ready page is not repeatedly reloaded. This handles dropped
+UI-texture navigation and stock recreation of an already registered material tag.
+
+Canvas vector tiles use an explicit `renderMode: vector` layer instead of hybrid
+intermediate tile images. The backing canvas uses at least 2x device resolution
+(capped at 3x). The dark style has brighter street labels, roads and building
+outlines. The final game UI/car-screen texture resolution still limits sharpness.
+
+The vehicle page also receives the existing GPS route from `gps.route()`, copied
+only on route-version changes or page registration. A blue geographic polyline
+with a dark casing follows the camera's position and rotation. Clearing GPS
+clears it, and a newly ready screen receives the current route. This displays the
+planned route; it does not add turn instructions or split passed/ahead segments.
+
+Regression checks cover repeated stock screen registration, dropped navigation,
+bounded retries, route delivery, cancellation, and latitude/longitude order. A
+WebGL-disabled browser smoke test renders a route over real vector tiles at
+fractional zoom and 45-degree bearing with the higher-resolution Canvas.

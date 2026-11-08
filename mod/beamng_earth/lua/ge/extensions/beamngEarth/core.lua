@@ -2841,6 +2841,11 @@ function M._rebaseLag() return rebaseLag end -- for tests
 function M._governor() return gov end
 -- The in-vehicle map app's session context. The vector map obtains resources through
 -- requestVectorResource rather than CEF HTTP.
+function M.dashboardRoute()
+  local route = gps.route()
+  return route and { version = route.version, points = route.points } or { version = 0, points = {} }
+end
+
 function M.dashboardContext()
   local player
   local pl = st.player

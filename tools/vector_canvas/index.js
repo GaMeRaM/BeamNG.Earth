@@ -1,7 +1,12 @@
 import Map from 'ol/Map.js';
 import View from 'ol/View.js';
 import {fromLonLat} from 'ol/proj.js';
-import {apply} from 'ol-mapbox-style';
+import {applyStyle, applyBackground} from 'ol-mapbox-style';
+import VectorTileLayer from 'ol/layer/VectorTile.js';
+import VectorLayer from 'ol/layer/Vector.js';
+import VectorSource from 'ol/source/Vector.js';
+import GeoJSON from 'ol/format/GeoJSON.js';
+import {Style, Stroke} from 'ol/style.js';
 import 'ol/ol.css';
 import {applyCamera} from './camera.mjs';
 
@@ -12,8 +17,13 @@ function createMap(container, request, onError, styleUrl = 'https://tiles.openfr
   const controller = new AbortController();
   let closed = false;
   const map = new Map({ target: container, controls: [], interactions: [],
+    pixelRatio: Math.min(3, Math.max(2, window.devicePixelRatio || 1)),
     view: new View({ center: fromLonLat([0, 20]), zoom: 3, maxZoom: 23,
       constrainResolution: false, constrainRotation: false, multiWorld: true }), maxTilesLoading: 4 });
+  const routeSource = new VectorSource();
+  map.addLayer(new VectorLayer({source: routeSource, zIndex: 100,
+    style: [new Style({stroke: new Stroke({color: '#102a48', width: 8})}),
+      new Style({stroke: new Stroke({color: '#3aa0ff', width: 5})})]}));
   const emit = name => { if (!closed) for (const callback of listeners.get(name) || []) callback(); };
   const report = error => { if (!closed && onError) onError(error.message || String(error)); };
   async function response(url) {
@@ -25,13 +35,19 @@ function createMap(container, request, onError, styleUrl = 'https://tiles.openfr
   }
   response(styleUrl).then(r => r.json()).then(style => {
     if (closed) return;
+    if (window.EarthVector) style = window.EarthVector.prepareStyle(style);
     // Use system fonts; CEF blocks remote font CSS and Canvas does not consume PBF glyphs.
     for (const layer of style.layers) {
       if (layer.layout && layer.layout['text-font']) layer.layout['text-font'] = ['Arial'];
     }
     if (style.metadata) delete style.metadata['ol:webfonts'];
-    return apply(map, style, { styleUrl,
-      transformRequest: url => response(url) }).then(() => {
+    // Avoid the default hybrid renderer's intermediate tile images at fractional zooms.
+    const layer = new VectorTileLayer({renderMode: 'vector', declutter: true,
+      updateWhileAnimating: true, updateWhileInteracting: true});
+    map.addLayer(layer);
+    const options = {styleUrl, transformRequest: url => response(url)};
+    return Promise.all([applyBackground(map, style, options),
+      applyStyle(layer, style, 'openmaptiles', options)]).then(() => {
       if (closed) return;
       map.getLayers().forEach(layer => {
         const source = layer.getSource && layer.getSource();
@@ -46,6 +62,11 @@ function createMap(container, request, onError, styleUrl = 'https://tiles.openfr
     jumpTo(camera) {
       if (closed) return;
       applyCamera(map.getView(), camera);
+    },
+    setRoute(feature) {
+      if (closed) return;
+      routeSource.clear();
+      if (feature.geometry) routeSource.addFeatures(new GeoJSON().readFeatures(feature, {featureProjection: 'EPSG:3857'}));
     },
     resize() { if (!closed) map.updateSize(); },
     remove() { closed = true; controller.abort(); map.setTarget(undefined); map.dispose(); listeners.clear(); }

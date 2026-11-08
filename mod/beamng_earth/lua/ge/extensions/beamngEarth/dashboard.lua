@@ -8,6 +8,8 @@ M.ZOOM_CITY, M.ZOOM_ROAD, M.ZOOM_HIGHWAY = 17, 16, 15
 M.ZOOM_FAST = 14
 M.VIEW_INTERVAL_S = 0.1
 M.RESTORE_RELOAD_S = 0.5
+M.TAKEOVER_RETRY_S = 1.5
+M.TAKEOVER_ATTEMPTS = 3
 
 local enabled = true
 local active = false
@@ -116,7 +118,9 @@ local function applyScreen(rec)
   local prefix = M.DASHBOARD_URI .. '?vehicle=' .. rec.vehicleId .. '&screen='
   target:queueJSUITexture(rec.tag, 'window.location.replace(' .. jsonEncode(prefix)
     .. '+encodeURIComponent(' .. jsonEncode(rec.tag) .. ')+"&return="+encodeURIComponent(window.location.href))')
-  rec.applied = true
+  rec.applied, rec.ready = true, false
+  rec.takeoverAttempts = (rec.takeoverAttempts or 0) + 1
+  rec.retryAt = os.clock() + M.TAKEOVER_RETRY_S
   lastViewAt = 0
 end
 
@@ -146,7 +150,10 @@ local function registerScreen(tag, initmap, vehId, callback)
     screens[key] = rec
   end
   rec.initmap, rec.stockRequest = initmap, callback
-  rec.restoring = false
+  -- The stock request may recreate the WebView even for an already registered tag.
+  -- Its old acknowledgement must not suppress taking over the new page.
+  rec.applied, rec.ready, rec.restoring = false, false, false
+  rec.takeoverAttempts, rec.routeVersion = 0, nil
   if active and enabled and id == playerVehicleId() then applyScreen(rec) end
 end
 
@@ -216,6 +223,14 @@ local function updateDashboard(now, ctx)
     return
   end
   sendView(ctx, player, '', now)
+  local core = extension('beamngEarth_core')
+  local route = core and core.dashboardRoute and core.dashboardRoute() or { version = 0, points = {} }
+  for _, rec in pairs(screens) do
+    if rec.applied and rec.ready and rec.vehicleId == id and rec.routeVersion ~= route.version then
+      dashboardCall(rec, 'setRoute', route)
+      rec.routeVersion = route.version
+    end
+  end
 end
 
 -- Navigation discards calls queued for the old page. Send the view again once the new page is ready.
@@ -224,12 +239,13 @@ function M.screenReady(vehicleId, tag)
   if not id or type(tag) ~= 'string' then return false end
   local rec = screens[screenKey(id, tag)]
   if not rec then return false end
-  rec.applied, rec.restoring = true, false
+  rec.applied, rec.restoring, rec.ready = true, false, true
   if not active or not enabled or id ~= playerVehicleId() then
     restoreScreen(rec)
     return false
   end
   lastViewAt = 0
+  rec.routeVersion = nil
   return true
 end
 
@@ -266,6 +282,14 @@ function M.onUpdate()
   end
   if not active then
     return
+  end
+  for _, rec in pairs(screens) do
+    if rec.applied and not rec.ready and not rec.restoring and rec.vehicleId == playerVehicleId()
+      and now >= (rec.retryAt or 0) and (rec.takeoverAttempts or 0) < M.TAKEOVER_ATTEMPTS then
+      -- Navigation queued before the UI texture existed can be discarded by the engine.
+      rec.applied = false
+      applyScreen(rec)
+    end
   end
   updateDashboard(now, ctx)
 end
