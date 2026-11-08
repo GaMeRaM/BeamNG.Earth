@@ -105,3 +105,23 @@ lifecycle tests. A real-data audit produced crossing and bus-stop signs near VIZ
 and found Revda/Pervouralsk town polygons. Generated face inspection was performed
 headlessly. In-game appearance, night lighting, terrain clearance and performance
 still require a driving test; no FPS claim is made.
+
+## Incident and rollback (2026-11-09)
+
+The maplibre.7 player log showed 57 distinct road geotiles repeatedly failing in
+`ruinfra.markers`: `float(ground(x, y))` assumed a scalar, while the actual
+`roadmesh.drawn_ground` callback returns an `(n,)` NumPy array even for one query.
+This was a local companion road-generation failure, not a VPS container restart.
+The first tests omitted the production terrain callback and missed the integration bug.
+
+The experiment now samples all post heights in one vectorized call, validates the
+result size, and isolates optional post-generation errors so they cannot abort road
+geometry. A regression test uses the actual `drawn_ground` callback; another forces
+a terrain failure and verifies that poles and wires still build. The affected
+Python test selection (165 tests) passes.
+
+Production was rolled back to official **v1.8.2-beta / a4053d3**, retaining the
+Yekaterinburg spawn, custom server plugin and shared cache. The fix remains on the
+experimental branch and is not deployed. Players must also run the official
+companion EXE: changing the BeamMP server alone cannot replace a running local
+maplibre.7 generator. Further production changes/restarts require explicit approval.

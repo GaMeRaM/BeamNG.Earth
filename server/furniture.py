@@ -1079,7 +1079,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             wires.extend(_own_spans(run, box, wire_anchors))
     if ru:
         rows = ruinfra.localize(rows)
-        rows.extend(ruinfra.markers(roads, box, clearance, ground))
+        rows.extend(ruinfra.optional_markers(roads, box, clearance, ground))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
     rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_STOP, G_YIELD) or clearance.clear(r)]
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)

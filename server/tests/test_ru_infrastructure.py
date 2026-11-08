@@ -105,6 +105,38 @@ class RussianInfrastructure(unittest.TestCase):
             rgb = cell('info.living_street')
             self.assertGreater(((rgb[:,:,2]>rgb[:,:,0]+40)&(rgb[:,:,2]>rgb[:,:,1]+20)).sum(),20000)
 
+    def test_marker_ground_uses_production_drawn_ground_vector_contract(self):
+        import geodesy
+        import roadmesh
+        from unittest.mock import Mock
+        frame = geodesy.EnuFrame(56.8, 60.4, 0.)
+        spec = roads.Spec(8., 'paved', False, 'secondary', False)
+        line = np.array([[-200., 50., 0.], [600., 50., 0.]])
+        clear = furniture.RoadClearance([(4., line)])
+        # Exactly the callback supplied by blockworker._tile_parts. Even a
+        # single query returns a one-dimensional array, never a float.
+        ground = Mock(side_effect=lambda x, y: roadmesh.drawn_ground(
+            frame, lambda lat, lon: np.zeros_like(lat), np.c_[x, y]))
+        rows = ruinfra.markers([('r', spec, line, 60.)], (0., 0., 256., 256.), clear, ground)
+        self.assertTrue(rows)
+        self.assertTrue(np.isfinite([r[3] for r in rows]).all())
+        self.assertEqual(ground.call_count, 1)
+
+    def test_optional_marker_failure_does_not_abort_furniture_or_wires(self):
+        spec = roads.Spec(8., 'paved', False, 'secondary', False)
+        line = np.array([[-200., 50., 0.], [600., 50., 0.]])
+        def unavailable(x, y):
+            raise ValueError('terrain unavailable')
+        wires = []
+        with patch.object(ruinfra, '_warned_markers', -float('inf')):
+            with self.assertLogs('earthd.ruinfra', level='WARNING') as messages:
+                rows = furniture.place([('r', spec, line, 60.)], [], (0., 0., 256., 256.),
+                                       country='RU', wires=wires, ground=unavailable)
+        self.assertTrue(any(r[0] == ruinfra.POLE for r in rows))
+        self.assertTrue(wires)
+        self.assertFalse(any(r[0] == ruinfra.MARKER for r in rows))
+        self.assertIn('terrain unavailable', messages.output[0])
+
     def test_registered_scenery_models_and_materials_exist(self):
         import xml.etree.ElementTree as ET
         base=ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth'
