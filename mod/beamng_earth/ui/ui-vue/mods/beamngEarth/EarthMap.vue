@@ -179,7 +179,7 @@
         <button class="map-btn" :class="{ on: layersPanel }" @click="layersPanel = !layersPanel; playersPanel = false" title="Base map and overlays">Layers</button>
         <div v-if="layersPanel" class="layers-panel" @mousedown.stop @wheel.stop @dblclick.stop>
           <div class="panel-sub">Base map</div>
-          <label class="layer-opt"><input type="radio" value="vector" v-model="baseLayer" /> Vector (OpenFreeMap)</label>
+          <label class="layer-opt"><input type="radio" value="vector" v-model="baseLayer" /> Vector Dark (OpenFreeMap)</label>
           <label class="layer-opt"><input type="radio" value="sat" v-model="baseLayer" /> Satellite</label>
           <label class="layer-opt"><input type="radio" value="map" v-model="baseLayer" /> Map</label>
           <label class="layer-opt"><input type="radio" value="dark" v-model="baseLayer" /> Dark</label>

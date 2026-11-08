@@ -1,7 +1,7 @@
 /* Shared MapLibre/OpenFreeMap transport. CEF HTTP is unavailable: use the game connection. */
 (function () {
   'use strict';
-  const STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+  const STYLE = 'https://tiles.openfreemap.org/styles/dark';
   const CREDIT = 'OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors';
   const pending = new Map();
   const queue = [];
@@ -65,7 +65,7 @@
     if (window.EarthCanvas) {
       const probe = document.createElement('canvas');
       const gl = probe.getContext('webgl2') || probe.getContext('webgl');
-      if (!gl) return window.EarthCanvas.createMap(container, request, onError);
+      if (!gl) return window.EarthCanvas.createMap(container, request, onError, STYLE);
       const lose = gl.getExtension('WEBGL_lose_context');
       if (lose) lose.loseContext();
     }

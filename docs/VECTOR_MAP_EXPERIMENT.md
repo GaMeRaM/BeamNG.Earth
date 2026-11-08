@@ -2,18 +2,18 @@
 
 Branch: `experiment/maplibre-dashboard` in https://github.com/GaMeRaM/BeamNG.Earth
 
-Both the vehicle navigator and the M map use OpenFreeMap's Liberty style:
-https://tiles.openfreemap.org/styles/liberty. No API key is needed.
+Both the vehicle navigator and the M map use OpenFreeMap's Dark style:
+https://tiles.openfreemap.org/styles/dark. No API key is needed.
 MapLibre GL JS 4.7.1 is bundled locally, including its BSD license.
 When WebGL is unavailable (as in BeamNG CEF), OpenLayers 10.11.0 with
-ol-mapbox-style 13.9.0 draws the same vector tiles and Liberty style through
+ol-mapbox-style 13.9.0 draws the same vector tiles and Dark style through
 Canvas2D. Canvas labels use the local Arial font instead of remote PBF glyphs. This version
 supports WebGL 1 fallback, chosen for the game's embedded CEF rather than requiring WebGL 2.
 
 Install the mod and run the companion **from the same branch**. The new
 `vector_resource` protocol is needed on both sides. Restart both after updating.
 Use the existing dashboard enable switch (now labelled “Vector map on dashboard
-screens”). On M, choose Layers → Vector (OpenFreeMap). New profiles default to
+screens”). On M, choose Layers → Vector Dark (OpenFreeMap). New profiles default to
 Vector; existing saved base-layer choices are respected.
 
 The main map keeps its existing input, search, markers, GPS, cache overlay and
@@ -60,3 +60,8 @@ The pinned lockfile and source produce `earth_canvas.js`, `earth_canvas.css` and
 `earth_canvas.LICENSES.txt` under the mod's `vehicles/common/` directory. The
 Windows experiment workflow rebuilds them before packaging. No npm installation
 is needed by the player.
+
+The Canvas camera negates clockwise vehicle bearing to match OpenLayers view
+rotation. Regression tests use OL’s real coordinate-to-pixel transform at ten
+headings and ensure forward stays up and right stays right. Run `npm test` in
+`tools/vector_canvas/`. Both renderers default to OpenFreeMap’s Dark style.

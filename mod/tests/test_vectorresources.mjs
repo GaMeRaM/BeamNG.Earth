@@ -22,6 +22,7 @@ test('MapLibre bridge decodes JSON/binary, limits concurrency and handles aborts
   const map = transport.createMap('map');
   assert.equal(map.options.transformRequest('https://tiles.openfreemap.org/styles/liberty').url,
     'earth://tiles.openfreemap.org/styles/liberty');
+  assert.equal(map.options.style, 'https://tiles.openfreemap.org/styles/dark');
   const controller = new AbortController();
   const json = protocol({ url: 'earth://tiles.openfreemap.org/planet', type: 'json' }, controller);
   assert.equal(sent[0].url, 'https://tiles.openfreemap.org/planet');
@@ -45,7 +46,8 @@ test('CEF without WebGL selects Canvas2D without constructing MapLibre', () => {
   let selected = false;
   const adapter = { jumpTo() {}, resize() {}, remove() {} };
   const window = { location: { pathname: '/beamng_earth_dashboard.html' },
-    EarthCanvas: { createMap: (container, request) => {
+    EarthCanvas: { createMap: (container, request, onError, styleUrl) => {
+      assert.equal(styleUrl, 'https://tiles.openfreemap.org/styles/dark');
       assert.equal(container, 'map'); assert.equal(typeof request, 'function'); selected = true; return adapter;
     } } };
   const context = vm.createContext({ window, document: { createElement: () => ({ getContext: () => null }) },

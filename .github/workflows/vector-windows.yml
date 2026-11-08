@@ -24,6 +24,7 @@ jobs:
         working-directory: tools/vector_canvas
         run: |
           npm ci
+          npm test
           npm run build
       - name: Mark the experimental build
         shell: bash

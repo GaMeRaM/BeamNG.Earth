@@ -3,10 +3,11 @@ import View from 'ol/View.js';
 import {fromLonLat} from 'ol/proj.js';
 import {apply} from 'ol-mapbox-style';
 import 'ol/ol.css';
+import {applyCamera} from './camera.mjs';
 
 // Implements the small MapLibre camera/lifecycle interface used by both game screens.
 // VectorTile layers created by apply() use OpenLayers' Canvas2D renderer.
-function createMap(container, request, onError) {
+function createMap(container, request, onError, styleUrl = 'https://tiles.openfreemap.org/styles/dark') {
   const listeners = new globalThis.Map();
   const controller = new AbortController();
   let closed = false;
@@ -22,14 +23,14 @@ function createMap(container, request, onError) {
         (url.includes('.pbf') ? 'application/x-protobuf' : 'application/json') } });
     } catch (error) { report(error); throw error; }
   }
-  response('https://tiles.openfreemap.org/styles/liberty').then(r => r.json()).then(style => {
+  response(styleUrl).then(r => r.json()).then(style => {
     if (closed) return;
     // Use system fonts; CEF blocks remote font CSS and Canvas does not consume PBF glyphs.
     for (const layer of style.layers) {
       if (layer.layout && layer.layout['text-font']) layer.layout['text-font'] = ['Arial'];
     }
     if (style.metadata) delete style.metadata['ol:webfonts'];
-    return apply(map, style, { styleUrl: 'https://tiles.openfreemap.org/styles/liberty',
+    return apply(map, style, { styleUrl,
       transformRequest: url => response(url) }).then(() => {
       if (closed) return;
       map.getLayers().forEach(layer => {
@@ -44,11 +45,7 @@ function createMap(container, request, onError) {
     on(name, callback) { if (!listeners.has(name)) listeners.set(name, []); listeners.get(name).push(callback); },
     jumpTo(camera) {
       if (closed) return;
-      const view = map.getView();
-      view.setCenter(fromLonLat(camera.center));
-      // Callers use MapLibre's 512px zoom; OpenLayers uses a 256px world.
-      view.setZoom(camera.zoom + 1);
-      view.setRotation((camera.bearing || 0) * Math.PI / 180);
+      applyCamera(map.getView(), camera);
     },
     resize() { if (!closed) map.updateSize(); },
     remove() { closed = true; controller.abort(); map.setTarget(undefined); map.dispose(); listeners.clear(); }

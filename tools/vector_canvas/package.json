@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "Reproducible Canvas2D fallback bundle for game WebViews",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node --test camera.test.mjs"
   },
   "license": "MIT",
   "type": "commonjs",
