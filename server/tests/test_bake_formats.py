@@ -38,7 +38,10 @@ def fixture():
 def plans_heights():
     g = grading.Grader(FRAME, FakeMD(fixture()), lambda la, lo: 10.0 + 0.002 * np.asarray(lo) * 0
                        + 0.0 * np.asarray(la))
-    e, n = np.meshgrid(np.linspace(-380, 380, 77), np.linspace(-380, 380, 77))
+    # Avoid exact clipping/retaining-band boundaries: x=200 was a hard edge 50 m
+    # from the vertical fixture road, selected differently after ENU round trips
+    # on Windows and Linux. A 0.01 mm displacement reproduced both results locally.
+    e, n = np.meshgrid(np.linspace(-380, 380, 77) + .173, np.linspace(-380, 380, 77) + .317)
     la, lo, _ = FRAME.enu_to_geodetic(e.ravel(), n.ravel(), 0.0)
     z = g.apply(la, lo, 10.0 + 0.01 * e.ravel())
     return np.asarray(z, np.float64)
