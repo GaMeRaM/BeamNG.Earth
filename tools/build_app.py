@@ -148,6 +148,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--specpath", work, "--paths", server, "--paths", ROOT, "--icon", ico,
            "--collect-submodules", "fsspec",
            "--hidden-import", "certifi", "--collect-data", "certifi",   # CA bundle fallback (launcher.ensure_ca_certs)
+           "--collect-all", "shapely",       # GEOS binaries for building passage cuts
            "--hidden-import", "truststore",     # Windows: the native certificate store (netfetch.windows_ssl_context, PR #371)
            "--add-data", f"{os.path.join(ROOT, 'mod', 'beamng_earth')}{SEP}mod/beamng_earth",
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",

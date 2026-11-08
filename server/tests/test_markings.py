@@ -228,3 +228,59 @@ class ArrowTest(unittest.TestCase):
         self.assertEqual(uv.min(0).tolist(), [0.25, 0.75])
         self.assertEqual(uv.max(0).tolist(), [0.5, 1.0])
         self.assertEqual(uv[0][1], 1.0)
+
+
+class RussianDoubleCentreTest(unittest.TestCase):
+    LINE = np.array([[0., 0., 0.], [200., 0., 0.]])
+
+    def test_four_and_six_lane_two_way_roads_have_two_continuous_white_lines(self):
+        for lanes in (4, 6):
+            for urban in (False, True):
+                for tags in (None, {'lanes:forward': str(lanes // 2), 'lanes:backward': str(lanes // 2)}):
+                    with self.subTest(lanes=lanes, urban=urban, tags=tags):
+                        spec = roads.Spec(lanes * 3.3, 'paved', urban, 'primary', False)._replace(lanes=lanes)
+                        centre = [(look, line) for look, width, line in roads.extras(
+                            spec, self.LINE, 60.55, country='RU', osm=tags) if look.get('kind') == 'centre']
+                        self.assertEqual(len(centre), 2)
+                        self.assertTrue(all(look['m'] == 'line_white' and not look.get('dash') for look, _ in centre))
+                        self.assertGreater(centre[0][1][0, 1], centre[1][1][0, 1])
+                        for _, line in centre:
+                            np.testing.assert_allclose(line[[0, -1], 0], [0., 200.])
+
+    def test_double_line_follows_unequal_direction_counts(self):
+        spec = roads.Spec(13.2, 'paved', True, 'primary', False)._replace(lanes=4)
+        centre = [line[0, 1] for look, _, line in roads.extras(
+            spec, self.LINE, 60.55, country='RU', osm={'lanes:forward': '3', 'lanes:backward': '1'})
+                  if look.get('kind') == 'centre']
+        self.assertEqual(len(centre), 2)
+        self.assertAlmostEqual(float(np.mean(centre)), 3.3)
+
+    def test_a_one_way_carriageway_has_no_opposing_centreline(self):
+        spec = roads.Spec(13.2, 'paved', True, 'primary', True)._replace(lanes=4)
+        self.assertFalse(any(look.get('kind') == 'centre' for look, _, _ in roads.extras(
+            spec, self.LINE, 60.55, country='RU')))
+
+    def test_two_lane_road_keeps_its_single_centreline(self):
+        spec = roads.Spec(6.6, 'paved', False, 'primary', False)._replace(lanes=2)
+        for tags in (None, {'overtaking': 'no'}):
+            centre = [line[0, 1] for look, _, line in roads.extras(
+                spec, self.LINE, 60.55, country='RU', osm=tags) if look.get('kind') == 'centre']
+            self.assertTrue(centre)
+            np.testing.assert_allclose(centre, 0.)
+
+    def test_splitting_a_road_into_map_features_does_not_remove_the_double_line(self):
+        from test_roads import FRAME, features, flat
+        f = features([[(-200, 100), (128, 100)], [(128, 100), (500, 100)]], ['primary'] * 2,
+                     widths=[(0, 13.2), (1, 13.2)])
+        f.attrs['osm_lanes'] = np.array([4., 4.])
+        chunks = roads.build_tile(FRAME, 0, 0, [f], flat, country='RU')
+        _, north, _ = FRAME.geodetic_to_enu(f.lonlat[:, 1], f.lonlat[:, 0], 0.)
+        centre_y = float(np.mean(north))
+        centre = [np.asarray(c['n']) for c in chunks if c['m'] == 'line_white' and c['n']
+                  and abs(np.mean(np.asarray(c['n'])[:, 1]) - centre_y) < .5]
+        self.assertTrue(centre)
+        for side in (-1, 1):
+            covered = {round(float(x), 1) for line in centre if side * (line[:, 1].mean() - centre_y) > 0
+                       for a, b in zip(line[:-1], line[1:])
+                       for x in np.arange(max(0., a[0]), min(256., b[0]), 1.)}
+            self.assertGreater(len(covered), 245)

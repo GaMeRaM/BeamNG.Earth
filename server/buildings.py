@@ -22,6 +22,7 @@ import numpy as np
 
 import fast
 import landmarks
+import buildingpassages
 import mapgeom
 import ships
 import staging
@@ -330,7 +331,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "passage")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -2437,7 +2438,7 @@ def _outline_under_parts(at, bparts):
 @profile_step('Building site selection')
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
-                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None):
+                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, passages_xy=()):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -2692,7 +2693,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         isl = _toll_islands(frame, layers, parts_of, lines, x0, y0)
         if isl:
             out = _toll_mark(out, isl)
-    return out
+    return buildingpassages.apply(out, passages_xy)
 
 
 # Toll plazas (the user's report at the Golden Gate Bridge, 2026-10-21: "Toll booths need work. west coast has one,
@@ -2811,14 +2812,18 @@ def collider_boxes(items, x0, y0):
     mesh solid while the player's car is inside one (roads.lua playerIn)."""
     out = []
     for spec, gmin, gmax in items:
+        if spec.passage:                           # an intentional opening: the footprint box includes its driveway
+            continue
         if deck_plan(spec, gmin, gmax) is not None:     # an open parking deck: driven into on purpose
             continue
         if spec.cls in BRIDGE_CLASSES or spec.cls == landmarks.LANDMARK or spec.cls in OPEN_CANOPY_CLASSES:
             continue
         r = spec.ring
+        mh = float(spec.min_h or 0.0)
+        bottom = base_z(spec, gmin, gmax) + mh if mh > 0.5 else gmin - FOUNDATION_M
         out.append([round(float(r[:, 0].min() + x0), 2), round(float(r[:, 1].min() + y0), 2),
-                    round(gmin - FOUNDATION_M, 2), round(float(r[:, 0].max() + x0), 2),
-                    round(float(r[:, 1].max() + y0), 2), round(gmax + spec.height + 6.0, 2)])
+                    round(bottom, 2), round(float(r[:, 0].max() + x0), 2),
+                    round(float(r[:, 1].max() + y0), 2), round(gmax + mh + spec.height + 6.0, 2)])
     return out
 
 
@@ -3496,6 +3501,8 @@ def road_tile_items(
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, with_width=True),
+        passages_xy=buildingpassages.collect(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                             size=max(x1 - x0, y1 - y0)),
         ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         tunnels_xy=tunnel_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         garages_xy=garage_rings(
@@ -3815,6 +3822,8 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
                            ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, with_width=True),
+                           passages_xy=buildingpassages.collect(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                                                size=max(x1 - x0, y1 - y0)),
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
@@ -4053,7 +4062,9 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
         return None
     cds = [md.cell(k, layers=("buildings", "roads"), kind="background") for k in keys]
     layers = [c.layers.get("buildings") for c in cds]
-    items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(1e9, SKY_MIN_AREA_M2), own=own)
+    items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(1e9, SKY_MIN_AREA_M2), own=own,
+                           passages_xy=buildingpassages.collect(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                                                size=max(x1 - x0, y1 - y0)))
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
                       built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)

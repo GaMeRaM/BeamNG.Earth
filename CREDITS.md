@@ -113,6 +113,7 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 | Python 3 | companion server and tools | PSF License | in use |
 | NumPy | terrain, mesh and imagery processing | BSD-3-Clause | in use |
 | Pillow | image decoding and encoding | MIT-CMU (HPND) | in use |
+| Shapely / GEOS (https://shapely.readthedocs.io, https://libgeos.org) | polygon cuts for mapped building passages | BSD-3-Clause (Shapely); LGPL-2.1 (GEOS, dynamically bundled by the wheel) | branch (building passages) |
 | LuaJIT | offline tests of the mod's Lua | MIT | in use (tests) |
 | GeographicLib (data files) | gravity model data | MIT (library) / NGA data public domain | in use |
 | Leaflet | world map page | BSD-2-Clause | not used: the in-game world map (`EarthMap.vue`, `mapmath.js`) is our own code. Its tiles come from the imagery chain above (USGS, EOX Sentinel-2 cloudless 2023 / 2016) through `server/maptiles.py` and show that same attribution, plus the EOX Terrain Light / Overlay layers above |

@@ -202,3 +202,54 @@ scene does not validate raised sidewalks there. Width measurement was disabled
 for this replay; it is a reproducible geometry check, not an in-game acceptance
 drive or a guarantee for every interchange. Local audit output is under
 `build/ekb-bridge-audit/walks-final.json`.
+
+## Building passages, split bridge chains and Russian centre lines
+
+Mapped covered driveways (`is_covered`) and short ground-level service tunnels
+can now cut a local opening in a procedural building. The default clearance is
+one residential storey (`buildings.FLOOR_M`, 3 m); a numeric `osm_maxheight`, when
+available, takes priority. This is a rectangular opening, not a surveyed curved
+vault. Ordinary roads and negative-level tunnels do not cut houses. The upper
+floors and roof remain; rendering and collision use the same polygon fragments.
+An intentional passage is excluded from the footprint occupancy boxes, so driving
+inside the opening does not hold back the building collision mesh. Enclosed
+internal garages whose polygons need holes are not supported by this change.
+Shapely/GEOS performs the polygon difference; its binaries are explicitly bundled
+in the EXE and imported by the packaged server help smoke test.
+
+Captured Overture/OSM fixtures cover both buildings near 56.83296, 60.58709.
+Tests cast finite rays along the mapped driveways at body/tyre offsets through
+the actual visible and collision meshes, and check retained walls above/beside
+the opening and independent mapped clearances for multiple openings.
+
+The blocked underpass at Serafimy Deryabinoy / Volgogradskaya
+(56.81424, 60.55127) had a bridge split into a main span and a roughly 2 m tail.
+The approach code could select the internal joint instead of the free abutment,
+and underpass grading excluded every joined bridge feature. Short unbranched
+chains of one level are now treated as a single span for underpass grading;
+railways, forks and different levels stay separate. Both approaches share their
+achievable lift instead of lifting only one end into a steep ramp. Existing
+120 m span and 8 m excavation bounds remain. Plan format is bumped to 12 so old
+shared/baked plans cannot silently retain the former geometry.
+
+The captured-road fixture uses synthetic flat ground and checks actual slab and
+girder collisions across both carriageways, a drivable 4.9 m lane envelope and
+the upper deck's grade. Disabling chain merging reproduces the blockage. The
+6 m design target is not a universal guarantee with constrained map geometry and
+bounded excavation. A separate replay using the real local DEM, building-constrained road-width estimation,
+surface grading and sea carving sampled the generated deck/tunnel/rail/barrier
+meshes and terrain lattice near this screenshot: the lowest sampled clearance
+was over 6.5 m. This is headless geometry validation, not an in-game drive.
+The earlier steep abutment profiles at Р-242/ЕКАД are not claimed fixed by this
+short-chain correction and remain a separate investigation.
+
+Russian four-or-more-lane two-way roads now get double solid white centre lines
+in both the inferred and lane-tagged paths. Unequal forward/backward counts move
+the separator to the correct lane boundary. One-way carriageways and two-lane
+roads keep their existing rules; splitting a way into map features does not
+remove either solid line. This is a rendering fallback, not surveyed paint data.
+
+Validation for this update: 568 local tests in 28 modules, including the captured
+road/building fixtures and package/world-bundle format checks. The experimental
+Windows build runs the same selection before packaging, then boots the packaged
+server. Both deployment and in-game acceptance remain separate checks.

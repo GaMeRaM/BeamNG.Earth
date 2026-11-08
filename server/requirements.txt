@@ -10,3 +10,7 @@ fsspec              # DuckDB reads the remote files through rangeread.NetfetchFS
 certifi             # the packaged app's CA certificates where the system has none it finds (launcher.py)
 
 truststore>=0.10.4  # Windows: use native CryptoAPI chain validation (HTTPS)
+
+# Robust polygon cuts for mapped building passages (GEOS); source installs still support Python 3.10.
+Shapely==2.2.0; python_version >= "3.11"
+Shapely==2.1.2; python_version < "3.11"

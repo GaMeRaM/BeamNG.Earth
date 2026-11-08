@@ -4804,6 +4804,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
     motorway = cls == "motorway"
     lw_ = st.w_motorway if motorway else (st.w_urban or st.w) if urban else st.w           # a line's width
     sweden = st is markings.STYLES["SE"]
+    russian_double = st is markings.STYLES["RU"] and lane_layout(spec)[1] >= 4
     barrier = sweden and kind == "paved" and _motesfri_section(spec, osm)   # (a 2+1 road's: motesfri.py)
 
     def mark(kind_, mat, width, along, pattern=None, side=None):
@@ -4850,10 +4851,10 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
             elif role == "twltl":           # solid on the through side, broken on the turn lane's (MUTCD 3B.05)
                 mark("centre", st.centre, lw_, at(off + how * d))
                 mark("centre", st.centre, lw_, at(off - how * d), cpat)
-            elif how == "double" or (sweden and lanes >= 4 and how is None):     # (TSFS 2010:171 2 kap. 17 §)
+            elif how == "double" or ((sweden or russian_double) and lanes >= 4 and how is None):
                 if st.warning and w < markings.WARNING_BELOW_M:
                     mark("centre", st.centre, lw_, at(off), st.warning)
-                elif st.centre == "line_yellow" or sweden or st is markings.STYLES.get("GB"):
+                elif st.centre == "line_yellow" or sweden or russian_double or st is markings.STYLES.get("GB"):
                     for sd in (1, -1):
                         mark("centre", st.centre, lw_, at(off + sd * d))
                 else:
@@ -4871,7 +4872,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
         # more get a solid line (the Americas: double solid yellow), and in the US a town's street a double solid one;
         # otherwise one broken line in the country's colour and town / country pattern
         solid = lanes >= 4 or (st.double_centre_urban and urban)
-        if solid and (st.centre == "line_yellow" or sweden):
+        if solid and (st.centre == "line_yellow" or sweden or russian_double):
             for side in (1, -1):
                 mark("centre", st.centre, lw_, offset_polyline(pts, side * (st.double_gap + lw_) / 2))
         elif solid:

@@ -28,6 +28,9 @@ MODULES = (
     "test_walk_clearance", "test_sidewalk_collision", "test_islands", "test_roadcorners",
     "test_junction_landing", "test_junction_corridor", "test_junction_pads",
     "test_approaches", "test_bridge_junction_surface",
+    "test_building_passages", "test_bridge_chain_clearance", "test_under_deck",
+    "test_underpass_profiles", "test_bridge_clearance", "test_bake_formats",
+    "test_crossings", "test_carriageways", "test_package_stamps",
 )
 
 
