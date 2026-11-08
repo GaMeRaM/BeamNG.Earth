@@ -46,9 +46,10 @@ terrain clearance and readability at speed still require an in-game check.
 * Overture divisions 2026-10-21.0: 3,738 Russian localities added to the existing
   four-country snapshot. See `server/data/places.NOTICE.md`.
 
-Upstream PRs #505, #883, #882 and #843 were inspected. Their wider infrastructure,
-town-board or US-shield changes were not merged: this implementation reuses the
-existing native version 149 and the metric exit planner, with no protocol change.
+The initial maplibre.6 exit-board implementation inspected PRs #505, #883, #882
+and #843 without importing them; it used native version 149 and the metric exit
+planner. The extended pack below now imports selected code/assets, requires native
+version 163 and adds the `road_signs` settings message and `rsigns` sign meshes.
 
 ## Extended Russian pack
 
