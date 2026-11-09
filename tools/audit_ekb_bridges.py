@@ -133,7 +133,8 @@ def audit(name, cache):
     return {'site': name, 'at': [lat, lon], 'overture': state.md.release, 'surveyed_heights': False,
             'decks': found, 'crossings': clearances, 'min_headroom_m': minimum,
             'suspected_lane_guardrails': lane_rails,
-            'pass': enough and max(grades, default=1.) <= .08 and (minimum is None or minimum >= 4.9)}
+            'pass': enough and max(grades, default=1.) <= .08
+                    and minimum is not None and minimum >= 4.9 and not lane_rails}
 
 
 def main():
