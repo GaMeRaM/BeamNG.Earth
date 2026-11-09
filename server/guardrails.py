@@ -559,7 +559,8 @@ def _along_road(a, b, rsegs):
         n2 = a2 + t2[:, None] * u2
         d2 = np.hypot(*(mid - n2).T) - rsegs["half"][other]
         j = int(np.argmin(d2))
-        if float(d2[j]) <= MEDIAN_REACH_M:
+        if (float(d2[j]) <= MEDIAN_REACH_M and abs(lateral[k]) >= rsegs["half"][k] - .05
+                and d2[j] >= -.05):
             t1 = float(np.clip(along[k], 0.0, rsegs["len"][k]))
             n1 = rsegs["a"][k] + t1 * unit
             median = float(np.dot(mid - n1, mid - n2[j])) < 0.0
@@ -624,7 +625,7 @@ def _relate(mid, segs, direction=None):
         n2 = a2 + t2[:, None] * u2
         d2 = np.hypot(*(mid - n2).T) - segs["half"][other]
         j = int(np.argmin(d2))
-        if d2[j] <= MEDIAN_REACH_M:
+        if d2[j] <= MEDIAN_REACH_M and past[k] >= -.05 and d2[j] >= -.05:
             t1 = float(np.clip(along[k], 0.0, segs["len"][k]))
             n1 = segs["a"][k] + t1 * segs["unit"][k]
             rel["median"] = float(np.dot(mid - n1, mid - n2[j])) < 0.0
@@ -706,7 +707,8 @@ def _join_module(sa, sb, ends, direction=None):
     half = float(ends["half"][k])
     sign = 1.0 if lat[k] >= 0.0 else -1.0
     target = sign * (half + BRIDGE_EDGE_OFFSET_M)
-    edge_type = abs(lat[k]) >= half - INTERIOR_MARGIN_M and abs(lat[k] - target) <= JOIN_LATERAL_M
+    edge_type = (abs(lat[k]) > LANE_CENTER_M and
+                 abs(lat[k]) <= half + BRIDGE_EDGE_OFFSET_M + JOIN_LATERAL_M)
     out = []
     for q in (sa, sb, mid):
         dq = q - ends["e"][k]
@@ -925,7 +927,12 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
                             if rel["median"]:
                                 mode = "median"                # between two aligned decks: stays at deck height
                             elif not edge_band:
-                                mode = "deck"                  # a centre rail on the deck
+                                if rel["lat"] > LANE_CENTER_M:
+                                    # A mapped side rail swallowed by the generated
+                                    # carriageway is not a divider. The deck already
+                                    # supplies its own edge protection.
+                                    continue
+                                mode = "deck"                  # an actual centre rail
                             elif rel["past"] <= BRIDGE_SIDE_CLEARANCE_M:
                                 continue                       # on the deck's edge: the bridge's own rail is there
                             else:

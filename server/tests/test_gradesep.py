@@ -56,6 +56,20 @@ def embankment(e, n):
 
 
 class HeightsTest(unittest.TestCase):
+    def test_short_underpass_also_covers_nearby_second_carriageway(self):
+        from unittest.mock import patch
+        f = hooked(features([[(-100., -8.), (100., -8.)],
+                             [(-100., 8.), (100., 8.)],
+                             [(0., -100.), (0., 100.)]],
+                            ['trunk', 'trunk', 'service'],
+                            flags=[(2, 'is_tunnel', .4, .52)]),
+                   lambda e, n: np.zeros_like(e))
+        with patch.object(gradesep, 'ON', False):
+            for i in (0, 1):
+                self.assertTrue(any(k == 'bridge' and a < .5 < b
+                                    for a, b, k in roads.level_ranges(f, i)))
+            self.assertFalse(any(k == 'tunnel' for a, b, k in roads.level_ranges(f, 2)))
+
     def test_the_higher_line_gets_a_bridge_over_the_other(self):
         f = hooked(cross(), embankment)
         got = roads.level_ranges(f, 0)
@@ -109,6 +123,19 @@ class TunnelsOnlyTest(unittest.TestCase):
         f = hooked(cross(("motorway", "secondary"), flags=[(1, "is_tunnel", 0.45, 0.55)]), lambda e, n: np.zeros_like(e))
         self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
         self.assertEqual(roads.level_ranges(f, 1), [])
+
+    def test_long_bridge_bearing_road_sees_an_underpass_far_from_its_first_cell(self):
+        f = features([[(-3000., 0.), (3000., 0.)]], ['trunk'], ids=['over'],
+                     flags=[(0, 'is_bridge', .05, .06)])
+        lower = features([[(2100., -100.), (2100., 100.)]], ['service'], ids=['under'],
+                         flags=[(0, 'is_tunnel', .4, .6)])
+        ll = np.asarray(lower.parts(0)[0][0])
+        target = mapcells.cell_of(float(ll[:, 1].mean()), float(ll[:, 0].mean()))
+        md = FakeMd(lambda e, n: np.zeros_like(e))
+        md.cell = lambda key, layers=(), kind='demand': SimpleNamespace(
+            layers={'roads': lower if key == target else None})
+        got = gradesep._spans(md, KEY, f)
+        self.assertTrue(any(a < .85 < b and kind == 'bridge' for a, b, kind in got.get(0, ())))
 
     def test_heights_alone_give_none_and_no_neighbour_is_read(self):
         md = FakeMd(embankment)

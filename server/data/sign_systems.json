@@ -166,7 +166,8 @@
       "params": {
         "warn_m": 150
       },
-      "verified": false
+      "verified": false,
+      "repeat_oneway": true
     }
   },
   "rules": [

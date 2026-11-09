@@ -238,6 +238,15 @@ class DevelopmentDecorationTest(unittest.TestCase):
 
 
 class PoleTest(unittest.TestCase):
+    def test_utility_poles_and_their_lamps_use_actual_support_height(self):
+        def verge(x, y):
+            return 3. + .03 * np.asarray(x) + .1 * np.asarray(y)
+        rows = furniture.place([road('c', 'tertiary', False)], [], (0., 0., 256., 256.), ground=verge)
+        poles = [r for r in rows if r[0] == furniture.G_POLE]
+        self.assertTrue(poles)
+        for pole in poles:
+            self.assertAlmostEqual(pole[3], float(verge(pole[1], pole[2])), delta=.01)
+
     def test_poles_and_wires_on_country_roads(self):
         wires = []
         rows = furniture.place([road("c", "tertiary", False)], [], (0, 0, 256, 256), wires=wires)

@@ -30,6 +30,7 @@ class Feats:
 
     def __init__(self, kind, rows, cls=None):
         self.kind = np.full(len(rows), kind, np.uint8)
+        self.ids = np.array([str(i) for i in range(len(rows))], object)
         self.rows = rows
         self.attrs = {"class": np.array(cls or [""] * len(rows), object)}
         self.lonlat = np.concatenate([np.asarray(r, np.float64) for r in rows]) if rows else np.zeros((0, 2))
@@ -39,6 +40,24 @@ class Feats:
 
     def parts(self, i):
         return [[np.asarray(self.rows[i], np.float64)]]
+
+
+class FinalRoadCorridorTest(unittest.TestCase):
+    def test_scattered_trunks_cannot_return_to_a_dirt_road(self):
+        frame = geodesy.EnuFrame(LAT, LON)
+        def ll(x, y):
+            la, lo, _ = frame.enu_to_geodetic(np.asarray(x), np.asarray(y), 0.)
+            return np.c_[lo, la]
+        road = Feats(2, [ll([-50., 50.], [0., 0.])], ['track'])
+        positions = ll([0., 0., 0., 0.], [0., 2.9, 5., 10.])
+        n = len(positions)
+        items = veg.Items(positions[:, 0], positions[:, 1], np.full(n, 12.), np.full(n, 2.),
+                          np.zeros(n, np.uint8), np.zeros(n, np.uint8), np.zeros(n),
+                          np.zeros(n), np.ones(n))
+        result = veg._off_road_positions(items, [road],
+                                         lambda f: [SimpleNamespace(width=6., kind='dirt')], KEY.bounds())
+        self.assertEqual(len(result), 1)
+        np.testing.assert_allclose(result.lat, items.lat[-1:], atol=1e-10)
 
 
 def cell_data():

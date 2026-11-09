@@ -2521,6 +2521,8 @@ class Server:
         try:
             deck_parts = list(anchor.bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
             deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts)
+            deck_parts = roadsmod.shifted_parts(deck_parts,
+                             roadsmod.deck_shift_fn(anchor.frame, cells, urban, self.widths, left_hand))
             guardrail_decks = [{"n": np.column_stack((xy, z)), "w": spec.width}
                                for _fid, spec, xy, z, _lon in deck_parts]
             guardrail_rows = guardrailsmod.forest_rows(anchor.frame, infra_fn, box, elev,
@@ -2564,14 +2566,19 @@ class Server:
                                  low_parapet_decks=low_parapet_decks, pads=pads)
         tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
         import railways
+        import bridgeattachments
+        rail_cells = [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)]
+        attachment_levels = bridgeattachments.levels(cells)
+        attachment_decks = [{**ch, 'level': attachment_levels.get(str(ch.get('fid')), 1.)}
+                            for ch in ctx if ch.get('deck') and len(ch.get('n', ())) >= 2]
         rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
-                                   [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)],
+                                   rail_cells,
                                    railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon)),
                                    far_ground=railways.point_ground(
                                        anchor.frame,
                                        lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                        ("raw", aid, anchor.lat, anchor.lon)),
-                                   return_decks=True)
+                                   return_decks=True, road_decks=attachment_decks)
         bld = None
         garage_sound = ()
         oil_wells = []

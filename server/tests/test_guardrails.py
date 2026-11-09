@@ -230,6 +230,27 @@ class GuardrailForestTest(unittest.TestCase):
             self.assertAlmostEqual(row[2], 0.0, delta=0.05)
             self.assertAlmostEqual(row[3], 20.0, delta=0.05)
 
+    def test_side_rail_inside_bridge_lane_is_not_a_median(self):
+        decks = [{"n": [[0., -8., 20.], [100., -8., 20.]], "w": 14.},
+                 {"n": [[0., 8., 20.], [100., 8., 20.]], "w": 14.}]
+        # Between the axes but 3 m INSIDE the south carriageway: it used
+        # to be mistaken for a median merely because the axes straddled it.
+        self.assertEqual(self.rows_for([[10., -4.], [90., -4.]], 12., decks,
+                                      tags={"bridge": "yes"}), [])
+        rows = self.rows_for([[10., 0.], [90., 0.]], 12., decks,
+                            tags={"bridge": "yes"})
+        self.assertTrue(rows, 'the real separator outside both carriageways stays')
+
+    def test_side_rail_inside_approach_moves_to_the_bridge_edge(self):
+        ends = guardrails._deck_ends([{'n': [[0., 0., 20.], [100., 0., 20.]], 'w': 8.}])
+        joined = guardrails._join_module(np.array([102., 2.]), np.array([105., 2.]), ends,
+                                         np.array([1., 0.]))
+        self.assertIsNotNone(joined)
+        self.assertGreater(2. + joined[0][0][1], 3.9)
+        centre = guardrails._join_module(np.array([102., .4]), np.array([105., .4]), ends,
+                                         np.array([1., 0.]))
+        np.testing.assert_array_equal(centre[0][0], [0., 0.])
+
     def test_guardrail_crossing_under_bridge_is_not_lifted_onto_deck(self):
         decks, parapets = self.deck_fixture()
         # This lower road crosses the bridge at right angles. A point-only deck lookup used

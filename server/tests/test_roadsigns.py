@@ -108,6 +108,14 @@ class Rules(unittest.TestCase):
         (row, meta, flags), = roadsigns.with_flags(rows, set(), {})
         self.assertEqual((flags, meta[2]), (0, 0.0))
 
+    def test_russian_oneway_repetition_reaches_the_native_flags(self):
+        rows = {'x': self.row([[0., 0.], [100., 0.]], 1.)}
+        (_, _, flags), = roadsigns.with_flags(rows, set(), {},
+                                             repeat_oneway=roadsigns.system('RU')['repeat_oneway'])
+        self.assertEqual(flags, 16)
+        (_, _, flags), = roadsigns.with_flags(rows, set(), {})
+        self.assertEqual(flags, 0)
+
 
 class Poles(unittest.TestCase):
     def test_a_warning_stands_alone_in_germany_but_not_in_czechia(self):

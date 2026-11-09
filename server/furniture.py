@@ -1060,12 +1060,16 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 for p, out in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
                     q = p[:2] - out * (w / 2 - 0.6)
                     yaw = _yaw(out[0], out[1])
-                    pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
-                    pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                    pole_z = _support_height(ground, q, p[2])
+                    if pole_z is None:
+                        run_poles = []
+                        continue
+                    pole_style = pole_at(fid, float(q[0]), float(q[1]), pole_z)
+                    pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(pole_z, 2),
                             round(yaw, 1), 1.0, pole_style.height, 0.0]
                     if not clearance.clear(pole):
                         if wires is not None and len(run_poles) > 1:
-                            wires.extend(_own_spans(run_poles, box))
+                            wires.extend(_own_spans(run_poles, box, ground=ground))
                         run_poles = []
                         continue
                     run_poles.append((pole[1], pole[2], pole[3], pole[4], pole_style))
@@ -1074,9 +1078,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                         k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
                         if lighting.get(fid) != "no" and pole_lamp(spec.cls, k, region):
                             rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
-                                         round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
+                                         round(pole_z + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
                 if wires is not None and len(run_poles) > 1:
-                    wires.extend(_own_spans(run_poles, box))
+                    wires.extend(_own_spans(run_poles, box, ground=ground))
             rule = None
         if rule is not None and lighting.get(fid) != "no":
             spacing, both = rule
@@ -1164,12 +1168,16 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 continue
             # the cross-arm (local x) across the road, the wires (local y) along it
             yaw = _yaw(n[0], n[1])
-            pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
-            pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+            pole_z = _support_height(ground, q, p[2])
+            if pole_z is None:
+                run = []
+                continue
+            pole_style = pole_at(fid, float(q[0]), float(q[1]), pole_z)
+            pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(pole_z, 2),
                     round(yaw, 1), 1.0, pole_style.height, 0.0]
             if not clearance.clear(pole):
                 if len(run) > 1 and wires is not None:
-                    wires.extend(_own_spans(run, box))
+                    wires.extend(_own_spans(run, box, ground=ground))
                 run = []
                 continue
             run.append((pole[1], pole[2], pole[3], pole[4], pole_style))
@@ -1177,9 +1185,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 rows.append(pole)
                 if lamps and pole_lamp(spec.cls, k, region):
                     rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
-                                 round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
+                                 round(pole_z + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
         if len(run) > 1 and wires is not None:
-            wires.extend(_own_spans(run, box))
+            wires.extend(_own_spans(run, box, ground=ground))
     rows = _plant_roadside_lamps(rows, roadside_lamps, ground)
     if ru:
         rows = ruinfra.localize(rows)
@@ -1203,7 +1211,18 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
-def _own_spans(run, box, wire_anchors=None):
+def _support_height(ground, point, fallback):
+    """The actual verge support, or no pole when support data is unavailable."""
+    if ground is None:
+        return float(fallback)
+    try:
+        z = float(np.asarray(ground(np.array([point[0]]), np.array([point[1]]))).reshape(-1)[0])
+        return z if np.isfinite(z) else None
+    except Exception:
+        return float(fallback)
+
+
+def _own_spans(run, box, wire_anchors=None, ground=None):
     """The wires of the spans of a run of poles that start in the tile (each span drawn by one tile)."""
     x0, y0, x1, y1 = box
     out = []
@@ -1211,7 +1230,17 @@ def _own_spans(run, box, wire_anchors=None):
         if _owns(box, a[0], a[1]):
             sa, sb = a[4], b[4]
             if (sa.wire_anchors, sa.wire_radius) == (sb.wire_anchors, sb.wire_radius):
-                out.extend(wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius))
+                for wire in wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius):
+                    line = wire[0] if isinstance(wire, tuple) else wire
+                    if ground is not None:
+                        try:
+                            terrain = np.asarray(ground(line[:, 0], line[:, 1]), np.float64)
+                        except Exception:
+                            out.append(wire)
+                            continue
+                        if not np.isfinite(terrain).all() or np.any(line[:, 2] < terrain + 5.):
+                            continue
+                    out.append(wire)
             # Different electrical layouts (three conductors / one bundle): terminate
             # the run here. Inventing a three-to-one electrical connection is misleading;
             # dedicated transition hardware is outside this visual prototype's scope.

@@ -987,6 +987,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         deck_parts = list(bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
         if _bridge_fps:
             deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts)
+        deck_parts = roadsmod.shifted_parts(deck_parts,
+                         roadsmod.deck_shift_fn(frame, cells, urban, _s.widths, left_hand))
         guardrail_decks = [{"n": np.column_stack((xy, z)), "w": spec.width}
                            for _fid, spec, xy, z, _lon in deck_parts]
         guardrail_rows = guardrailsmod.forest_rows(frame, infra_fn, box, elev,
@@ -1033,11 +1035,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     rr_kits = railways.crossing_props(frame, tx, ty, rcells, rground, left_hand, fra_kits)   # level crossings
     if rr_kits:
         props = (props or []) + rr_kits
+    import bridgeattachments
+    attachment_levels = bridgeattachments.levels(cells)
+    attachment_decks = [{**ch, 'level': attachment_levels.get(str(ch.get('fid')), 1.)}
+                        for ch in ctx if ch.get('deck') and len(ch.get('n', ())) >= 2]
     P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                                      ("raw",) + tuple(rkey)),
-                                 return_decks=True)
+                                 return_decks=True, road_decks=attachment_decks)
     mark("railways")
     bld = None
     garage_sound = ()

@@ -50,7 +50,13 @@ def pole(kind,detail=0,collision=False):
     m=Mesh((10,7,5)[detail]);height,anchors=ei.POLE_LAYOUTS[kind]
     wood=mat('wood');concrete=mat('concrete');steel=mat('steel')
     if collision:
-        if kind in ('wood_a','wood_h'):
+        if kind in ('concrete_round','concrete_three'):
+            # Match the near mast, including its 5 mm shuttering seams. The
+            # former 5-sided radius-.14 cylinder sat well inside its .185 m
+            # base, allowing the car into the visible concrete before contact.
+            m=Mesh(10)
+            tapered(m,concrete,0,height,.190,.110)
+        elif kind in ('wood_a','wood_h'):
             for s in (-1,1):beam(m,wood,(s*(.90 if kind=='wood_h' else .65),0,0),
                                 (s*(.90 if kind=='wood_h' else .10),0,height),.10)
         else:m.cylinder(concrete if kind.startswith('concrete') else wood,0,0,0,height,.14)

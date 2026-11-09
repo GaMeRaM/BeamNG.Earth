@@ -21,7 +21,7 @@ import roads
 import signroads
 import speedsigns
 
-KERNEL = 163                    # earthfast VERSION with road_sign_place / road_sign_mesh
+KERNEL = 172                    # earthfast VERSION with road_sign_place / road_sign_mesh
 ON = os.environ.get("BNE_ROADSIGNS", "on") == "on"
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5, "rect": 6}
@@ -256,13 +256,13 @@ def cell_rings(feats, frame, urban, widths, left_hand, mph, rows):
     return got
 
 
-def with_flags(rows, living, ring):
+def with_flags(rows, living, ring, repeat_oneway=False):
     """[(row, meta, flags)] of {fid: speedsigns row}: the roundabout rings (ring: {fid: way round}) and the living streets, a
     living street ranked as a street."""
     out = []
     for fid, row in rows.items():
         meta = list(row[2])
-        flags = 0
+        flags = 16 if repeat_oneway else 0
         if fid in ring:
             flags |= FLAG_RING
             meta[1] = float(ring[fid])
@@ -349,7 +349,7 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
         ring.update(cell_rings(feats, frame, context.urban, context.widths, left_hand, mph, own))
         paths.update(path_rows(feats, frame))
         portals.append(tunnel_portals(feats, own))
-    got = arrays(with_flags(rows, living, ring) + [v for k, v in paths.items() if k not in rows], box)
+    got = arrays(with_flags(rows, living, ring, sys_row.get("repeat_oneway", False)) + [v for k, v in paths.items() if k not in rows], box)
     if got is None:
         return np.zeros((0, 11))
     pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off = got

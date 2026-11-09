@@ -942,6 +942,9 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
     under the floors on a slope; a shopfront ground floor; the good bays only where a band has some; the front door's
     bay as the band's plain strip, at the sheet's scale. The Rust loop (earthfast.building_walls: the quads the Python
     made, in its order and arithmetic)."""
+    if spec.passage:
+        buildingpassages.walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+        return
     global _WALL_CONSTS
     if _WALL_CONSTS is None:
         _WALL_CONSTS = [float(v) for v in (SIDING_UV_M, TILE_PX_M, FOUNDATION_M, BANDS, BAND_SHOP[0], BAND_SHOP[1],
@@ -1731,6 +1734,7 @@ def build(specs_and_ground, lite=False):
         if spec.fr_house:
             import francehouse_mesh
             francehouse_mesh.draw(m, spec, gmin, gmax, mat_idx, lite)
+            continue
         elif spec.cls in OPEN_CANOPY_CLASSES:
             _canopy(m, spec, gmin, gmax, mat_idx[spec.roof_mat])
             continue
@@ -1820,6 +1824,7 @@ def collision_mesh(specs_and_ground):
         if spec.fr_house:
             import francehouse_mesh
             francehouse_mesh.draw(m, spec, gmin, gmax, _Looks(spec.seed), collision=True)
+            continue
         elif spec.cls in OPEN_CANOPY_CLASSES:
             _canopy(m, spec, gmin, gmax, tok)
             continue
@@ -2546,16 +2551,19 @@ class _PartsOf:
 
     def get(self, bid, default=None):
         if bid not in self.memo:
-            out, seen = [], set()
+            out, seen, sources = [], set(), set()
             for f in self.layers:
                 for i in _parts_index(f).get(bid, ()):
                     pid = f.ids[i]
                     if pid in seen:
                         continue
                     seen.add(pid)
+                    sources.add(str(f.attrs.get("src_record", [""] * len(f.kind))[i]))
                     p = self._part(f, i)
                     if p is not None:
                         out.append(p)
+            import buildingoverrides
+            out.extend(buildingoverrides.missing(self.frame, bid, sources))
             self.memo[bid] = out or None
         got = self.memo[bid]
         return default if got is None else got

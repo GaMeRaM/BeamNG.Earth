@@ -36,7 +36,7 @@ log = logging.getLogger("earthd.gradesep")
 MODE = os.environ.get("BNE_GRADESEP", "tunnels")
 ON = MODE == "on"
 TUNNELS = MODE in ("on", "tunnels")
-VERSION = 1             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
+VERSION = 4             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
 DEM_ZOOM = 15
 SEP_M = 4.0             # m the upper line's ground stands above the lower one's (medians of four heights each)
 SIDE_M = 2.0            # m ... at least, on each side of each line
@@ -304,11 +304,20 @@ def _owners(feats, row_layer, row, fids):
 def _spans(md, key, feats):
     if feats is None or not len(feats) or "subtype" not in feats.attrs:
         return {}
-    if not ON and not any(p[0] in (2, 3) for i in range(len(feats)) for p in (_row(feats, i)[2] or ())):
-        return {}                   # (tunnels only, and the cell has none)
+    if not ON:
+        rows = [_row(feats, i) for i in range(len(feats))]
+        has_tunnel = any(p[0] in (2, 3) for row in rows for p in (row[2] or ()))
+        # A long bridge-bearing road is shared with adjacent cells. Its home
+        # copy must also see a neighbour's short underpass; otherwise the home
+        # range replaces a locally inferred second carriageway with ground.
+        has_road_bridge = any(row[0] == 0 and any(p[3] for p in (row[2] or ())) for row in rows)
+        if not has_tunnel and not has_road_bridge:
+            return {}
     import revisit
     try:
-        others = _neighbours(md, key)
+        keys = set(_neighbour_keys(key)) | _bridge_source_keys(feats)
+        keys.discard(key)
+        others = _neighbours(md, key, sorted(keys, key=str))
     except Exception as e:      # (left out, and not kept: revisit.fault)
         log.debug("gradesep %s neighbours: %s: %s", key, type(e).__name__, e)
         revisit.fault()
@@ -330,6 +339,8 @@ def _spans(md, key, feats):
         [(f.xy_in(frame), np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
           np.ascontiguousarray(f.part_off, np.int64), r[2], r[3], r[4], r[5], r[1]) for f, r in zip(lays, lr)],
         row_layer, row)
+    if not ON and not np.isin(kinds, (2, 3)).any():
+        return {}
     oi = _owners(feats, row_layer, row, fids)[groups]                   # (each line's row in the cell's own layer, -1: none)
     if (kinds == 3).any():
         try:
@@ -344,8 +355,18 @@ def _spans(md, key, feats):
             kinds, halves, groups, oi, oa, ob = (v[keep] for v in (kinds, halves, groups, oi, oa, ob))
     if not len(kinds):
         return {}
+    # A mapped short underpass can end a few metres before the second
+    # carriageway's axis. Once validated as an underpass, search its immediate
+    # portal margins too. Keep the original tunnel fractions for the lower
+    # road: only the upper spans are derived from these extended probe lines.
+    probe_pts = pts.copy()
+    for ln in np.flatnonzero(kinds == 3):
+        a, b = int(starts[ln]), int(starts[ln + 1]) - 1
+        for at, inside in ((a, a + 1), (b, b - 1)):
+            outward = pts[at] - pts[inside]
+            probe_pts[at] += PORTAL_OUT_M * outward / max(float(np.linalg.norm(outward)), 1e-9)
     fast.require(169, "gradesep_candidates")
-    cand, smp = fast._ef.gradesep_candidates(pts, starts, kinds, halves, groups, de, np.array(
+    cand, smp = fast._ef.gradesep_candidates(probe_pts, starts, kinds, halves, groups, de, np.array(
         [END_M, SAMPLE_GAP_M, SAMPLE_STEP_M, MIN_SIN, TOUCH_M, GAP_MAX_M, TURN_COS, GAP_SHARE, 0.0 if ON else 1.0],
         np.float64))
     if not ON and len(cand):        # (tunnels only: the lines over a short tunnel, how 1; only those were tried)
@@ -369,7 +390,7 @@ def _spans(md, key, feats):
             log.debug("gradesep %s ground: %s: %s", key, type(e).__name__, e)
             revisit.fault()
             return {}
-    sp = fast._ef.gradesep_spans(pts, starts, kinds, halves, cand, np.ascontiguousarray(z.reshape(-1, 8)), np.array(
+    sp = fast._ef.gradesep_spans(probe_pts, starts, kinds, halves, cand, np.ascontiguousarray(z.reshape(-1, 8)), np.array(
         [SEP_M, SIDE_M, CLEAR_M, MIN_HALF_M, MIN_SIN, TOUCH_M, TURN_COS], np.float64))
     for ln, s0, s1, how in sp:
         ln = int(ln)
@@ -382,6 +403,37 @@ def _spans(md, key, feats):
         out.setdefault(i, []).append((fa, fbb, "bridge"))
         why.append((i, fa, fbb, int(how)))
     return _merged(feats, out, why)
+
+
+def _bridge_source_keys(feats):
+    """Canonical context of long bridge-bearing roads, regardless of caller cell.
+
+    Overture merges several kilometres into one feature. Its inferred underpass
+    ranges must see the same short tunnels at either end, even when its first
+    copy was loaded near the other end. Walk the actual line, not its potentially
+    enormous rectangular bounding box. Bound discovery to ordinary road-length
+    features; continental routes keep the existing local inference.
+    """
+    out = set()
+    for i in range(len(feats)):
+        row = _row(feats, i)
+        if row[0] != 0 or not any(p[3] for p in (row[2] or ())):
+            continue
+        length = roads._feature_length_m(feats, i)
+        if not 2000. < length <= 12000.:
+            continue
+        for part in feats.parts(i):
+            if not part or len(part[0]) < 2:
+                continue
+            ring = np.asarray(part[0], np.float64)
+            for a, b in zip(ring[:-1], ring[1:]):
+                scale = np.array([111320. * np.cos(np.radians((a[1] + b[1]) / 2)), 111320.])
+                n = max(1, int(np.ceil(np.linalg.norm((b - a) * scale) / 500.)))
+                points = np.linspace(a, b, n + 1)
+                for p, q in zip(points[:-1], points[1:]):
+                    out.update(mapcells.cells_for_bbox(min(p[1], q[1]), min(p[0], q[0]),
+                                                       max(p[1], q[1]), max(p[0], q[0])))
+    return out
 
 
 def _merged(feats, out, why):

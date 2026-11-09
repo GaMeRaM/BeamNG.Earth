@@ -32,6 +32,9 @@ MODULES = (
     "test_underpass_profiles", "test_bridge_clearance", "test_bake_formats",
     "test_crossings", "test_carriageways", "test_package_stamps",
     "test_carriageway_solver", "test_portugal_imagery",
+    "test_gradesep", "test_bridgeattachments", "test_railways", "test_footbridges",
+    "test_guardrails", "test_powerlines", "test_power_clearance", "test_vegetation",
+    "test_building_overrides", "test_lamp_collision", "test_seacarve",
 )
 
 

@@ -111,10 +111,22 @@ def concrete(detail):
 
 
 def collision(kind):
-    """One convex hull of the post (what a car hits: the arm is overhead)."""
+    """Closed outward-facing post shell, including the steel base sleeve.
+
+    Keep the near model's twelve sides: an inscribed eight-sided approximation
+    allowed visible corners (and especially the wider sleeve) inside the car
+    before a collision node reached the shell. No internal caps at the sleeve.
+    """
     m = Mesh(6)
     if kind == "steel":
-        frustum(m, STEEL, -0.2, 8.30, 0.14, 0.062, 8)
+        segs, pad = 12, 0.005
+        base, top = 0.19 + pad, 0.062 + pad
+        shaft = 0.135 + (0.062 - 0.135) * 0.55 / 8.30 + pad
+        frustum(m, STEEL, -0.2, 0.55, base, base, segs, caps=False)
+        frustum(m, STEEL, 0.55, 0.55, base, shaft, segs, caps=False)
+        frustum(m, STEEL, 0.55, 8.30, shaft, top, segs, caps=False)
+        m.face(STEEL, list(reversed(ring(base, -0.2, segs))))
+        m.face(STEEL, ring(top, 8.30, segs))
     else:
         rect_frustum(m, CONCRETE, -0.2, 8.35, 0.17, 0.12, 0.10, 0.075)
     return m

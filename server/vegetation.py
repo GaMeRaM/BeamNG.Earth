@@ -37,7 +37,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 24          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 25          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -423,7 +423,8 @@ class Vegetation:
         edge = self._edge(cd, lc, blocked | orchard, road, chm, hs)
         planted = orchard_items(lu, chm, blocked, (lon0, lat0, lon1, lat1))
         hedges = farm_foliage(lu, chm, blocked, (lon0, lat0, lon1, lat1))
-        return _concat(_concat(_concat(_concat(tree, scatter), edge), planted), hedges)
+        result = _concat(_concat(_concat(_concat(tree, scatter), edge), planted), hedges)
+        return _off_road_positions(result, road_cells, self._specs, cd.bounds)
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -1502,3 +1503,42 @@ class Tracker:
             if slots:
                 m["slots"] = slots
         conn.send(m)
+
+
+def _off_road_positions(items, cells, specs_of, bounds):
+    """Check final, jittered/scattered positions against continuous road corridors.
+
+    A raster-only test misses displaced trunks at cell/pixel edges. Unpaved
+    shoulders need their own margin beyond the narrow tyre tracks.
+    """
+    if not len(items):
+        return items
+    import geodesy, mapgeom
+    lon0, lat0, lon1, lat1 = bounds
+    frame = geodesy.EnuFrame((lat0 + lat1) / 2, (lon0 + lon1) / 2)
+    lines, seen = [], set()
+    for f in cells:
+        if f is None:
+            continue
+        specs = specs_of(f)
+        classes = f.attrs.get('class', [''] * len(f.kind))
+        for i, fid in enumerate(f.ids):
+            if str(fid) in seen or str(classes[i]) in PATH_CLASSES or f.kind[i] != 2:
+                continue
+            seen.add(str(fid))
+            sp = specs[i]
+            half = max(ROAD_HALF_WIDTH_M.get(str(classes[i]), ROAD_HALF_DEFAULT_M), sp.width / 2 if sp else 0)
+            if sp is not None and getattr(sp, 'kind', 'paved') != 'paved':
+                half += 1.5  # Painted dirt/gravel edge beyond the carriageway.
+            for part in f.parts(i):
+                if not part or len(part[0]) < 2:
+                    continue
+                e, n = mapgeom.enu_xy(f, frame, np.asarray(part[0], np.float64))
+                margin = ROAD_CLEAR_M if sp is not None and getattr(sp, 'kind', 'paved') != "paved" else .2
+                lines.append((str(fid), half + margin, np.c_[e, n]))
+    if not lines:
+        return items
+    clearance = fast.Others(lines)
+    e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, np.zeros(len(items)))
+    keep = np.array([clearance.clear(np.array([x, y]), None, 0.) for x, y in zip(e, n)])
+    return items.take(keep)

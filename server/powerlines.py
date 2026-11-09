@@ -64,6 +64,24 @@ CLEAR_SEARCH_M = 60.0       # m round a tower's mapped spot a clear one is looke
 CLEAR_STEP_M = 2.0          # nearest road puts it on another (GitHub #550: a tower 0.8 m off one of the D1's
 CLEAR_DIRS = 24             # carriageways and 12 m off the other, pushed from one onto the other and back)
 WIRE_R = 0.022              # the conductors' half width (West Coast USA's read about twice a street wire's)
+WIRE_CLEAR_M = 6.0          # conservative terrain clearance for generated conductors
+SPAN_RESERVE_M = 2.0        # height left for terrain between mapped supports
+
+
+def supported_points(ring, arms):
+    """Fill generalised source gaps before clipping or reading terrain.
+
+    Fractions are tied to each original geographic segment, so neighbouring
+    tiles and different anchors make the same intermediate supports.
+    """
+    ring = np.asarray(ring, np.float64)
+    maximum = min(250., max(30., (float(np.min(arms[:, 1])) - WIRE_CLEAR_M - SPAN_RESERVE_M) / SAG))
+    result = [ring[0]]
+    for a, b in zip(ring[:-1], ring[1:]):
+        scale = np.array([111320. * np.cos(np.radians((a[1] + b[1]) / 2)), 111320.])
+        count = max(1, int(np.ceil(np.linalg.norm((b[:2] - a[:2]) * scale) / maximum)))
+        result.extend(a + (b - a) * (k / count) for k in range(1, count + 1))
+    return np.asarray(result)
 # The yards: West Coast USA's substation yard (-238, 20) as a kit, in its parts' own frame (its forest4 files'
 # rotationMatrix rows are the parts' axes; read across, every part sat turned 90 degrees and the busbars ended in the
 # air: the user, 2026-10-26, "alot of disconnected poles/pipes"): two bays 11.6 m apart, each a gantry
@@ -245,11 +263,13 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
             if fid in seen or any(u in t for u in UNDERGROUND):
                 continue
             seen.add(fid)
-            into = poles if low_voltage(t) else lines
+            low = low_voltage(t)
+            into = poles if low else lines
             for part in f.parts(i):
                 for ring in part:
                     if len(ring) >= 2:
-                        into += [(fid, r) for r in _near(frame, np.asarray(ring, np.float64), (x0, y0, x1, y1))]
+                        supported = supported_points(ring, POLE_ARMS if low else ARMS)
+                        into += [(fid, r) for r in _near(frame, supported, (x0, y0, x1, y1))]
     subs = _substations(frame, cells, md)
     fast.require(82, "power_line_layout")
     ends = np.zeros((0, 4))
@@ -291,8 +311,14 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
                    1.0, h, 0.0]
             if clearance is None or clearance.clear(row):
                 props.append(row)
-        for a, b in zip(wo[:-1], wo[1:]):
-            wires.append((np.asarray(wp[a:b]), wire_r))
+        if len(wp):
+            wla, wlo, _ = frame.enu_to_geodetic(wp[:, 0], wp[:, 1], np.zeros(len(wp)))
+            wz = np.asarray(elev(np.asarray(wla), np.asarray(wlo)), np.float64)
+            _, _, surface = frame.geodetic_to_enu(wla, wlo, wz)
+            clear = np.isfinite(surface) & (wp[:, 2] >= np.asarray(surface) + WIRE_CLEAR_M)
+            for a, b in zip(wo[:-1], wo[1:]):
+                if clear[a:b].all():
+                    wires.append((np.asarray(wp[a:b]), wire_r))
     return np.asarray(ends, np.float64).reshape(-1, 4)
 
 

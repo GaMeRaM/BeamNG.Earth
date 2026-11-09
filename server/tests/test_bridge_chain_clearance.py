@@ -100,5 +100,36 @@ class DeryabinaBridgeTest(unittest.TestCase):
         self.assertGreaterEqual(self.clearance(built), 4.9)
 
 
+class LongDividedOverpassTest(unittest.TestCase):
+    def test_long_trunk_uses_one_continuous_road_and_deck_profile(self):
+        from test_roads import features
+        # The junction 10 m before the abutment must be free to move with its
+        # branch. Solving/fixing the ground-only chains first makes this
+        # clearance impossible within the bridge's grade limit.
+        f = features([[(-600., 0.), (-80., 0.)], [(-80., 0.), (-70., 0.)],
+                      [(-70., 0.), (70., 0.)], [(70., 0.), (600., 0.)],
+                      [(0., -600.), (0., 600.)], [(-80., 0.), (-80., 400.)]],
+                     ['trunk'] * 5 + ['unclassified'], flags=[(2, 'is_bridge')])
+        flat = lambda la, lo: np.full(np.shape(la), 100.)
+        g = grading.Grader(FRAME, FakeMD(f), flat)
+        def elev(la, lo):
+            return g.apply(la, lo, flat(la, lo), grading.ROAD_LIFT)
+        store = roads.ChainStore(roads.BridgeProfiles, lambda key: f, elev)
+        with mock.patch.object(grading, '_ACTIVE_STORE', g.store):
+            view = roads.ChainView(store, FRAME)
+            parts = view.parts([f], (-256., -256., 256., 256.))
+            self.assertEqual(len(parts), 1)
+            fid, spec, xy, z, _ = parts[0]
+            arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
+            self.assertLessEqual(float(np.max(np.abs(np.diff(z) / np.diff(arc)))), .061)
+            la, lo, _ = FRAME.enu_to_geodetic(xy[[0, -1], 0], xy[[0, -1], 1], 0.)
+            _, _, approach = FRAME.geodetic_to_enu(la, lo, elev(la, lo))
+            np.testing.assert_allclose(z[[0, -1]], approach, atol=.08)
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([0.]), np.array([0.]), 0.)
+            _, _, below = FRAME.geodetic_to_enu(la, lo, elev(la, lo))
+            clearance = np.interp(arc[-1] / 2, arc, z) - below[0] - view.depth_of(fid)
+            self.assertGreaterEqual(clearance, 5.9)
+
+
 if __name__ == '__main__':
     unittest.main()

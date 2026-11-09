@@ -122,7 +122,7 @@ def apply(items, passages):
                 if piece.is_empty or piece.geom_type != 'Polygon' or piece.interiors or piece.area < 0.05:
                     continue
                 fragment = copy.copy(spec)
-                fragment.passage = True
+                fragment.passage = spec
                 fragment.fr_house = None
                 ring = np.asarray(piece.exterior.coords, np.float64)[:-1]
                 fragment.ring = ring if buildings._area2(ring) > 0 else ring[::-1]
@@ -138,3 +138,69 @@ def apply(items, passages):
                     fragment.steeple = False
                 out.append((fragment, gmin, gmax))
     return out
+
+
+def _clip(vertices, distance):
+    """Clip a convex wall polygon, interpolating position and UV together."""
+    out = []
+    for a, b in zip(vertices, np.roll(vertices, -1, axis=0)):
+        da, db = distance(a[:3]), distance(b[:3])
+        if da >= -1e-8:
+            out.append(a)
+        if (da >= 0) != (db >= 0):
+            out.append(a + (b - a) * (da / (da - db)))
+    return np.asarray(out)
+
+
+def walls(mesh, fragment, ring, z0, top, looks, lite):
+    """Keep the original facade's bays/floors/UVs on surviving exterior walls.
+
+    New jambs use tileable stucco, never a window atlas. The native wall generator
+    still owns facade layout; clipping only interpolates its existing vertices.
+    """
+    import buildings as b
+    source = fragment.passage
+    base = top - fragment.height - (fragment.min_h or 0.)
+    original = b.Mesh()
+    b._walls(original, source, source.ring, min(z0, base - (b.SKIRT_LITE_M if lite else b.SKIRT_M)),
+             base + (source.min_h or 0.) + source.height, looks, lite)
+    positions = np.asarray(original.P).reshape(-1, 4, 3)
+    uvs = np.asarray(original.UV).reshape(-1, 4, 2)
+    colors = np.asarray(original.C).reshape(-1, 4, 4)
+    for a, end in zip(ring, np.roll(ring, -1, axis=0)):
+        delta = end - a
+        length = float(np.linalg.norm(delta))
+        if length < 1e-5:
+            continue
+        u = delta / length
+        normal = np.array([-u[1], u[0]])
+        exterior = False
+        for p, q in zip(source.ring, np.roll(source.ring, -1, axis=0)):
+            direction = q - p
+            if (abs(float(direction @ normal)) < 1e-5
+                    and abs(float((a - p) @ normal)) < 1e-5):
+                exterior = True
+                break
+        if not exterior:
+            uv = [(0., z0 / b.SIDING_UV_M), (length / b.SIDING_UV_M, z0 / b.SIDING_UV_M),
+                  (length / b.SIDING_UV_M, top / b.SIDING_UV_M), (0., top / b.SIDING_UV_M)]
+            mesh.quad((*a, z0), (*end, z0), (*end, top), (*a, top), *uv, looks[b.STUCCO])
+            continue
+        for k, (quad, uv) in enumerate(zip(positions, uvs)):
+            # Includes the sash overlays standing 3 cm proud of their wall.
+            if np.max(np.abs((quad[:, :2] - a) @ normal)) > .05:
+                continue
+            polygon = np.c_[quad, uv]
+            for plane in (lambda p: p[2] - z0, lambda p: top - p[2],
+                          lambda p: float((p[:2] - a) @ u),
+                          lambda p: length - float((p[:2] - a) @ u)):
+                if len(polygon) < 3:
+                    break
+                polygon = _clip(polygon, plane)
+            if len(polygon) < 3:
+                continue
+            token = (original.M[k * 2], tuple(colors[k, 0]))
+            for j in range(1, len(polygon) - 1):
+                tri = polygon[[0, j, j + 1]]
+                if np.linalg.norm(np.cross(tri[1, :3] - tri[0, :3], tri[2, :3] - tri[0, :3])) > 1e-8:
+                    mesh.tri(*tri[:, :3], *tri[:, 3:], token)

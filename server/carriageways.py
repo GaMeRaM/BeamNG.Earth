@@ -61,13 +61,14 @@ TOUCH_M = 0.75          # m: parts whose ends are this close are joined
 COUPLE_M = 2.5          # m: a chain's end this close to another chain meets it and is held to its height (a slip road's
                         # end lies up to ~2 m short of the node its overpass starts at: it stayed at the ground beside a
                         # deck 6 m up, and its surface pulled the ground under the deck's approach 2 m down)
-FAMILY = ("motorway", "trunk")
+FAMILY = ("motorway", "trunk", "primary", "unclassified")
 # per class: steepest grade, K (m of vertical curve per 1 % of grade change: crest and sag alike)
 LIMITS = {"motorway": (0.05, 30.0), "trunk": (0.06, 25.0), "motorway_link": (0.07, 12.0), "trunk_link": (0.08, 10.0)}
+LIMITS.update({"primary": (.06, 15.), "primary_link": (.07, 12.), "unclassified": (.06, 12.)})
 
 
 def family(cls):
-    """'motorway' for motorway and motorway_link, 'trunk' likewise; None for anything else."""
+    """The road family (a link belongs to its main class), or None."""
     c = str(cls or "")
     base = c[:-5] if c.endswith("_link") else c
     return base if base in FAMILY else None
@@ -99,6 +100,17 @@ def sample(parts, chain, step=STEP_M):
     pi, br = np.array(pi), np.array(br)
     ch = np.flatnonzero(br[1:] != br[:-1])
     cut = np.r_[s[ch], s[ch + 1]] if len(ch) else np.zeros(0)
+    # The native banded solver assumes ONE constant step per chain. Sampling
+    # each map part separately made a 1.9 m stub count as a 4 m interval and
+    # allowed grades/curvature far above their physical limits at that joint.
+    changes = np.flatnonzero(pi[1:] != pi[:-1])
+    ends = s[changes]
+    order = np.r_[pi[0], pi[changes + 1]]
+    grid = np.linspace(0., s[-1], max(1, int(math.ceil(s[-1] / step))) + 1)
+    xy = np.c_[np.interp(grid, s, xy[:, 0]), np.interp(grid, s, xy[:, 1])]
+    pi = order[np.searchsorted(ends, grid, side='right')]
+    br = np.array([bool(parts[i][2]) for i in pi])
+    s = grid
     from_end = np.min(np.abs(s[:, None] - cut[None, :]), axis=1) if len(cut) else np.full(len(s), np.inf)
     return xy, s, pi, br, from_end
 

@@ -128,7 +128,7 @@ def deck(xy, zg, crossers):
     return z
 
 
-def add(mesh, bridges, ground, crossers, ex, concrete, small):
+def add(mesh, bridges, ground, crossers, ex, concrete, small, road_decks=(), source_levels=None):
     """The decks of bridges (parts') into railways' _Mesh mesh: the slab and its parapets over the points within ex (the
     tile's box with its overlap), the piers into small (railways.tile_mesh draws them with the sleepers, as room
     allows). ground(xy (n, 2)) -> z (one call for all of them)."""
@@ -142,11 +142,20 @@ def add(mesh, bridges, ground, crossers, ex, concrete, small):
     for _fid, xy, w in bridges:
         zg = zg_all[k:k + len(xy)]
         k += len(xy)
-        z = deck(xy, zg, crossers)
+        shared = None
+        if road_decks:
+            import bridgeattachments
+            shared = bridgeattachments.surface(xy, road_decks, w / 2,
+                                               (source_levels or {}).get(_fid, 1.), reach=10., overlap_mask=True)
+        if shared is not None and shared[1].all():
+            continue     # Already drawn and collidable as the road deck's sidewalk.
+        z = shared[0] + .03 if shared is not None else deck(xy, zg, crossers)
         if z is None:
             continue
         inside = (xy[:, 0] >= ex[0] - STEP_M) & (xy[:, 0] <= ex[2] + STEP_M) & \
                  (xy[:, 1] >= ex[1] - STEP_M) & (xy[:, 1] <= ex[3] + STEP_M)
+        if shared is not None:
+            inside &= ~shared[1]   # no walkway parapet through a carriageway, including partial overlaps
         if not inside.any():
             continue
         u = railways._left(xy)

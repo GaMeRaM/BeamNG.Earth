@@ -79,6 +79,7 @@ mod more;
 pub const FLAG_RING: i64 = 1;
 pub const FLAG_LIVING: i64 = 2;
 pub const FLAG_FOOT: i64 = 4;       // a pedestrian zone
+pub const FLAG_REPEAT_ONEWAY: i64 = 16; // Repeat after junctions on Russian one-way streets.
 pub const FLAG_CYCLE: i64 = 8;      // a cycle path
 
 /// The thresholds (Input::params, sign_systems.json "params"): [warn m, curve turn deg, curve window m, curve min rank,
@@ -138,6 +139,7 @@ struct Road {
     living: bool,
     foot: bool,
     cycle: bool,
+    repeat_oneway: bool,
 }
 
 struct Edge {
@@ -536,7 +538,7 @@ fn one_ways(net: &Net, ends: &HashMap<i64, usize>, incoming: &HashMap<i64, Vec<u
             let o = &net.edges[i];
             o.road != ed.road && net.roads[o.road].dir != 0 && dot(net.end_dir(i), d) > STRAIGHT_COS
         });
-        if joins && !carries {
+        if joins && (!carries || rd.repeat_oneway) {
             out.push(cand(net, ONEWAY, ed.road, arc_at(net, e, ONEWAY_IN_M.min(net.len(e) * 0.5)), ed.fwd, false));
         }
     }
@@ -611,7 +613,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
         let flags = if a.meta.ncols() > 5 { a.meta[[r, 5]] as i64 } else { 0 };
         let road = Road { a: p, b: q, s, hw: a.meta[[r, 0]], dir: a.meta[[r, 1]] as i64, rank: a.meta[[r, 2]] as i64,
                           urban: a.meta[[r, 3]] != 0.0, link: a.meta[[r, 4]] != 0.0, ring: flags & FLAG_RING != 0,
-                          living: flags & FLAG_LIVING != 0, foot: flags & FLAG_FOOT != 0, cycle: flags & FLAG_CYCLE != 0 };
+                          living: flags & FLAG_LIVING != 0, foot: flags & FLAG_FOOT != 0, cycle: flags & FLAG_CYCLE != 0, repeat_oneway: flags & FLAG_REPEAT_ONEWAY != 0 };
         let total = if q >= p + 2 { road.s[q - p - 1] } else { 0.0 };
         net.roads.push(road);
         if total < 1.0 { continue; }
@@ -1176,6 +1178,16 @@ mod tests {
         assert_eq!((e.len(), x.len()), (1, 1), "{s:?}");
         assert!(e[0].dir[0] > 0.99 && x[0].dir[0] < -0.99, "{s:?}");
         assert!(e[0].xy[0] < 15.0 && x[0].xy[0] < 15.0, "{s:?}");
+    }
+
+    #[test]
+    fn repeated_one_way_sign_survives_a_straight_one_way_feeder() {
+        let roads = [(&[[-100.0, 0.0], [0.0, 0.0]][..], 0.0, 2.0, [1, 2], 1.0, 0, 0.0),
+                     (&[[0.0, 0.0], [100.0, 0.0]][..], 0.0, 2.0, [2, 3], 1.0, 0, 0.0),
+                     (&[[0.0, -100.0], [0.0, 0.0]][..], 1.0, 2.0, [4, 2], 1.0, 0, 0.0),
+                     (&[[0.0, 0.0], [0.0, 100.0]][..], 1.0, 2.0, [2, 5], 1.0, FLAG_REPEAT_ONEWAY, 0.0)];
+        let signs = run(&roads_x(&roads), none(), none(), false);
+        assert_eq!(of(&signs, ONEWAY).len(), 1);
     }
 
     #[test]

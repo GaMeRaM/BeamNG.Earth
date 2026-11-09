@@ -41,6 +41,14 @@ class ProfileTest(unittest.TestCase):
              ("e", np.array([[300, 0], [400, 0.]]))]
         self.assertEqual(cw.chains(P), [[(0, False), (1, False), (2, True)], [(3, False)], [(4, False)]])
 
+    def test_chain_sampling_has_one_physical_step_across_short_map_parts(self):
+        parts = [('a', np.array([[0., 0.], [41., 0.]]), False, 'trunk'),
+                 ('stub', np.array([[41., 0.], [42.9, 0.]]), True, 'trunk'),
+                 ('b', np.array([[42.9, 0.], [200., 0.]]), False, 'trunk')]
+        xy, s, _, _, _ = cw.sample(parts, [(0, False), (1, False), (2, False)])
+        np.testing.assert_allclose(np.diff(s), np.diff(s)[0], atol=1e-10)
+        np.testing.assert_allclose(np.diff(xy[:, 0]), np.diff(s), atol=1e-10)
+
 
 if __name__ == "__main__":
     unittest.main()

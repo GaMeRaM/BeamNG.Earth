@@ -348,7 +348,8 @@ UNDER_ANY_ON = os.environ.get("BNE_UNDERPASS_ANY", "on") != "off"
 # ramps for those bridges (a motorway's too); the rules above decide for every other.
 import crossings as _xs
 import carriageways as _cw
-CW_ON = _xs.ON and os.environ.get("BNE_CARRIAGEWAYS", "on") != "off"          # carriageways.py: a motorway's roads and decks as one profile (with BNE_INTERCHANGE)
+CW_AUTO = os.environ.get("BNE_BRIDGE_NETWORK", "on") != "off"
+CW_ON = (_xs.ON or CW_AUTO) and os.environ.get("BNE_CARRIAGEWAYS", "on") != "off"
 CW_MAX_M = 8000.0       # m: a carriageway chain is cut here (a branch point or a loose end comes long before)
 CW_HEADROOM_M = roadsmod.MIN_BRIDGE_HEADROOM_M + roadsmod.BRIDGE_HEADROOM_MARGIN_M   # m of headroom the carriageways
                         # keep over one another, the roads and the tracks under them (+ the deck's depth): the decks' own
@@ -422,6 +423,7 @@ def _cw_level(q):
 def _cw_half(q):
     return float(q[6]) if len(q) > 6 else 5.0
 CW_MAX_DIG_M = 2.5      # m a carriageway is lowered at most under another road's deck (the deck is low for the rest)
+CW_GROUND_REFERENCE_W = 1000.0  # soft reference for ground-only routes in the joint bridge network
 CW_UNDER_M = 10.0       # m from a deck's line the ground under it is not trusted, rising to trusted at twice that
 CW_MARGIN_M = 1200.0    # m past its home cell a cluster's chains reach (the farthest barely move the cell's)
 CW_CLUSTER_M = 30000.0  # m of carriageways solved together at most (the far ones barely move the near)
@@ -2936,6 +2938,25 @@ class _Planner:
             got = memo.get(hk)
         if got is not None:
             return got
+        if not _xs.ON:
+            # Long highway spans and bridge-bearing urban through roads need
+            # a continuous road/deck solve. Ordinary streets and short highway
+            # structures keep their existing rules.
+            active = False
+            for key in [home] + list(home.neighbours()):
+                c = self._cell_enu(key, ground=False)
+                if any(((cls in APPROACH_SKIP and UNDER_MAX_BRIDGE_M < roadsmod._length(line) <= 1000.)
+                        or (cls in ('primary', 'unclassified') and 60. < roadsmod._length(line) <= 1000.))
+                       for line, cls in zip(c['bridges'], c.get('bridge_cls', ()))):
+                    active = True
+                    break
+            if not active:
+                got = {'parts': [], 'prof': {}}
+                with self.lock:
+                    if len(memo) > 64:
+                        memo.clear()
+                    memo[hk] = got
+                return got
         # (the run's other processes: the first to need a region solves it, the rest read it; each road-tile process
         # solving the same regions for itself, a worker's tiles waited past earthd's 300 s, 2026-11-02)
         sh, mine = self.shared, False
@@ -3013,6 +3034,7 @@ class _Planner:
         for ch in chains:
             parts, order = ch
             xy, s, pi, br, fe = _cw.sample(parts, order)
+            step = float(s[-1] / max(len(s) - 1, 1))
             la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
             raw = np.asarray(self.elev(np.asarray(la, f64), np.asarray(lo, f64)), f64).ravel()
             ok = np.isfinite(raw)
@@ -3024,7 +3046,7 @@ class _Planner:
             g = ~br
             if g.sum() >= 2:
                 t = np.interp(s, s[g], raw[g])          # (the ground across the bridges, for the filters)
-                t = smooth_profile(median_profile(t, _cw.STEP_M, MEDIAN_M), _cw.STEP_M, SIGMA_MAJOR_M)
+                t = smooth_profile(median_profile(t, step, MEDIAN_M), step, SIGMA_MAJOR_M)
             else:
                 t = raw.copy()
             w = _cw.weights(br, fe) * _cw.GROUND_W
@@ -3037,7 +3059,8 @@ class _Planner:
             # the steepest of its parts' classes' limits (a chain is of one family; a link's limits are looser)
             gr = max(_cw.limits(p_[3])[0] for p_ in parts)
             K = min(_cw.limits(p_[3])[1] for p_ in parts)
-            data.append(dict(t=t, w=w, grade=gr, K=K, lo=np.full(len(s), -np.inf), hi=np.full(len(s), np.inf)))
+            data.append(dict(t=t, w=w, grade=gr, K=K, step=step,
+                             lo=np.full(len(s), -np.inf), hi=np.full(len(s), np.inf)))
             samples.append((xy, s, pi, br, raw))
         # bounds: tracks under its decks; other decks (not of the family) over its roads
         allpts = np.concatenate([x[0] for x in samples])
@@ -3071,6 +3094,8 @@ class _Planner:
         def nearest(n, part_i, q):
             xy, s, pi, br, raw = samples[n]
             cand = np.flatnonzero(pi == part_i)
+            if not len(cand):  # a sub-grid map stub still has the chain's continuous surface
+                cand = np.arange(len(xy))
             return int(cand[np.argmin(np.hypot(*(xy[cand] - q).T))])
         # (bounding boxes: a deck meets only the streets and tracks near it, a scan of them all at each crossing was
         # most of a region's time: 43 s of a Perth cell's 110, 2026-11-02)
@@ -3102,9 +3127,12 @@ class _Planner:
                         q = np.asarray(c[2], f64)
                         sl = min(streets_n, key=lambda st: _seg_dist(st[0], q))[0]
                         tl = _xs.trusted_under(q, _xs.dir_at(sl, q), 8.0, zat)
-                        if tl is None or tl >= seatiles.SEA_E + _xs.LOW_M:
-                            continue
+                        if tl is None:
+                            tl = zraw(q)
                         j = nearest(n, i, q)
+                        # A short service road may have no room to dip at all.
+                        # Reserve headroom over its trusted surface instead of
+                        # assuming legacy excavation can always supply it.
                         data[n]["lo"][j] = max(data[n]["lo"][j], tl + clear)
                 if not p_[2] and nonfam and CW_NONFAM_HI:
                     for c in roadsmod._crossings(nonfam, [p_[1]]):
@@ -3230,55 +3258,41 @@ class _Planner:
                 ties.append((na, ia, nb, ib, q, sin, ua))
                 continue
             seps += self._cw_overlap(chains, samples, nearest, (na, ia, nb, ib, q, sin, ua), a_up)
-        zs = [None] * len(chains)
-        # (one budget for the whole region, every level's solves: per solve, the High Five's six levels' took minutes
-        # and every process needing the region waited on it, 2026-11-02)
+        # Solve connected levels together. Freezing the lower level first can
+        # pin an approach to a height from which its bridge cannot meet the
+        # grade/clearance constraints; the whole region then falls back to the
+        # old broken profiles. Branch equalities and separation inequalities
+        # belong to one QP, with one budget and measured feasibility.
+        for n, level in enumerate(stage):
+            if level <= 0.:
+                # Ground-only routes are the reference, not cheap excavation
+                # for every higher level. Keep them strongly near their own
+                # smoothed terrain while still allowing a connected junction
+                # to move when a hard continuity constraint needs it.
+                data[n]['w'] = data[n]['w'] * CW_GROUND_REFERENCE_W
+                data[n]['lo'] = np.maximum(data[n]['lo'], data[n]['t'] - CW_MAX_DIG_M)
+                if UNDER_SEA_ON:
+                    floor = seatiles.SEA_E + UNDER_SEA_M
+                    data[n]['lo'] = np.where(data[n]['t'] >= UNDER_POLDER_M,
+                                              np.maximum(data[n]['lo'], np.minimum(data[n]['t'], floor)),
+                                              data[n]['lo'])
         deadline = time.monotonic() + _cw.BUDGET_S
-        for L in sorted(set(stage)):
-            idx = [n for n in range(len(chains)) if stage[n] == L]
-            loc = {n: m for m, n in enumerate(idx)}
-            d_ = [dict(data[n], t=data[n]["t"].copy(), w=data[n]["w"].copy(), lo=data[n]["lo"].copy(),
-                       hi=data[n]["hi"].copy()) for n in idx]
-            cp = []
-            for a_, i_, b_, j_, kind, v in couplings:          # (the branch points: "eq")
-                if a_ in loc and b_ in loc:
-                    cp.append((loc[a_], i_, loc[b_], j_, kind, v))
-                elif a_ in loc and zs[b_] is not None:
-                    d = d_[loc[a_]]
-                    d["lo"][i_] = max(d["lo"][i_], zs[b_][j_])
-                    d["hi"][i_] = min(d["hi"][i_], zs[b_][j_])
-                elif b_ in loc and zs[a_] is not None:
-                    d = d_[loc[b_]]
-                    d["lo"][j_] = max(d["lo"][j_], zs[a_][i_])
-                    d["hi"][j_] = min(d["hi"][j_], zs[a_][i_])
+        cp = list(couplings) + [(nu, ju, nl, jl, "ge", clear) for nu, ju, nl, jl, clear in seps]
 
-            def bound(lst, cp_):
-                for nu, ju, nl, jl, clear in lst:
-                    if nu in loc and nl in loc:
-                        cp_.append((loc[nu], ju, loc[nl], jl, "ge", clear))
-                    elif nu in loc and zs[nl] is not None:      # (over a kept chain)
-                        d_[loc[nu]]["lo"][ju] = max(d_[loc[nu]]["lo"][ju], zs[nl][jl] + clear)
-                    elif nl in loc and zs[nu] is not None:      # (under a kept chain's deck)
-                        d_[loc[nl]]["hi"][jl] = min(d_[loc[nl]]["hi"][jl], zs[nu][ju] - clear)
-            bound(seps, cp)
-            mine = [t_ for t_ in ties if t_[0] in loc]
-            def solve_stage():
-                info = {}
-                profiles = _cw.solve(d_, cp, deadline=deadline, diagnostics=info)
-                if not info["converged"]:
-                    raise RuntimeError(f"carriageway level {L}: {info['status']} (feasible={info['feasible']})")
-                return profiles
+        def solve_network():
+            info = {}
+            result = _cw.solve(data, cp, deadline=deadline, diagnostics=info)
+            if not info["converged"]:
+                raise RuntimeError(f"carriageway network: {info['status']} (feasible={info['feasible']})")
+            return result
 
-            if mine:
-                pre = solve_stage()
-                tie_seps = []
-                for na, ia, nb, ib, q, sin, ua in mine:
-                    a_up = pre[loc[na]][nearest(na, ia, q)] >= pre[loc[nb]][nearest(nb, ib, q)]
-                    tie_seps += self._cw_overlap(chains, samples, nearest, (na, ia, nb, ib, q, sin, ua), a_up)
-                bound(tie_seps, cp)
-            got = solve_stage()
-            for n in idx:
-                zs[n] = got[loc[n]]
+        if ties:
+            pre = solve_network()
+            for na, ia, nb, ib, q, sin, ua in ties:
+                a_up = pre[na][nearest(na, ia, q)] >= pre[nb][nearest(nb, ib, q)]
+                cp += [(nu, ju, nl, jl, "ge", clear) for nu, ju, nl, jl, clear in
+                       self._cw_overlap(chains, samples, nearest, (na, ia, nb, ib, q, sin, ua), a_up)]
+        zs = solve_network()
         couplings = couplings + [(nu, ju, nl, jl, "ge", c_) for nu, ju, nl, jl, c_ in seps]
         if os.environ.get("BNE_CW_DUMP"):
             import pickle

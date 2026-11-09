@@ -653,6 +653,16 @@ class UndergroundLinesTest(unittest.TestCase):
         self.assertEqual(len(carved), 1, "the open river once (one cell's lines seen once), the piped one never")
         self.assertTrue(riverlines.underground(Lines(), 1))
 
+class StillWaterEvidenceTest(unittest.TestCase):
+    def test_river_through_explicit_pond_does_not_make_it_flowing(self):
+        f = Water([('pond', []), ('reservoir', []), ('lake', []), ('water', [])])
+        self.assertEqual([seacarve.SeaCarver._flowing_lake(f,i) for i in range(4)], [False,False,False,True])
+    def test_majority_water_plateau_ignores_high_bank_pixels(self):
+        heights = np.r_[np.full(60,240.5),np.full(40,242.5)]
+        self.assertEqual(seacarve._majority_plateau(heights),240.5)
+        self.assertIsNone(seacarve._majority_plateau(np.linspace(240,250,100)))
+        self.assertIsNone(seacarve._majority_plateau(np.r_[np.full(50,240.5),np.full(50,242.5)]))
+
 
 if __name__ == "__main__":
     unittest.main()

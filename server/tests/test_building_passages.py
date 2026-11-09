@@ -49,6 +49,39 @@ class BuildingPassageTest(unittest.TestCase):
         self.assertEqual(roof.floors, 8)
         self.assertEqual(bld.collider_boxes(new, 0, 0), [], 'a car inside the arch must not hold back the whole collision mesh')
 
+    def test_cut_facade_keeps_original_uvs_on_both_sides_and_above_the_arch(self):
+        items = self.items()
+        source = items[0][0]
+        cuts = [(np.array([[0., -9.], [0., 9.]]), 4., 4.5)]
+        fragments = buildingpassages.apply(items, cuts)
+
+        def wall_mesh(items, lite):
+            mesh = bld.Mesh()
+            for spec, _, _ in items:
+                z0 = -bld.SKIRT_M if not spec.min_h else spec.min_h
+                bld._walls(mesh, spec, spec.ring, z0, (spec.min_h or 0) + spec.height,
+                           bld._Looks(spec.seed), lite)
+            return mesh.arrays()
+
+        def sample(mesh, point):
+            positions, uv, triangles, materials, colors = mesh
+            for indices, material in zip(triangles, materials):
+                p = positions[indices]
+                ab = (p[1:] - p[0]).T
+                weights, *_ = np.linalg.lstsq(ab, point - p[0], rcond=None)
+                if (np.linalg.norm(ab @ weights - (point - p[0])) < 1e-7
+                        and min(weights) >= -1e-7 and sum(weights) <= 1 + 1e-7):
+                    return material, uv[indices[0]] + weights @ (uv[indices[1:]] - uv[indices[0]])
+            self.fail(f'No facade at {point}')
+
+        for lite in (False, True):
+            original, cut = wall_mesh(items, lite), wall_mesh(fragments, lite)
+            for x, z in ((-8., 1.5), (8., 1.5), (-8., 4.4), (0., 4.6), (0., 10.5), (8., 22.5)):
+                point = np.array([x, -6., z])
+                before, after = sample(original, point), sample(cut, point)
+                self.assertEqual(before[0], after[0])
+                np.testing.assert_allclose(before[1], after[1], atol=1e-8)
+
     def test_mapped_clearances_apply_to_each_opening_independently(self):
         a = np.array([[-12., -3.], [12., -3.]])
         b = np.array([[-12., 3.], [12., 3.]])

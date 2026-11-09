@@ -906,12 +906,13 @@ def approach_levels_many(xys, ground, grades=None):
     return [(found[2 * j], found[2 * j + 1]) for j in range(len(xys))]
 
 
-def profile(rails, ground, underpasses=()):
+def profile(rails, ground, underpasses=(), fixed_decks=None):
     """Per part: bed and ground heights. Underpasses reserve clearance above their lower road mouths.
     ground(xy (n, 2)) -> z. The resulting deck heights propagate along connected approach ramps.
     """
     if not rails:
         return []
+    fixed_decks = fixed_decks or {}
     allxy = np.concatenate([xy for *_, xy in rails])
     zg_all = np.asarray(ground(allxy), np.float64)
     zgs, k = [], 0
@@ -921,7 +922,7 @@ def profile(rails, ground, underpasses=()):
     lines = [xy for *_, xy in rails]
     nodes, edges, adj = roads._chain_graph(lines)
     level = {}                                  # node -> (level, reach): the track's level beyond a bridge's end there
-    decks = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "bridge"]
+    decks = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "bridge" and n not in fixed_decks]
     got_all = approach_levels_many([rails[n][3] for n in decks], ground,
                                    [LINE_GRADE.get(rails[n][1], GRADE) for n in decks]) if decks else []
     for n, ends_got in zip(decks, got_all):
@@ -959,8 +960,11 @@ def profile(rails, ground, underpasses=()):
         zb_ = float(np.mean(ends[b])) if b in ends else float(g[-1])
         za = max(za, level[a][0]) if a in level else za         # (the track's level beyond its ends)
         zb_ = max(zb_, level[b][0]) if b in level else zb_
-        zb[n] = deck_heights(_arc(xy), g, za, zb_)
+        zb[n] = (np.asarray(fixed_decks[n], np.float64).copy() if n in fixed_decks
+                 else deck_heights(_arc(xy), g, za, zb_))
         for (line, _half, masks), (z0, z1) in zip(crossings, mouth_z):
+            if n in fixed_decks:
+                continue
             over = masks[n]
             if over.any():
                 _distance, t = _underpass_distance(xy, line)
@@ -976,7 +980,8 @@ def profile(rails, ground, underpasses=()):
         for n, (a, b, s) in enumerate(edges):
             reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
             if rails[n][2] == "bridge":         # (two decks end to end: still a straight run between their ends)
-                zb[n] = _envelope(s, np.maximum(zb[n], reach))
+                if n not in fixed_decks:
+                    zb[n] = _envelope(s, np.maximum(zb[n], reach))
             else:                               # a ground track follows its own bed: a distant deck carries the
                 zb[n] = np.minimum(np.maximum(zb[n], reach), zb[n] + SEED_LIFT_MAX_M)   # ramps to it, no higher
     return list(zip(zb, zgs))
@@ -1389,7 +1394,7 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     return out
 
 
-def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False):
+def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, road_decks=()):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
@@ -1411,8 +1416,20 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     walk = [w for w in walk if _box_hit((w[1][:, 0].min(), w[1][:, 1].min(), w[1][:, 0].max(), w[1][:, 1].max()), exs)]
     if not rails and not walk:
         return (None, []) if return_decks else None
-    prof = profile(rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails)) if rails else []
-    decks = ([{"n": np.column_stack((xy, zb + BALLAST_H)),
+    fixed_decks = {}
+    if road_decks:
+        import bridgeattachments
+        source_levels = bridgeattachments.levels(cells)
+        for i, (fid, cls, kind, xy) in enumerate(rails):
+            if cls == 'tram' and kind == 'bridge':
+                shared = bridgeattachments.surface(xy, road_decks, TRAM_DECK_HALF_M,
+                                                   source_levels.get(fid, 1.), reach=10.)
+                if shared is not None:
+                    # Tram railheads are embedded at zb + FLUSH_LIFT_M.
+                    fixed_decks[i] = shared[0] - FLUSH_LIFT_M
+    prof = profile(rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails),
+                   fixed_decks=fixed_decks) if rails else []
+    decks = ([{"n": np.column_stack((xy, zb + (FLUSH_LIFT_M if cls == "tram" else BALLAST_H))),
                "w": 2 * (TRAM_DECK_HALF_M if cls == "tram" else DECK_HALF_M)}
               for (_, cls, kind, xy), (zb, _zg) in zip(rails, prof) if kind == "bridge"]
              if return_decks else [])
@@ -1488,7 +1505,16 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                 sp = _sleepers(s, xy, u, top, i, j, SLEEPERS_GONE[w])
                 if sp is not None:
                     small.append((sp, SLEEPER_W / 2, SLEEPER_L / 2, mesh.mat(SLEEPER_WORN[w])))
-    footbridges.add(mesh, walk, ground, crossers, ex, concrete, small)
+    walk_decks = list(road_decks)
+    if fixed_decks:
+        # A sidewalk on the far side of a separate tram strip belongs to the
+        # same assembly even when it is too far from the carriageway itself.
+        for i in fixed_decks:
+            fid, cls, kind, xy = rails[i]
+            walk_decks.append({'n': np.c_[xy, prof[i][0] + FLUSH_LIFT_M],
+                               'w': 2 * TRAM_DECK_HALF_M, 'level': source_levels.get(fid, 1.)})
+    footbridges.add(mesh, walk, ground, crossers, ex, concrete, small, road_decks=walk_decks,
+                    source_levels=bridgeattachments.levels(cells) if walk_decks else None)
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:
         room = (VERTS_MAX - mesh.nv) // 8

@@ -35,7 +35,7 @@ import staging
 
 log = logging.getLogger("earthd.seacarve")
 
-VERSION = 20                # (20: no river beds carved along underground rivers, riverlines.underground)
+VERSION = 21                # (20: no river beds carved along underground rivers, riverlines.underground)
 SEA_E = 0.0                 # m: the sea surface (the DEMs' heights are above mean sea level)
 DEPTH_SLOPE = 0.15          # floor depth per metre from the shoreline (1 : 6.7)
 DEPTH_CAP = 6.0             # m: the floor's depth away from the shore without bathymetry (Chesapeake mean
@@ -521,7 +521,7 @@ class SeaCarver:
         sea = np.zeros((n, n), bool)
         river = np.zeros((n, n), bool)
         lake = np.full((n, n), -1, np.int32)
-        lake_ids = []
+        lake_ids, lake_flow = [], []
         around = [(dx, dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dx, dy) != (0, 0)]
         with ThreadPoolExecutor(FETCH_THREADS, thread_name_prefix="sea-water") as ex:     # (side by side)
             got = dict(zip(around, ex.map(lambda d: self._water((mapcells.ZOOM, x + d[0], y + d[1])), around)))
@@ -547,6 +547,7 @@ class SeaCarver:
                         gid = str(f.ids[i])
                         if gid not in lake_ids:
                             lake_ids.append(gid)
+                            lake_flow.append(self._flowing_lake(f, i))
                         m = np.zeros((n, n), bool)
                         self._rasterise(f, i, m, ox, oy)
                         lake[m] = lake_ids.index(gid)
@@ -560,10 +561,11 @@ class SeaCarver:
         through = self._river_line_px(x, y, ox, oy, n) if (self.dem is not None and lake_ids) else None
         for k in range(len(lake_ids)):
             m = lake == k
-            if through is not None and (m & through).any():
+            if through is not None and lake_flow[k] and (m & through).any():
+                outline |= m
                 river |= m              # a river runs through it (a pool behind a dam, water=river): it
                 continue                # flows, as the river (River objects), not a still lake tile
-            lv = self._lake_level(m, ox, oy, px, wet=sea | river | (lake >= 0))
+            lv = self._lake_level(m, ox, oy, px, wet=sea | river | (lake >= 0), still=not lake_flow[k])
             if lv is None:
                 continue
             if SEA_LO <= lv <= SEA_HI and _touches(m, sea, JOIN_SEA_PX):
@@ -919,6 +921,13 @@ class SeaCarver:
         return not len(e) or float(np.median(e)) <= TAG_SEA_MAX_M
 
     @staticmethod
+    def _flowing_lake(f, i):
+        """An explicit pond/lake/reservoir stays still even when a river crosses it."""
+        still = {"pond", "lake", "reservoir"}
+        return (str(f.attrs["subtype"][i]) not in still
+                and str(f.attrs.get("class", [""] * len(f.kind))[i]) not in still)
+
+    @staticmethod
     def _lake_rows(f):
         sub = f.attrs["subtype"]
         cls = f.attrs.get("class", np.full(len(sub), "", object))
@@ -928,7 +937,7 @@ class SeaCarver:
         ok = np.isin(sub, LAKE_SUBTYPES) & ~np.isin(cls, LAKE_SKIP_CLASSES) & (f.kind == 3) & ~fountain
         return np.flatnonzero(ok & ~np.asarray(inter, bool))
 
-    def _lake_level(self, m, ox, oy, px, wet=None):
+    def _lake_level(self, m, ox, oy, px, wet=None, still=False):
         """The water level of a lake (its pixels m): the median DEM height inside, away from the banks,
         quantised to LEVEL_Q, no higher than the ground round its shore
         (_shore_ground, away from the other water wet); None if it is too small or not flat (a river, bad data)."""
@@ -947,9 +956,26 @@ class SeaCarver:
             log.debug("lake level: %s", ex)
             return None
         p10, p50, p90 = np.percentile(e, [10, 50, 90])
-        if p90 - p10 > LAKE_FLAT_M:
-            return None
         lv = p50
+        if p90 - p10 > LAKE_FLAT_M:
+            # A broad explicitly mapped pond can contain bridges/bank pixels in
+            # a coarse DEM. Accept only a majority flat interior plateau, never
+            # relax the slope test for anonymous water or flowing rivers.
+            if not still:
+                return None
+            radius = max(3, int(math.ceil(30.0 / px)))
+            core = shore_steps(m, radius) >= radius
+            if core.sum() < max(20, m.sum() * .1):
+                return None
+            jj, ii = np.nonzero(core)
+            if len(jj) > LEVEL_SAMPLES:
+                sel = np.linspace(0, len(jj) - 1, LEVEL_SAMPLES).astype(np.int64)
+                jj, ii = jj[sel], ii[sel]
+            la, lo = _lonlat(ox + ii + .5, oy + jj + .5)
+            vals = np.asarray(self.dem.sample(la, lo, LAKE_DEM_ZOOM), np.float64)
+            lv = _majority_plateau(vals)
+            if lv is None:
+                return None
         shore = self._shore_ground(m, ox, oy, wet)
         if shore is not None:
             lv = min(lv, shore - SHORE_DROP_M)
@@ -1274,3 +1300,14 @@ class SeaDem:
 
     def __getattr__(self, name):
         return getattr(self.dem, name)
+
+
+def _majority_plateau(elevations):
+    """A flat lower interior majority, or None for a slope/multiple comparable pools."""
+    e = np.asarray(elevations, np.float64)
+    e = e[np.isfinite(e)]
+    if len(e) < 20:
+        return None
+    median = float(np.median(e))
+    flat = np.abs(e - median) <= .25
+    return float(np.median(e[flat])) if flat.mean() > .5 else None

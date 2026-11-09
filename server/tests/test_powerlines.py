@@ -217,11 +217,11 @@ class OffRoadsTest(unittest.TestCase):
 class TowerFootprintTest(unittest.TestCase):
     """The native layout decides yaw; check its emitted rows against the tile's authoritative solved roads."""
 
-    def place(self, lines=(), decks=(), clearance=None, tags=None):
+    def place(self, lines=(), decks=(), clearance=None, tags=None, source_x=(100., 200.), terrain=None):
         import furniture
         import mapgeom
         from test_roads import FRAME
-        la, lo, _ = FRAME.enu_to_geodetic(np.array([100., 200.]), np.array([100., 100.]), 0.)
+        la, lo, _ = FRAME.enu_to_geodetic(np.array(source_x), np.array([100., 100.]), 0.)
         infra = mapgeom.Features(
             layer="infrastructure", ids=np.array(["line"]), kind=np.array([mapgeom.LINE], np.uint8),
             part_off=np.array([0, 1], np.int64), ring_off=np.array([0, 1], np.int64),
@@ -237,9 +237,28 @@ class TowerFootprintTest(unittest.TestCase):
         props, wires = [], []
         if clearance is None:
             clearance = furniture.RoadClearance(lines, decks, bounds=(0., 0., 256., 256.))
-        powerlines.tile_lines(FRAME, 0, 0, Md(), lambda la, lo: np.zeros(np.shape(la)), props, wires,
+        powerlines.tile_lines(FRAME, 0, 0, Md(), terrain or (lambda la, lo: np.zeros(np.shape(la))), props, wires,
                               clearance=clearance)
         return props, wires
+
+    def test_generalised_long_line_gets_supports_and_safe_conductors(self):
+        for tags in (None, '{"power":"line","voltage":"66000"}'):
+            props, wires = self.place(source_x=(-600., 600.), tags=tags)
+            self.assertTrue(props, 'intermediate supports must be present inside this tile')
+            self.assertTrue(wires)
+            maximum = 250. if tags is None else 125.
+            for wire, _ in wires:
+                self.assertLessEqual(float(np.linalg.norm(wire[-1, :2] - wire[0, :2])), maximum + .1)
+                self.assertGreaterEqual(float(wire[:, 2].min()), powerlines.WIRE_CLEAR_M - .01)
+
+    def test_conductors_do_not_cut_through_a_hill_between_supports(self):
+        from test_roads import FRAME
+        def hill(la, lo):
+            x, _, _ = FRAME.geodetic_to_enu(la, lo, 0.)
+            return np.where(np.abs(np.asarray(x) - 150.) < 15., 40., 0.)
+        props, wires = self.place(terrain=hill)
+        self.assertEqual(len(props), 2)
+        self.assertEqual(wires, [], 'an unsafe wire must not cross the terrain or a road')
 
     def test_service_road_rejects_collider_but_keeps_conductors(self):
         service = (4., np.array([[100., 0., 0.], [100., 256., 0.]]))
