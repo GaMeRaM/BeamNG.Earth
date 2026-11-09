@@ -1,5 +1,8 @@
 """Pooled far-tile material names (matslots.py) and the server's use of them (reclaim_names, reslot)."""
+import asyncio
 import os
+import threading
+from unittest.mock import patch
 import sys
 import tempfile
 import unittest
@@ -79,7 +82,7 @@ class Conn:
         self.slot_holds, self.sent, self.desired, self.inflight, self.active = {}, {}, {}, {}, 1
 
 
-class ServerTest(unittest.TestCase):
+class ServerTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.s = earthd.Server(self.tmp.name, self.tmp.name)
@@ -98,7 +101,7 @@ class ServerTest(unittest.TestCase):
                                            self.s.texture_name(1, key))
         return ck, name
 
-    def test_idle_tiles_reclaimed_lru_first_and_reslotted(self):
+    async def test_idle_tiles_reclaimed_lru_first_and_reslotted(self):
         cks = [self.add(f"0_{i}_0") for i in range(matslots.TARGET + 20)]
         busy = cks[0][0]
         self.s.names_in_use = lambda: {busy}            # a connection still shows the first tile
@@ -108,7 +111,7 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(self.s.matslots.owns(*cks[-1]))
         # sent again: a copy of the shape with a fresh name, under a new file name
         ck, old = cks[1]
-        info = self.s.reslot(ck, self.s.tiles[ck])
+        info = await self.s.reslot(ck, self.s.tiles[ck])
         self.assertTrue(self.s.matslots.owns(ck, info.material))
         self.assertNotEqual(info.material, old)
         self.assertEqual(info.shape, f"slot_{info.material.rsplit('_', 1)[1]}.cdae")       # its pooled file
@@ -116,18 +119,18 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(fh.read(), b"head" + info.material.encode() + b"tail")
         self.assertIs(self.s.tiles[ck], info)
 
-    def test_reslot_own_name_back_rewrites_its_file(self):
+    async def test_reslot_own_name_back_rewrites_its_file(self):
         ck, name = self.add("0_0_0")
         slot = os.path.join(self.s.out_dir, matslots.MatSlots.file(name))
         with open(slot, "wb") as fh:            # another tile had the slot meanwhile
             fh.write(b"other")
         self.s.matslots.release(ck)
-        info = self.s.reslot(ck, self.s.tiles[ck])          # the stack hands its own name back
+        info = await self.s.reslot(ck, self.s.tiles[ck])          # the stack hands its own name back
         self.assertEqual(info.material, name)
         with open(slot, "rb") as fh:
             self.assertEqual(fh.read(), b"head" + name.encode() + b"tail")
 
-    def test_reslot_again_restamps_the_files_own_name(self):
+    async def test_reslot_again_restamps_the_files_own_name(self):
         """A tile renamed twice (a global far tile kept across rebases, its name reclaimed at each): the second rename
         restamps the name its own file carries, not the first rename's (that failed, and the tile was sent under a
         name another tile had: it drew that tile's texture, red Utah far tiles on Pikes Peak's ground, 2026-10-29)."""
@@ -136,13 +139,13 @@ class ServerTest(unittest.TestCase):
         for rename in range(3):
             self.s.matslots.release(ck)
             others.append(self.s.matslots.take((2, f"x_{rename}")))    # its name goes to another tile
-            info = self.s.reslot(ck, self.s.tiles[ck])
+            info = await self.s.reslot(ck, self.s.tiles[ck])
             self.assertTrue(self.s.matslots.owns(ck, info.material), rename)
             self.assertNotIn(info.material, others)
             with open(os.path.join(self.s.out_dir, info.shape), "rb") as fh:
                 self.assertEqual(fh.read(), b"head" + info.material.encode() + b"tail")
 
-    def test_reslot_without_a_name_keeps_none(self):
+    async def test_reslot_without_a_name_keeps_none(self):
         """A shape with no pooled name in it cannot be renamed: the tile does not own the name it had (the streamer
         then builds it again instead of sending it under another tile's name)."""
         ck, name = self.add("0_0_0")
@@ -150,8 +153,38 @@ class ServerTest(unittest.TestCase):
             fh.write(b"no name here")
         self.s.matslots.release(ck)
         self.s.matslots.take((2, "x"))
-        info = self.s.reslot(ck, self.s.tiles[ck])
+        info = await self.s.reslot(ck, self.s.tiles[ck])
         self.assertFalse(self.s.matslots.owns(ck, info.material))
+
+    async def test_slow_reslot_is_shared_and_cancellation_keeps_slot_reserved(self):
+        ck, name = self.add("0_0_0")
+        entered, release = threading.Event(), threading.Event()
+        original = earthd.staging.replace
+        calls = []
+        def slow(*args):
+            calls.append(args)
+            entered.set()
+            if not release.wait(3):
+                raise TimeoutError('test writer not released')
+            original(*args)
+        with patch.object(earthd.staging, 'replace', side_effect=slow):
+            first = asyncio.create_task(self.s.reslot(ck, self.s.tiles[ck]))
+            second = asyncio.create_task(self.s.reslot(ck, self.s.tiles[ck]))
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                await asyncio.wait_for(asyncio.sleep(.01), .5)
+                first.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await first
+                self.assertIn(ck, self.s.in_use())
+                self.s.reclaim_names()
+                self.assertTrue(self.s.matslots.owns(ck, name))
+            finally:
+                release.set()
+            info = await asyncio.wait_for(second, 2)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(self.s.matslots.owns(ck, info.material))
+        self.assertFalse(self.s._publishing_owners)
 
     def test_name_in(self):
         p = matslots.MatSlots("ab12")

@@ -4859,7 +4859,7 @@ class Server:
         prune_delay ago: after a far_swap / far_remove the mod still shows the tile until the
         swap has run (its adds load within the governor budget, then a 0.5 s crossover) and
         deletes it time-sliced, and a shape file must not vanish under a live TSStatic."""
-        out = self.matslots.held_owners()
+        out = self.matslots.held_owners() | set(getattr(self, '_publishing_owners', ()))
         now = time.monotonic()
         for c in self.connections:
             out |= set(c.shown)
@@ -4878,7 +4878,7 @@ class Server:
     def names_in_use(self):
         """(anchorId, key) of the tiles a connection is about to send or build (desired, sent, in flight): they
         keep their names. Whether a game still draws a name is slot_held()."""
-        out = set()
+        out = set(getattr(self, '_publishing_owners', ()))
         for c in self.connections:
             out |= {self.far_ck(c.active, k) for k in c.sent}
             out |= {self.far_ck(c.active, k) for k in c.desired}
@@ -5003,7 +5003,19 @@ class Server:
             out[what] = [f"{self.vfs_dir}/{slot}", serial]
         return out
 
-    def reslot(self, ck, info):
+    async def reslot(self, ck, info):
+        """Share a rename across clients, without blocking the event loop on its file IO."""
+        tasks = getattr(self, '_reslot_tasks', None)
+        if tasks is None:
+            tasks = self._reslot_tasks = {}
+        task = tasks.get(ck)
+        if task is None:
+            task = tasks[ck] = asyncio.create_task(self._reslot(ck, info))
+            task.add_done_callback(lambda f: (tasks.pop(ck, None),
+                                             None if f.cancelled() else f.exception()))
+        return await asyncio.shield(task)
+
+    async def _reslot(self, ck, info):
         """Event loop: a cached tile whose material name went to another tile meanwhile (reclaim_names) is
         sent again: a copy of its shape with the new name in the new name's pooled file (slot_<n>; DAE tiles: a file
         _s<serial>, the old copy deleted), even when it got its own name back (its pooled file may hold another
@@ -5013,7 +5025,13 @@ class Server:
         src = os.path.join(self.out_dir, self.tile_name(*ck))
         pooled = self.far_format == "cdae"
         name = matslotsmod.MatSlots.file(new) if pooled else f"{os.path.splitext(self.tile_name(*ck))[0]}_s{next(self.reslot_serial)}.{self.far_format}"
-        try:
+        # Reserve the tile and its pooled name while a worker reads/restamps/writes it.
+        # Cancellation cannot stop an in-progress file syscall.
+        owners = getattr(self, '_publishing_owners', None)
+        if owners is None:
+            owners = self._publishing_owners = set()
+        owners.add(ck)
+        def prepare():
             with open(src, "rb") as fh:
                 data = fh.read()
             packed = pooled and cdae.is_packed(data)
@@ -5035,9 +5053,18 @@ class Server:
             with open(tmp, "wb") as fh:
                 fh.write(data)
             staging.replace(tmp, dst)
+        work = asyncio.get_running_loop().run_in_executor(None, prepare)
+        try:
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                await asyncio.shield(work)
+                raise
         except (OSError, ValueError) as e:
             log.warning("tile %s of anchor %d: material name not renewed (%s)", ck[1], ck[0], e)
             return info
+        finally:
+            owners.discard(ck)
         if not pooled and info.shape is not None:
             self.queue_delete([os.path.join(self.out_dir, info.shape)])
         info = self.tiles[ck] = replace(info, material=new, shape=name)
@@ -5116,6 +5143,8 @@ class Server:
         past RETEX_REPEAT re-renders in a row that came back stale at once."""
         best, bd = None, math.inf
         for ck in list(self.retex_todo):
+            if ck in getattr(self, '_publishing_owners', ()):
+                continue        # a rename still reads the tile's original shape
             info = self.tiles.get(ck)
             viewers = self._retex_viewers(ck) if info is not None and info.stale else []
             if not viewers or ck in self.tile_inflight or (ck[0] not in self.anchors and ck[0] != GLOBAL_AID) \
@@ -8495,7 +8524,10 @@ class Connection:
             if self.s.retex_todo and (self.map_view or self.map_open):
                 self.s._retex_pump()        # (re-renders into the far slots builds left free)
             for ck in [ck for ck, (f, _) in self.inflight.items() if f.done()]:
-                fut, t = self.inflight.pop(ck)
+                item = self.inflight.pop(ck, None)
+                if item is None:            # a rebase while reslot awaited its writer
+                    continue
+                fut, t = item
                 if fut.cancelled():
                     continue
                 if fut.exception() is not None:
@@ -8508,7 +8540,7 @@ class Connection:
                 # the server's latest record: a live retexture may have finished since this build
                 info = self.s.tiles.get(ck, fut.result())
                 if info.material is not None and not self.s.matslots.owns(ck, info.material):
-                    info = self.s.reslot(ck, info)      # its material name went to another tile meanwhile
+                    info = await self.s.reslot(ck, info)      # its material name went to another tile meanwhile
                     if not self.s.matslots.owns(ck, info.material):
                         # not renamed: sent with that name it would draw the other tile's texture; built again
                         # (its files are written anew; the cached entry and its claim on the name go)
@@ -8516,6 +8548,8 @@ class Connection:
                         self.s.matslots.release(ck)
                         self.queue.append(t)
                         continue
+                if self.closing or ck != self.ck(t.key) or t.key not in self.desired:
+                    continue
                 self.sent[t.key] = t
                 if info.stale:          # a region turned ready since: re-rendered live, then far_retex
                     self.s.retex_request(ck)
@@ -9440,10 +9474,14 @@ def main():
             game_cpus = None
     args.game_cpus = game_cpus
     args.server_cpus = server_cpus if game_cpus else None
+    import logqueue
+    stop_logging = logqueue.start()
     try:
         asyncio.run(main_async(args))
     except KeyboardInterrupt:
         pass
+    finally:
+        stop_logging()
 
 
 if __name__ == "__main__":
