@@ -184,7 +184,7 @@ def walls(mesh, fragment, ring, z0, top, looks, lite):
         if not exterior:
             uv = [(0., z0 / b.SIDING_UV_M), (length / b.SIDING_UV_M, z0 / b.SIDING_UV_M),
                   (length / b.SIDING_UV_M, top / b.SIDING_UV_M), (0., top / b.SIDING_UV_M)]
-            mesh.quad((*a, z0), (*end, z0), (*end, top), (*a, top), *uv, looks[b.STUCCO])
+            mesh.quad((*a, z0), (*end, z0), (*end, top), (*a, top), *uv, looks[f"{b.STUCCO}|0"])
             continue
         for k, (quad, uv) in enumerate(zip(positions, uvs)):
             # Includes the sash overlays standing 3 cm proud of their wall.

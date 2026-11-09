@@ -1000,7 +1000,10 @@ class ColorMatch:
         if not os.path.exists(npz):
             return None
         try:
-            with np.load(npz) as f:
+            # Own the handle even when np.load's constructor raises. A damaged
+            # ZIP can otherwise stay open in its traceback and cannot be removed
+            # on Windows until that exception is released.
+            with open(npz, "rb") as raw, np.load(raw) as f:
                 m = self._read_meta(str(f["meta"]))
                 if m is None:
                     return None

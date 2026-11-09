@@ -27,6 +27,16 @@ def line(x0, y0, x1, y1, step=4.0):
     return np.c_[np.linspace(x0, x1, n), np.linspace(y0, y1, n)]
 
 
+class ShortConnectorTest(unittest.TestCase):
+    def test_two_lowered_junctions_leave_no_original_height_hump_between(self):
+        left = plan([[0., -50.], [0., 50.]], [10., 10.], 8., 5., 1)
+        right = plan([[20., -50.], [20., 50.]], [10., 10.], 8., 5., 2)
+        xy = line(0., 0., 20., 0., step=2.)
+        connector = plan(xy, np.full(len(xy), 12.), 6., 3., 3)
+        grading.snap_junctions([left, right, connector], [PRIMARY, PRIMARY, RESIDENTIAL])
+        np.testing.assert_allclose(connector.z, 10., atol=1e-8)
+
+
 class LandingTest(unittest.TestCase):
     def setUp(self):              # (opt-in since 2026-11-03: on for these tests)
         patcher = mock.patch.object(grading, "PAD_ON", True)

@@ -159,7 +159,11 @@ pub fn snap_junctions<'py>(
             if delta.abs() > max_m {
                 continue; // a ramp up to an overpass, or bad data: as it was
             }
-            let taper = taper_m.min(0.5 * length).max(1e-6);
+            // On a short connector the two end corrections must reach its
+            // middle. Half-length tapers both had zero weight there, leaving
+            // the DEM's original height as a sharp hump between lowered ends.
+            // Full-length cosine tapers sum to one and preserve both end pins.
+            let taper = taper_m.min(length).max(1e-6);
             for i in 0..len {
                 let u = (if end == 0 { s[i] } else { length - s[i] }) / taper;
                 dz[i] += delta * ease(u);

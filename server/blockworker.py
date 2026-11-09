@@ -1097,9 +1097,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     if rr_kits:
         props = (props or []) + rr_kits
     import bridgeattachments
-    attachment_levels = bridgeattachments.levels(cells)
-    attachment_decks = [{**ch, 'level': attachment_levels.get(str(ch.get('fid')), 1.)}
-                        for ch in ctx if ch.get('deck') and len(ch.get('n', ())) >= 2]
+    attachment_decks = bridgeattachments.complete_decks(cells, deck_parts, urban, _s.widths, left_hand)
     import catenary
     if catenary.ENABLED and wires is not None:      # masts and wires along the electrified lines (BNE_CATENARY)
         try:

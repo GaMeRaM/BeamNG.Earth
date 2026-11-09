@@ -82,6 +82,20 @@ class BuildingPassageTest(unittest.TestCase):
                 self.assertEqual(before[0], after[0])
                 np.testing.assert_allclose(before[1], after[1], atol=1e-8)
 
+    def test_new_jambs_and_ceiling_use_plain_tileable_material(self):
+        spec = self.items()[0][0]
+        items = buildingpassages.apply([(spec, 0., 0.)], [(np.array([[0., -9.], [0., 9.]]), 4., None)])
+        p, uv, tri, materials, names, *_ = bld.build(items)
+        faces = p[tri]
+        jamb = ((np.abs(faces[:, :, 0] - 2.25) < .06).all(1)
+                & (faces[:, :, 1].mean(1) < -.1) & (faces[:, :, 2] <= bld.FLOOR_M + 1e-7).all(1))
+        self.assertTrue(jamb.any())
+        self.assertTrue((materials[jamb] == names.index(bld.STUCCO)).all())
+        ceiling = (np.abs(faces[:, :, 2] - bld.FLOOR_M) < 1e-7).all(1)
+        ceiling &= materials == names.index(bld.STUCCO)
+        self.assertTrue(ceiling.any())
+        self.assertGreater(float(np.ptp(uv[tri[ceiling], 0])), 1.)
+
     def test_mapped_clearances_apply_to_each_opening_independently(self):
         a = np.array([[-12., -3.], [12., -3.]])
         b = np.array([[-12., 3.], [12., 3.]])

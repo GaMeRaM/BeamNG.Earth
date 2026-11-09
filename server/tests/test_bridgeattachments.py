@@ -19,6 +19,17 @@ class SharedSurfaceTest(unittest.TestCase):
         self.assertTrue(covered)
         self.assertFalse(bridgeattachments.surface(xy + [0., 5.], [deck], 1.)[1])
 
+    def test_companions_use_full_profiles_past_a_render_tile_boundary(self):
+        f = features([[(0., 100.), (300., 100.)]], ['primary'], flags=[(0, 'is_bridge')])
+        spec = __import__('roads').bridge_specs(f)[0]
+        xy = np.array([[0., 100.], [300., 100.]])
+        decks = bridgeattachments.complete_decks([f], [(str(f.ids[0]), spec, xy, np.array([20., 23.]), None)])
+        track = np.array([[10., 100.], [150., 100.], [290., 100.]])
+        actual = bridgeattachments.surface(track, decks, 1.)
+        self.assertIsNotNone(actual)
+        np.testing.assert_allclose(actual[0], [20.1, 21.5, 22.9])
+        self.assertTrue(actual[1])
+
     def test_crossings_and_different_levels_do_not_attach(self):
         deck = {'n': [[0., 0., 20.], [100., 0., 20.]], 'w': 14., 'level': 1.}
         self.assertIsNone(bridgeattachments.surface([[50., -3.], [50., 3.]], [deck], 1.))

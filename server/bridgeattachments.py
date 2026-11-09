@@ -3,6 +3,36 @@ import numpy as np
 import roads
 
 
+def complete_decks(cells, parts, urban=None, widths=None, left_hand=False):
+    """Full shifted profiles, including sidewalks, for companions spanning tile boundaries.
+
+    Render-context chunks are clipped near one tile. Testing a whole tram or
+    walkway against those chunks can reject its far end and build a second,
+    unrelated bridge profile.
+    """
+    cells, parts = list(cells), list(parts)
+    walks = {}
+    wanted = {str(fid) for fid, *_ in parts}
+    for f in cells:
+        if f is None:
+            continue
+        specs = roads.road_specs(f, urban, widths, left_hand)
+        for i, fid in enumerate(f.ids):
+            fid = str(fid)
+            if fid in wanted and fid not in walks:
+                walks[fid] = roads.deck_walks(f, i, specs, left_hand)
+    source_levels = levels(cells)
+    result = []
+    for fid, spec, xy, z, _lon in parts:
+        width, offset = roads._deck_frame(spec, walks.get(str(fid)))
+        line = np.column_stack((xy, z))
+        if offset:
+            line = roads.offset_polyline(line, offset)
+        result.append({'fid': str(fid), 'n': line, 'w': width,
+                       'level': source_levels.get(str(fid), 1.)})
+    return result
+
+
 def levels(cells):
     out = {}
     for f in cells:

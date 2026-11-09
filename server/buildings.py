@@ -1752,7 +1752,12 @@ def build(specs_and_ground, lite=False):
         z_eave = base_z(spec, gmin, gmax) + mh + spec.height
         _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
-            m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
+            underside = ring[::-1]
+            if spec.passage:
+                m.poly([(p[0], p[1], z0) for p in underside],
+                       [tuple(p / SIDING_UV_M) for p in underside], mat_idx[f"{STUCCO}|0"])
+            else:
+                m.poly([(p[0], p[1], z0) for p in underside], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx, lite)
         if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
             _cornice(m, spec, ring, z_eave, mat_idx)
