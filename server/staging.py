@@ -57,7 +57,7 @@ def tmp_for(path):
     if d is not None:
         with _lock:
             known = d in _made
-        if not known:
+        if not known or not os.path.isdir(d):
             try:
                 os.makedirs(d, exist_ok=True)
                 _sweep(d)

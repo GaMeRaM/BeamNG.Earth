@@ -46,6 +46,15 @@ class StagingTest(unittest.TestCase):
         self.assertEqual(staging.tmp_for("/home/x/.cache/beamng-earth/dem/1/2.webp"),
                          "/home/x/.cache/beamng-earth/dem/1/2.webp.tmp")
 
+    def test_staging_folder_removed_after_first_write_is_recreated(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = os.path.join(root, "BeamNG.drive", "current", "temp", "s1", "shape.cdae")
+            first = staging.tmp_for(target)
+            os.rmdir(os.path.dirname(first))
+            second = staging.tmp_for(target)
+            Path(second).write_bytes(b"next")
+            self.assertEqual(Path(second).read_bytes(), b"next")
+
     def test_old_leftovers_swept(self):
         with tempfile.TemporaryDirectory() as root:
             d = os.path.join(root, "BeamNG.drive", staging.STAGING)
