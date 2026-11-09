@@ -148,7 +148,7 @@ def materials(out):
         stage = {"baseColorFactor": [*colour, 1.0], "metallicFactor": 0.7 if name in (STEEL, BRACKET) else 0.0,
                  "roughnessFactor": 0.85 if name == CONCRETE else 0.55}
         if name == CONCRETE:
-            stage["roughnessFactor"] = 0.85
+            stage["baseColorMap"] = "/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/concrete_grain.png"
         data[name] = {"name": name, "mapTo": name, "class": "Material", "version": 1.5,
                       "persistentId": str(uuid.uuid5(uuid.NAMESPACE_URL, "beamng-earth:city-lamps:" + name)),
                       "Stages": [stage], "doubleSided": False}

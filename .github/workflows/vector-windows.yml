@@ -43,7 +43,7 @@ jobs:
           python -m unittest discover -s server/tests -p test_ru_infrastructure.py
           python -m unittest discover -s server/tests -p test_roadsigns.py
           python -m unittest discover -s server/tests -p test_signcodes.py
-          python -m unittest discover -s server/tests -p test_townsigns.py
+          python -m unittest discover -s server/tests -p test_townentry.py
           python -m unittest discover -s server/tests -p test_dirsigns.py
           python -m unittest discover -s server/tests -p test_highway_signs.py
       - name: Road geometry and terrain integration gate

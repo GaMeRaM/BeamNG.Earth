@@ -21,7 +21,7 @@ import roads
 import signroads
 import speedsigns
 
-KERNEL = 172                    # earthfast VERSION with road_sign_place / road_sign_mesh
+KERNEL = 174                    # earthfast VERSION with road_sign_place / road_sign_mesh
 ON = os.environ.get("BNE_ROADSIGNS", "on") == "on"
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5, "rect": 6}
@@ -327,7 +327,12 @@ def speed_signs(frame, box, context, left_hand, mph):
         rows = speedsigns.place(frame, (x0 - 10.0, y0 - 10.0, x1 + 10.0, y1 + 10.0), context, left_hand, mph)
     except Exception:       # (optional scenery: the road signs go on without it)
         return np.zeros((0, 4))
-    return np.ascontiguousarray(np.asarray(rows, np.float64).reshape(-1, 9)[:, :4])
+    # (speed_sign_place's rows are 9 or, since the German town signs (#892), 12 wide: the first 4 columns whatever the
+    # width; a fixed reshape to 9 broke on 12)
+    a = np.asarray(rows, np.float64)
+    if a.ndim != 2:
+        a = a.reshape(-1, 9)
+    return np.ascontiguousarray(a[:, :4])
 
 
 def place(md, frame, box, context, left_hand, mph, sys_row):

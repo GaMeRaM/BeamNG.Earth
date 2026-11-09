@@ -1135,7 +1135,7 @@ local function onMessage(msg)
     net.send({ type = 'gas_stations', on = true })
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
-    -- the direction signs' switch (settings directionSigns, off by default): sign tiles with boards only while it is on
+    -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
     do
       local settings = rawget(_G, 'beamngEarth_settings')
       M.directionSigns = settings and settings.get and settings.get('directionSigns') == true or M.directionSigns or false
@@ -1146,6 +1146,22 @@ local function onMessage(msg)
       local v = settings and settings.get and settings.get('roadSigns')
       if v ~= nil then M.roadSigns = v == true end
       net.send({ type = 'road_signs', on = M.roadSigns ~= false })
+    end
+    -- the German junction signs' switch (settings germanJunctionSigns, off by default until its performance check)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('germanJunctionSigns')
+      if v == nil then v = M.germanJunctionSigns end
+      M.germanJunctionSigns = v == true
+      net.send({ type = 'german_junctions', on = M.germanJunctionSigns })
+    end
+    -- the town signs' switch (settings townSigns, off by default for now: opt-in until its performance check)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('townSigns')
+      if v == nil then v = M.townSigns end
+      M.townSigns = v == true
+      net.send({ type = 'town_signs', on = M.townSigns })
     end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
@@ -3134,10 +3150,10 @@ function M.requestGeocode(id, q, lat, lon, full)
   net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon, full = full and true or nil })
   return true
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    download = settings.get('routeDownload') })
+    via = via, download = settings.get('routeDownload') })
   return true
 end
 function M.takeRoute(id)
@@ -3343,6 +3359,24 @@ function M.setRoadSigns(on)
   if M.roadSigns == on then return end
   M.roadSigns = on
   net.send({ type = 'road_signs', on = on })
+end
+
+-- The German junction signs on / off (settings germanJunctionSigns): the server builds the road and sign tiles again
+-- with or without them (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setGermanJunctionSigns(on)
+  on = on == true
+  if M.germanJunctionSigns == on then return end
+  M.germanJunctionSigns = on
+  net.send({ type = 'german_junctions', on = on })
+end
+
+-- The town signs on / off (settings townSigns): the server builds the road and sign tiles again with or without them
+-- (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setTownSigns(on)
+  on = on == true
+  if M.townSigns == on then return end
+  M.townSigns = on
+  net.send({ type = 'town_signs', on = on })
 end
 
 M.onUpdate = onUpdate

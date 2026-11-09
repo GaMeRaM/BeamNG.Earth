@@ -34,7 +34,8 @@
           1.0
         ],
         "metallicFactor": 0.0,
-        "roughnessFactor": 0.85
+        "roughnessFactor": 0.85,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/concrete_grain.png"
       }
     ],
     "doubleSided": false

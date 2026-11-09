@@ -97,9 +97,9 @@ class RussianInfrastructure(unittest.TestCase):
             self.assertTrue(Path(entry['texture']).is_file())
             self.assertTrue(Path(entry['shape']).is_file())
             self.assertNotEqual(Path(entry['texture']).read_bytes(),Path(exit['texture']).read_bytes())
-        self.assertTrue(townsigns.enabled('RU'))
-        with patch.object(townsigns, 'WORLDWIDE', False):
-            self.assertFalse(townsigns.enabled('DE'))
+        with patch.object(townsigns, 'ENV', ''):
+            self.assertTrue(townsigns.enabled(True))
+            self.assertFalse(townsigns.enabled(False))
 
     def test_ru_motorway_atlas_has_green_field_and_living_zone_blue(self):
         from PIL import Image
