@@ -281,7 +281,7 @@ def arrays(rows, box):
     con_at, con_id, con_off = [], [], [0]
     skip, skip_off = [], [0]
     ids = {}
-    for (line, pts, _m, cons, _lims, skips), mt, fl in rows:
+    for (line, pts, _m, cons, _lims, skips, *_extra), mt, fl in rows:
         if (pts[:, 0].max() < x0 - m or pts[:, 0].min() > x1 + m or pts[:, 1].max() < y0 - m or pts[:, 1].min() > y1 + m):
             continue
         ll.append(line)

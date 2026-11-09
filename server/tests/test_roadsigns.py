@@ -85,6 +85,35 @@ class Rules(unittest.TestCase):
         pts = np.asarray(pts, np.float64)
         return (pts, pts, (4.0, direction, 3.0, 0.0, 0.0), [], [], [])
 
+    def test_current_speed_rows_and_path_rows_share_the_sign_arrays(self):
+        import speedsigns
+        from test_roads import FRAME, features
+        f = features([[(0., 0.), (200., 0.)]], ['residential'])
+        current = speedsigns._cell_rows(f, FRAME, None, None, False, False)
+        self.assertTrue(current)
+        self.assertTrue(all(len(row) == 7 for row in current.values()))
+        rows = roadsigns.with_flags(current, set(), {}, repeat_oneway=True)
+        # Path rows have no speed-zone metadata and still carry six fields.
+        path = self.row([[20., 10.], [80., 10.]])
+        rows.append((path, list(path[2]), 0))
+        result = roadsigns.arrays(rows, (-10., -10., 256., 256.))
+        self.assertIsNotNone(result)
+        self.assertEqual(result[3].shape, (len(current) + 1, 6))
+        self.assertTrue((result[3][:-1, -1] == 16).all())
+
+    def test_real_cell_reaches_native_placement_with_extended_rows(self):
+        from test_roads import FRAME, features, rules
+        f = features([[(-400., 0.), (400., 0.)]], ['residential'])
+        f.rules['oneway'] = rules([(0, 1.)], 'float')
+        context = types.SimpleNamespace(urban=None, widths=None, cell=lambda key: f,
+                                        pavements=lambda *args: types.SimpleNamespace(plans={}, outlines=[]))
+        md = types.SimpleNamespace(cell=lambda *args, **kwargs: types.SimpleNamespace(layers={}))
+        from unittest import mock
+        with mock.patch.object(roadsigns.fast._ef, 'road_sign_place', wraps=roadsigns.fast._ef.road_sign_place) as native:
+            got = roadsigns.place(md, FRAME, (-450., -50., 450., 50.), context, False, False, roadsigns.system('RU'))
+        native.assert_called_once()
+        self.assertEqual(got.shape[1], 11)
+
     def test_a_round_loop_is_a_ring_and_its_approach_is_not(self):
         t = np.radians(np.arange(0, 361, 10.0))
         circle = np.column_stack([30.0 * np.cos(t), 30.0 * np.sin(t)])

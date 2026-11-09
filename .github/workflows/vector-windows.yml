@@ -53,7 +53,7 @@ jobs:
           python -m unittest discover -s server/tests -p test_highway_signs.py
       - name: Road geometry and terrain integration gate
         run: |
-          python tools/run_tests.py test_staging test_logqueue test_matslots test_tilepublish test_stream_reconnect test_runtimeprofiler_server --par 2 --timeout 180 --logs build/stream-integration-tests
+          python tools/run_tests.py test_asyncsubmit test_staging test_logqueue test_matslots test_tilepublish test_stream_reconnect test_runtimeprofiler_server --par 2 --timeout 180 --logs build/stream-integration-tests
           python tools/run_tests.py test_ru_infrastructure test_furniture test_buildings test_roads test_blockworker test_markings test_sign_packaging test_walk_clearance test_sidewalk_collision test_islands test_roadcorners test_junction_landing test_junction_corridor test_junction_pads test_approaches test_bridge_junction_surface test_building_passages test_bridge_chain_clearance test_grading test_under_deck test_underpass_profiles test_bridge_clearance test_bake_formats test_crossings test_carriageways test_worldbundle test_host_package test_package_stamps --par 2 --timeout 180 --logs build/road-integration-tests
       - name: Reported world geometry regressions
         run: python tools/run_tests.py test_abutment_pad test_gradesep test_bridgeattachments test_railways test_footbridges test_guardrails test_powerlines test_power_clearance test_vegetation test_building_overrides test_lamp_collision test_seacarve --par 2 --timeout 180 --logs build/road-integration-tests

@@ -26,6 +26,7 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 
+import asyncsubmit
 import numpy as np
 
 import beaches
@@ -1322,7 +1323,7 @@ class Tracker:
         # (Sinaia 2026-10-15: bare ground for minutes)
         for tx, ty in want[:max(0, self.per_pose - len(self.building))]:
             self.building.add((tx, ty))
-            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, build, aid, tx, ty)
+            fut = self.futs[(tx, ty)] = asyncsubmit.submit(loop, self.pool, build, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
         for k in [k for k in list(self.sent) if all(self._dist(k, *p) > self.drop_m for p in spots)
                   and all(self._dist(k, f[0], f[1]) > f[2] + roadsmod.TILE for f in foci)]:
@@ -1373,7 +1374,7 @@ class Tracker:
         want = [k for k in order if k not in self.sent and k not in self.building]
         for gx, gy in want[:max(0, self.per_pose - len(self.building))]:
             self.building.add((gx, gy))
-            fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, build, gx, gy)
+            fut = self.futs[(gx, gy)] = asyncsubmit.submit(loop, self.pool, build, gx, gy)
             fut.add_done_callback(lambda f, k=(gx, gy): self._built_geo(conn, k, f))
         for k in self._far_sent(spots, foci):
             self.sent.discard(k)

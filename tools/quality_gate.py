@@ -33,7 +33,7 @@ MODULES = (
     "test_bridgeattachments", "test_railways", "test_footbridges", "test_guardrails",
     "test_powerlines", "test_power_clearance", "test_vegetation", "test_building_overrides",
     "test_lamp_collision", "test_seacarve", "test_tilepublish", "test_colormatch",
-    "test_cpupin", "test_logqueue", "test_staging", "test_abutment_pad", "test_rail_crossing_assets", "test_native_stress",
+    "test_cpupin", "test_asyncsubmit", "test_logqueue", "test_staging", "test_abutment_pad", "test_rail_crossing_assets", "test_native_stress",
     "test_bridge_level_spans", "test_container", "test_designs", "test_de_signs",
     "test_germany", "test_lane_rules", "test_regionaldata",
 )
