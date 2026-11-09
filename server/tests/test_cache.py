@@ -63,6 +63,10 @@ class Base(unittest.TestCase):
 
     def make(self, cap_gb=None, scan=True):
         c = cachemod.Cache(self.root, cap_gb, now=self.clock, start=False)
+        # Size-cap tests use a roomy fake disk. Reserve-pressure tests below
+        # replace this explicitly; the developer machine's free space must not
+        # turn an ordinary cap eviction into a full cache eviction.
+        c.disk_usage = lambda _root: types.SimpleNamespace(total=500e9, used=100e9, free=400e9)
         if scan:
             c.scan()
         return c
