@@ -53,6 +53,34 @@ def vertical_hits(mesh, points, offset):
     return result
 
 
+def carriageway_obstacles(meshes, xy, z, width, box):
+    """Sample concrete/rail collision tops inside the driving lanes, not just placed guardrail rows."""
+    xy, z = np.asarray(xy), np.asarray(z)
+    arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
+    if arc[-1] < 1.:
+        return 0, []
+    along = np.arange(0., arc[-1] + .01, 1.)
+    q = np.c_[np.interp(along, arc, xy[:, 0]), np.interp(along, arc, xy[:, 1])]
+    zz = np.interp(along, arc, z)
+    tangent = np.gradient(q, axis=0)
+    tangent /= np.maximum(np.linalg.norm(tangent, axis=1)[:, None], 1e-9)
+    normal = np.c_[-tangent[:, 1], tangent[:, 0]]
+    sides = np.arange(-width / 2 + .8, width / 2 - .8, .2)
+    points = (q[:, None, :] + normal[:, None, :] * sides[None, :, None]).reshape(-1, 2)
+    floor = np.repeat(zz, len(sides))
+    inside = ((points > np.asarray(box[:2]) + 1.).all(1)
+              & (points < np.asarray(box[2:]) - 1.).all(1))
+    points, floor = points[inside], floor[inside]
+    bad = []
+    for label, mesh in meshes:
+        for point, ground, hits in zip(points, floor, vertical_hits(mesh, points, (*box[:2], 0.))):
+            hits = hits[(hits > ground + .35) & (hits < ground + 2.5)]
+            if len(hits):
+                bad.append({'mesh': label, 'xy': point.round(2).tolist(),
+                            'above_road_m': round(float(hits.max() - ground), 3)})
+    return len(points), bad
+
+
 def audit(name, cache):
     lat, lon = SITES[name]
     frame = geodesy.EnuFrame(lat, lon)
@@ -60,6 +88,7 @@ def audit(name, cache):
     aid = list(SITES).index(name) + 1
     grader, _ = state.anchor(aid, lat, lon)
     found, seen, grades, clearances, lane_rails = [], set(), [], [], []
+    entry_samples, entry_obstacles = 0, []
     for tx, ty in ((-1, -1), (0, -1), (-1, 0), (0, 0)):
         part = blockworker._tile_parts(lambda stage: None, frame, (tx, ty), 16, grader,
                                       False, False, False, False, 0., None, 'RU', None,
@@ -85,6 +114,11 @@ def audit(name, cache):
             xy, z = np.asarray(xy), np.asarray(z)
             if np.linalg.norm(np.maximum(np.maximum(xy.min(0), -xy.max(0)), 0)) > 200.:
                 continue
+            if name == 'makarov' and (tx, ty) == (0, 0):
+                count, bad = carriageway_obstacles([('road', part.dmesh), ('rail-walk', part.rmesh)],
+                                                   xy, z, spec.width, roads.tile_bbox(tx, ty))
+                entry_samples += count
+                entry_obstacles.extend(bad)
             key = (str(fid), tuple(np.round(xy[0], 2)))
             if key not in seen:
                 seen.add(key)
@@ -160,8 +194,9 @@ def audit(name, cache):
     return {'site': name, 'at': [lat, lon], 'overture': state.md.release, 'surveyed_heights': False,
             'decks': found, 'crossings': clearances, 'min_headroom_m': minimum,
             'suspected_lane_guardrails': lane_rails, 'drive_corridors': drive,
+            'entry_collision_samples': entry_samples, 'entry_collision_obstacles': entry_obstacles,
             'pass': enough and max(grades, default=1.) <= .08
-                    and minimum is not None and minimum >= 4.9 and not lane_rails
+                    and minimum is not None and minimum >= 4.9 and not lane_rails and not entry_obstacles
                     and (name != 'm12-service-join' or (len(drive) >= 6 and all(r['max_step_over_2m'] <= .4 for r in drive)))}
 
 
