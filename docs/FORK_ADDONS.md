@@ -1,5 +1,16 @@
 # Fork changes and the 1.9.0 add-on API
 
+Use `origin/dev` (`TecnaGamer/BeamNG.Earth`, branch `dev`) as the integration
+upstream for this fork. `main` and release tags remain the reference for official
+releases. Locally, `origin/HEAD` and the tracking branch `upstream-dev` point to
+`origin/dev`; `experiment/maplibre-dashboard` tracks the fork's branch for pushes.
+
+Fetch upstream before comparing or merging. Integrate `origin/dev` explicitly,
+resolve overlaps with the fork's world-generation changes, and run the quality
+gate and reported-site audit before building or deploying. Do not reuse an
+upstream cache format number for different fork output without invalidating it.
+
+
 The supported API in [ADDONS.md](ADDONS.md) provides player pose/place, GPS destination,
 teleportation, notifications and world/arrival events. The companion feed exposes position.
 It does not provide hooks for Python world generation, generated meshes/collision, tile
