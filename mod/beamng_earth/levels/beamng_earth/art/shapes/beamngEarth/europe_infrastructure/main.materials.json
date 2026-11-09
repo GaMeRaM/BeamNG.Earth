@@ -164,6 +164,27 @@
     "persistentId": "7984f1f1-cc99-5acb-a8e5-27cd384ca52a",
     "doubleSided": false
   },
+  "bne_eui_wood": {
+    "name": "bne_eui_wood",
+    "mapTo": "bne_eui_wood",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.42,
+          0.33,
+          0.22,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/wood_grain.png"
+      }
+    ],
+    "persistentId": "4d87527e-faf4-59e6-a2e0-cea2efc66146",
+    "doubleSided": false
+  },
   "bne_eui_green": {
     "name": "bne_eui_green",
     "mapTo": "bne_eui_green",

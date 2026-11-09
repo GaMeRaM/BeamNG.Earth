@@ -14,7 +14,7 @@ import ruinfra
 import roads
 import markings
 import roadsigns
-import townsigns
+import townentry as townsigns
 
 
 class RussianInfrastructure(unittest.TestCase):

@@ -28,7 +28,7 @@ jobs:
           npm run build
       - name: Mark the experimental build
         shell: bash
-        run: printf '1.8.2-beta.maplibre.%s\n' '${{ github.run_number }}' > VERSION
+        run: printf '1.9.0-beta.maplibre.%s\n' '${{ github.run_number }}' > VERSION
       - name: Rust kernels
         run: python tools/build_native.py
       - name: Python packages

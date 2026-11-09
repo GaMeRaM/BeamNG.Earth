@@ -93,10 +93,11 @@ class DeryabinaBridgeTest(unittest.TestCase):
             arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
             self.assertLessEqual(float(np.max(np.abs(np.diff(z) / np.diff(arc)))), roads.DECK_MAX_GRADE + .005)
 
-    def test_the_old_single_span_filter_reproduces_a_blocked_underpass(self):
+    def test_upstream_stub_fallback_also_keeps_the_underpass_open(self):
         with mock.patch.object(grading, '_merge_underpass_chains', lambda records: records):
             built = self.build()
-        self.assertLess(self.clearance(built), 2.)
+        # 1.9.0 also ignores tiny joined stubs and uses capped deck profiles.
+        self.assertGreaterEqual(self.clearance(built), 4.9)
 
 
 if __name__ == '__main__':

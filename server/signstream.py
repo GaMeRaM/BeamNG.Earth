@@ -76,16 +76,22 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
                 pts = np.column_stack(frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.))
                 decks.append({'deck': True, 'n': pts, 'w': spec.width})
     speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us))
-    dir_mesh, dir_faces = (None, {})
-    if dirs or country == 'RU':
-        dir_mesh, dir_faces = _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph,
-                                    out_dir, vfs_dir, country=country, directions=dirs)
+    dir_mesh, dir_faces = _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, country=country, directions=dirs)         if dirs or country == 'RU' else (None, {})
     rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country) if rsigns else None
-    if not (WORLD or us):
-        # Outside the US, only the country-specific direction/exit panels above.
+    import euguardrails
+    french = False
+    if euguardrails.enabled():
+        import countrybounds
+        # The anchor may be across the border: select the tile, then filter
+        # every French assembly at its actual position in highwaysigns.
+        samples = [frame.enu_to_geodetic(x, y, 0.) for x, y in
+                   ((x0, y0), (x0, y1), (x1, y0), (x1, y1), ((x0 + x1) / 2, (y0 + y1) / 2))]
+        french = 'FR' in countrybounds.bundled().codes_at([(la, lo) for la, lo, _ in samples])
+    if not (WORLD or us or french):
+        # (not the US: no guide signs)
         return write_tile(out_dir, vfs_dir, aid, tx, ty, (None, None, None, speeds, dir_mesh, rsign_mesh), dir_faces)
-    exits, miles = highwaysigns.build_tile(md, frame, tx, ty, elev, decks, left_hand, mph, urban, widths)
-    merges = mergesigns.build_tile(frame, tx, ty, [feats], elev, decks, urban, widths, left_hand, context)
+    exits, miles = highwaysigns.build_tile(md, frame, tx, ty, elev, decks, left_hand, mph, urban, widths, french=french)
+    merges = None if french else mergesigns.build_tile(frame, tx, ty, [feats], elev, decks, urban, widths, left_hand, context)
     return write_tile(out_dir, vfs_dir, aid, tx, ty, (exits, miles, merges, speeds, dir_mesh, rsign_mesh), dir_faces)
 
 
@@ -181,6 +187,10 @@ class Tracker:
             self.stale.clear()
             self.retry.clear()
         self.wanted = set(ready)
+        # Readiness gates the first build, not the lifetime of visible signs.
+        # A road retry/refresh temporarily loses readiness; keep its signs until
+        # the player leaves, with the same unloading margin as the roads.
+        self.wanted.update(k for k in self.sent if roads.tile_distance(*k, x, y) <= roads.DROP_M)
         for key in self.sent - self.wanted:
             conn.send({'type': 'roads_drop', 'anchorId': aid, 'key': f's{key[0]}_{key[1]}'})
         self.sent.intersection_update(self.wanted)

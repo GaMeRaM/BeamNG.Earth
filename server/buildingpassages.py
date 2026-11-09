@@ -123,6 +123,7 @@ def apply(items, passages):
                     continue
                 fragment = copy.copy(spec)
                 fragment.passage = True
+                fragment.fr_house = None
                 ring = np.asarray(piece.exterior.coords, np.float64)[:-1]
                 fragment.ring = ring if buildings._area2(ring) > 0 else ring[::-1]
                 fragment.min_h, fragment.height = bottom + low, high - low

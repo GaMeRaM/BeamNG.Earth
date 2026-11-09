@@ -14,7 +14,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import revisit  # noqa: E402
 import roads  # noqa: E402
-import townsigns as ts  # noqa: E402
+import townentry as ts  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 
