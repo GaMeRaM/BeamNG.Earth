@@ -118,25 +118,49 @@ end
 
 -- Pure: the setField calls (name, index, value) that recreate a stock definition on `layer`, its
 -- element count scaled by `share`, its radii by `dist` (default 1).
+-- Current stock JSON uses per-type arrays; older levels use Types records.
+local TYPE_FIELDS = { billboardUVs = true, useWorldRandomYaw = true, shapeFilename = true,
+  layer = true, invertLayer = true, probability = true, sizeMin = true, sizeMax = true,
+  sizeExponent = true, windScale = true, maxSlope = true, minElevation = true,
+  maxElevation = true, minClumpCount = true, maxClumpCount = true, clumpExponent = true,
+  clumpRadius = true }
 function M.fieldsFor(def, layer, share, dist)
-  local calls = {}
+  local calls, count = {}, 1
   dist = dist or 1
   for k, v in pairs(def) do
     if not SKIP[k] and v ~= jsonNull then
-      if k == 'maxElements' then v = math.max(1, math.floor((tonumber(v) or 0) * share + 0.5)) end
-      if M.RADIUS_FIELDS[k] and dist ~= 1 and tonumber(v) then v = tonumber(v) * dist end
-      calls[#calls + 1] = { k, 0, fieldValue(v) }
+      if TYPE_FIELDS[k] then
+        if type(v) == 'table' then
+          count = math.max(count, #v)
+          if k ~= 'layer' and k ~= 'invertLayer' then
+            for i, value in ipairs(v) do calls[#calls + 1] = { k, i - 1, fieldValue(value) } end
+          end
+        elseif k ~= 'layer' and k ~= 'invertLayer' then
+          calls[#calls + 1] = { k, 0, fieldValue(v) }
+        end
+      else
+        if k == 'maxElements' then v = math.max(1, math.floor((tonumber(v) or 0) * share + 0.5)) end
+        if M.RADIUS_FIELDS[k] and dist ~= 1 and tonumber(v) then v = tonumber(v) * dist end
+        calls[#calls + 1] = { k, 0, fieldValue(v) }
+      end
     end
   end
   if type(def.Types) == 'table' then
+    count = math.max(count, #def.Types)
     for i, t in ipairs(def.Types) do
       for k, v in pairs(t) do
-        if v ~= nil and v ~= jsonNull then
-          if k == 'layer' then v = (v ~= '' and layer or '') end
+        if v ~= nil and v ~= jsonNull and k ~= 'layer' and k ~= 'invertLayer' then
           calls[#calls + 1] = { k, i - 1, fieldValue(v) }
         end
       end
     end
+  end
+  -- Empty layers mean "everywhere" and inverted stock masks mean "everywhere
+  -- except this layer". Neither is valid for our grass, including dormant types
+  -- which the engine can select after an environment/temperature change.
+  for i = 0, count - 1 do
+    calls[#calls + 1] = { 'layer', i, layer }
+    calls[#calls + 1] = { 'invertLayer', i, '0' }
   end
   table.sort(calls, function(a, b) if a[1] ~= b[1] then return a[1] < b[1] end return a[2] < b[2] end)
   return calls

@@ -1441,17 +1441,9 @@ class Tracker:
         self.sent.add(key)
         m = {"type": f"{self.kind}_tile", "anchorId": self.aid, "key": geotiles.key(*key, self.z or geotiles.Z),
              "path": path, "n": n, "frame": [float(frame[0]), float(frame[1])], "pivot": float(pivot)}
-        s = getattr(conn, "s", None)
-        out_dir = getattr(s, "out_dir", None)
-        data = staging.inline_json(out_dir, path) if out_dir else None
-        if data is not None:
-            m["data"] = data
-        pool = getattr(s, "pool_shapes", None)
-        if shapes and pool is not None:
-            slots = pool(conn, shapes)
-            if slots:
-                m["slots"] = slots
-        conn.send(m)
+        import tilepublish
+        aid = self.aid
+        tilepublish.send(conn, m, shapes, valid=lambda: key in self.sent and aid == self.aid)
 
     def _near(self, x, y, m, unit=None, group=None):
         """Keys (tiles, or unit x unit squares of tiles) whose square, or whose group's square, comes within m."""
@@ -1493,16 +1485,10 @@ class Tracker:
         path, n = res
         self.sent.add(key)
         m = {"type": f"{self.kind}_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
-        out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
-        data = staging.inline_json(out_dir, path) if out_dir else None
-        if data is not None:                # (the game need not open the file: staging.inline_json)
-            m["data"] = data
-        pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
-        if self.kind in ("bldfar", "bldsky", "brfar") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
-            slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
-            if slots:
-                m["slots"] = slots
-        conn.send(m)
+        import tilepublish
+        shapes = {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"} if self.kind in ("bldfar", "bldsky", "brfar") else None
+        tilepublish.send(conn, m, shapes, valid=lambda: key in self.sent and aid == self.aid)
+
 
 
 def _off_road_positions(items, cells, specs_of, bounds):

@@ -4860,7 +4860,8 @@ class Server:
         first, then idle cached tiles, least recently used first."""
         used = self.names_in_use()
         owners = self.matslots.holders()
-        lost = [ck for ck in owners if ck not in self.tiles and ck not in self.tile_inflight and ck not in used]
+        lost = [ck for ck in owners if ck not in self.tiles and ck not in self.tile_inflight and ck not in used
+                and ck not in getattr(self, "_publishing_owners", ())]
         idle = (ck for ck in self.tiles if ck not in used and ck not in self.tile_inflight)
         n = self.matslots.reclaim(itertools.chain(lost, idle))
         log.debug("material names: %d reclaimed, %s", n, self.matslots.stats())
@@ -5085,18 +5086,41 @@ class Server:
 
         loop = asyncio.get_running_loop()
 
+        async def scan_and_prune():
+            def scan():
+                found = {}
+                for directory in (self.out_dir, self.cdae_dir):
+                    try:
+                        files = os.listdir(directory)
+                    except OSError:
+                        files = []
+                    index = {}
+                    for name in files:
+                        parts = name.split("_", 2)
+                        if len(parts) == 3:
+                            index.setdefault((parts[0], parts[1]), []).append(name)
+                    found[directory] = (set(files), index)
+                return found
+            listing = await loop.run_in_executor(None, scan)
+            self._prune_scheduled.discard(keep_from)
+            if any(a < keep_from for a in self.held_anchors()):
+                self.schedule_prune(keep_from)
+                return
+            self.prune(keep_from, listing=listing)
+
         def run():
-            # the mod may still show a previous anchor's tiles long after far_done (it applies
-            # far_removes only once every tile received before them is shown; a rebase reload
-            # can take minutes at speed): a file deleted under a live TSStatic gets reloaded
             if any(a < keep_from for a in self.held_anchors()):
                 loop.call_later(self.prune_recheck, run)
                 return
-            self._prune_scheduled.discard(keep_from)
-            self.prune(keep_from)
+            task = loop.create_task(scan_and_prune())
+            def done(future):
+                if not future.cancelled() and future.exception() is not None:
+                    self._prune_scheduled.discard(keep_from)
+                    log.error("session pruning failed", exc_info=future.exception())
+            task.add_done_callback(done)
         loop.call_later(self.prune_delay, run)
 
-    def prune(self, keep_from):
+    def prune(self, keep_from, listing=None):
         """Forget anchors older than keep_from and delete their files."""
         busy = {k[0] for k in self.tile_inflight}
         retry = False
@@ -5104,7 +5128,7 @@ class Server:
         # files on the event loop, 2 s stalls when the 3D map's view moved the origin often, 2026-11-07)
         # (and indexed once by "<kind>_<anchor id>_": a scan of every name for each anchor and kind was ~10 x anchors x
         # thousands of names, still 2-3 s on the loop after many origin moves, 2026-11-07; every kind is one word)
-        listing = {}
+        listing = {} if listing is None else listing
 
         def names(d):
             if d not in listing:

@@ -27,6 +27,7 @@ SITES = {
     'west-low': (56.83320, 60.32078),
     'west-missing': (56.83547, 60.29000),
     'west-rail': (56.84325, 60.24343),
+    'm12-service-join': (56.83528, 60.29114),
 }
 
 
@@ -128,13 +129,33 @@ def audit(name, cache):
                         clearances.append({'bridge': str(fid), 'under': other,
                                            'min_headroom_m': round(min(headroom), 3)})
         print(name, 'tile', tx, ty, flush=True)
+    drive = []
+    if name == 'm12-service-join':
+        for (fid, _), (spec, line) in ground.items():
+            if spec.cls not in ('motorway', 'trunk'):
+                continue
+            a, d = line[:-1], np.diff(line, axis=0)
+            t = np.clip(-(a * d).sum(1) / np.maximum((d * d).sum(1), 1e-9), 0., 1.)
+            distance = np.linalg.norm(a + t[:, None] * d, axis=1)
+            j = int(np.argmin(distance))
+            if distance[j] > 25.:
+                continue
+            q = a[j] + t[j] * d[j]
+            u = d[j] / np.linalg.norm(d[j])
+            normal = np.array([-u[1], u[0]])
+            for side in (-spec.width / 2 + .8, 0., spec.width / 2 - .8):
+                points = q + np.arange(-35., 36., 2.)[:, None] * u + side * normal
+                z = roadmesh.drawn_ground(frame, part.elev, points)
+                drive.append({'fid': fid, 'side_m': round(side, 2),
+                              'max_step_over_2m': round(float(np.max(np.abs(np.diff(z)))), 3)})
     minimum = min((r['min_headroom_m'] for r in clearances), default=None)
-    enough = len(found) >= (2 if name in ('west-missing', 'west-rail', 'west-low', 'islamov', 'makarov') else 1)
+    enough = len(found) >= (2 if name in ('west-missing', 'west-rail', 'west-low', 'islamov', 'makarov', 'm12-service-join') else 1)
     return {'site': name, 'at': [lat, lon], 'overture': state.md.release, 'surveyed_heights': False,
             'decks': found, 'crossings': clearances, 'min_headroom_m': minimum,
-            'suspected_lane_guardrails': lane_rails,
+            'suspected_lane_guardrails': lane_rails, 'drive_corridors': drive,
             'pass': enough and max(grades, default=1.) <= .08
-                    and minimum is not None and minimum >= 4.9 and not lane_rails}
+                    and minimum is not None and minimum >= 4.9 and not lane_rails
+                    and (name != 'm12-service-join' or (len(drive) >= 6 and all(r['max_step_over_2m'] <= .4 for r in drive)))}
 
 
 def main():

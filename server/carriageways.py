@@ -61,10 +61,11 @@ TOUCH_M = 0.75          # m: parts whose ends are this close are joined
 COUPLE_M = 2.5          # m: a chain's end this close to another chain meets it and is held to its height (a slip road's
                         # end lies up to ~2 m short of the node its overpass starts at: it stayed at the ground beside a
                         # deck 6 m up, and its surface pulled the ground under the deck's approach 2 m down)
-FAMILY = ("motorway", "trunk", "primary", "unclassified")
+FAMILY = ("motorway", "trunk", "primary", "unclassified", "service")
 # per class: steepest grade, K (m of vertical curve per 1 % of grade change: crest and sag alike)
 LIMITS = {"motorway": (0.05, 30.0), "trunk": (0.06, 25.0), "motorway_link": (0.07, 12.0), "trunk_link": (0.08, 10.0)}
-LIMITS.update({"primary": (.06, 15.), "primary_link": (.07, 12.), "unclassified": (.06, 12.)})
+LIMITS.update({"primary": (.06, 15.), "primary_link": (.07, 12.), "unclassified": (.06, 12.),
+               "service": (.12, 3.)})
 
 
 def family(cls):

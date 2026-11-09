@@ -35,6 +35,7 @@ MODULES = (
     "test_gradesep", "test_bridgeattachments", "test_railways", "test_footbridges",
     "test_guardrails", "test_powerlines", "test_power_clearance", "test_vegetation",
     "test_building_overrides", "test_lamp_collision", "test_seacarve",
+    "test_tilepublish", "test_colormatch", "test_cpupin", "test_abutment_pad",
 )
 
 

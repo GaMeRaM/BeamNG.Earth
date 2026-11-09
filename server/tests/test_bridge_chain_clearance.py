@@ -131,5 +131,49 @@ class LongDividedOverpassTest(unittest.TestCase):
             self.assertGreaterEqual(clearance, 5.9)
 
 
-if __name__ == '__main__':
+
+class M12ServiceJoinTest(unittest.TestCase):
+    """Captured 318 m service access must clear the short bridges and meet M-12."""
+    def test_access_profile_keeps_headroom_and_does_not_punch_the_carriageway(self):
+        fixture = Path(__file__).parent / 'fixtures'
+        rows = json.loads((fixture / 'ekb_m12_service_join.json').read_text())['roads']
+        f = roads_of(rows)
+        with np.load(fixture / 'ekb_m12_dem.npz') as dem:
+            xs, ys, zgrid = dem['x'], dem['y'], dem['z']
+        def raw(la, lo):
+            e, n, _ = FRAME.geodetic_to_enu(la, lo, np.zeros(np.shape(la)))
+            x = np.clip((e - xs[0]) / 40., 0., len(xs) - 1.00001)
+            y = np.clip((n - ys[0]) / 40., 0., len(ys) - 1.00001)
+            i, j = x.astype(int), y.astype(int)
+            a, b = x - i, y - j
+            return ((1 - b) * ((1 - a) * zgrid[j, i] + a * zgrid[j, i + 1])
+                    + b * ((1 - a) * zgrid[j + 1, i] + a * zgrid[j + 1, i + 1]))
+        g = grading.Grader(FRAME, FakeMD(f), raw)
+        def elev(la, lo):
+            return g.apply(la, lo, raw(la, lo), grading.ROAD_LIFT)
+        store = roads.ChainStore(roads.BridgeProfiles, lambda key: f, elev)
+        profiles = roads.ChainView(store, FRAME)
+        chunks = []
+        for tx, ty in ((-1, -1), (0, -1), (-1, 0), (0, 0)):
+            chunks += roads.build_tile(FRAME, tx, ty, [f], elev, bridges=profiles, walks=[])
+        mesh = roadmesh.deck(chunks, (0, 0, 0))
+        checked = 0
+        for fid, sp, xy, z, _ in profiles.parts([f], (-150, -150, 150, 150)):
+            for _, _, point in roads._crossings_by([xy], [np.asarray(rows[2]['xy'])])[0]:
+                pts = np.asarray([point])
+                ground = roadmesh.drawn_ground(FRAME, elev, pts)
+                hit = heights(mesh, pts)[0]
+                self.assertTrue(len(hit))
+                self.assertGreaterEqual(float(min(hit) - ground[0]), 5.)
+                checked += 1
+        self.assertEqual(checked, 2, 'both carriageways span the underpass')
+        x = np.arange(-35., 21., 2.)
+        for side in (-4., -2., 0., 2., 4.):
+            y = 1.418 - .229 * x + side
+            la, lo, _ = FRAME.enu_to_geodetic(x, y, 0.)
+            z = roadmesh.drawn_ground(FRAME, elev, np.c_[x, y])
+            self.assertLess(float(np.max(np.abs(np.diff(z)))), .35, 'no metre-scale hole at the access junction')
+
+
+if __name__ == "__main__":
     unittest.main()

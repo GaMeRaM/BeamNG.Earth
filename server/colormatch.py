@@ -919,6 +919,7 @@ class ColorMatch:
         self._lock = threading.RLock()
         self._cv = threading.Condition(self._lock)
         self._fields = OrderedDict()        # rk -> Field or EMPTY (decoded LRU)
+        self._ready = OrderedDict()         # validated field availability, no loop-side filesystem probes
         self._seams = OrderedDict()         # rk -> seams dict (decoded LRU)
         self._events = {}                   # rk -> Event, set when its field is done (or failed)
         self._failed = {}                   # rk -> monotonic time of the failure
@@ -1018,10 +1019,18 @@ class ColorMatch:
         if (value is EMPTY) if kind == "field" else len(value["y"]) == 0:
             _atomic_write(none, lambda f: f.write(json.dumps(m).encode()))
             self.disk.wrote(none)
+            if kind == "field":
+                self._remember_ready(rk, False)
             return
         arrays = value.arrays() if kind == "field" else {k: v for k, v in value.items() if k != "stats"}
         _atomic_write(npz, lambda f: np.savez_compressed(f, meta=np.array(json.dumps(m)), **arrays))
         self.disk.wrote(npz)
+        if kind == "field":
+            self._remember_ready(rk, True)
+
+    def _remember_ready(self, rk, value):
+        with self._lock:
+            self._lru_put(self._ready, rk, value, 4096)
 
     @staticmethod
     def _lru_put(od, k, v, size):
@@ -1031,19 +1040,12 @@ class ColorMatch:
             od.popitem(last=False)
 
     # --- requests ------------------------------------------------------------------------------
-    # prepare, request and status run on earthd's event loop: memory, the queue and stat calls only
+    # prepare, request and status run on earthd's event loop: memory and the queue only
     # (a field is decoded by field(), on a tile worker, outside the lock)
-    def _on_disk(self, rk):
-        """True (a field file of rk), False (its no-seam marker) or None: stat calls only."""
-        npz, none = self._paths(rk, "field")
-        return True if os.path.exists(npz) else False if os.path.exists(none) else None
-
     def _peek(self, rk):
-        """Whether rk is in memory, queued or on disk (then a tile worker reads it when needed)."""
+        """Memory-only availability; even a stat can stall for seconds on Windows."""
         with self._lock:
-            if rk in self._fields or rk in self._events:
-                return True
-        return self._on_disk(rk) is not None
+            return rk in self._fields or rk in self._events or rk in self._ready
 
     def _enqueue(self, rk):
         """Queue the field of rk (once). Caller holds the lock."""
@@ -1119,7 +1121,7 @@ class ColorMatch:
 
     def status(self, rk):
         """None (not ready), False (ready, nothing to correct) or True (ready with a correction).
-        On the event loop: from memory, else the files on disk (stat calls only). A region that failed
+        On the event loop: from memory, otherwise queue a worker to check disk. A region that failed
         (tried again later) is not ready: a file it has is one the renders could not use (another mode
         or reference chain), else it would not have been computed (earthd re-rendered a shown tile in a
         loop, or dropped it from the region's waiting list)."""
@@ -1129,7 +1131,12 @@ class ColorMatch:
                 return v is not EMPTY
             if rk in self._events or rk in self._failed:
                 return None
-        return self._on_disk(rk)
+        with self._lock:
+            if rk in self._ready:
+                return self._ready[rk]
+            if self._wanted(rk):
+                self._enqueue(rk)
+        return None
 
     def wait(self, rk, timeout):
         """The field of rk, queued if needed, waiting up to timeout s (tests, tools)."""
@@ -1169,9 +1176,15 @@ class ColorMatch:
             pacer.idle()                # the wait above was not busy time
             try:
                 t0 = time.perf_counter()
-                F, info = self._compute_field(rk)
-                info["seconds"] = round(time.perf_counter() - t0, 2)
-                self._store(rk, "field", F, info)
+                got = self._load(rk, "field")
+                cached = got is not None
+                if cached:
+                    F, info = got
+                else:
+                    F, info = self._compute_field(rk)
+                    info["seconds"] = round(time.perf_counter() - t0, 2)
+                    self._store(rk, "field", F, info)
+                self._remember_ready(rk, F is not EMPTY)
             except Exception as e:      # network trouble: tried again later
                 if self._closed:
                     return
@@ -1186,7 +1199,7 @@ class ColorMatch:
             with self._lock:
                 self._lru_put(self._fields, rk, F, self.mem)
                 self._events.pop(rk).set()
-                self._log_region(rk, F, dict(self.meta, **info), cached=False)
+                self._log_region(rk, F, dict(self.meta, **info), cached=cached)
             for fn in list(self._listeners):
                 try:
                     fn(rk, F is not EMPTY)

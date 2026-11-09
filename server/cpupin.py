@@ -160,9 +160,35 @@ def game_pids():
     return out
 
 
+_affinity_pool = None
+
+
+def _defer_affinity(function, cpus, *args):
+    """Keep process enumeration/syscalls off a live event loop; preserve change order."""
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    global _affinity_pool
+    if _affinity_pool is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _affinity_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='affinity')
+    def apply():
+        import logging
+        try:
+            function(cpus, *args)
+        except Exception:
+            logging.getLogger('earthd.cpupin').exception('background CPU affinity')
+    _affinity_pool.submit(apply)
+    return True
+
+
 def pin_game(cpus):
     """Every thread of the game on cpus; the number of threads set (0: no game, or not allowed). Windows: the number
     of processes (a process's mask holds all its threads)."""
+    if cpus and _defer_affinity(pin_game, cpus):
+        return 0
     if cpus and WIN:
         return sum(_win_set(pid, cpus) for pid in game_pids())
     if not cpus or not hasattr(os, "sched_setaffinity"):
@@ -236,6 +262,8 @@ def _children():
 def pin_tree(cpus, root=None):
     """Every thread of this process (or root) and of its descendants on cpus; the number of threads set (Windows: of
     processes)."""
+    if cpus and _defer_affinity(pin_tree, cpus, root):
+        return 0
     if cpus and WIN:
         procs = _win_processes()
         kids = {}

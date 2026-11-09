@@ -472,7 +472,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 7      # 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 8      # 8: cross-cell inferred bridge ranges and joined tunnel portals (upstream PR #1008); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -847,17 +847,30 @@ def _tunnel_reach(feats, i, rngs):
     pad = (TUNNEL_PORTAL_REACH_M + TUNNEL_PORTAL_GROW_M + 1.0) / np.array([kx, ky])
     boxes = _feature_boxes(feats)
     near = np.zeros(len(boxes), bool)
+    ports = []                      # (the portals in m from ring[0])
     for n in tun:                   # (the roads near the portals only)
         for f in rngs[n][:2]:
-            p = (np.array([np.interp(f * L, sm, m[:, 0]), np.interp(f * L, sm, m[:, 1])]) / [kx, ky]) + ring[0]
+            pm = np.array([np.interp(f * L, sm, m[:, 0]), np.interp(f * L, sm, m[:, 1])])
+            ports.append(pm)
+            p = pm / [kx, ky] + ring[0]
             near |= ((boxes[:, 0] <= p[0] + pad[0]) & (boxes[:, 2] >= p[0] - pad[0]) & (boxes[:, 1] <= p[1] + pad[1]) &
                      (boxes[:, 3] >= p[1] - pad[1]))
+    ports = np.asarray(ports, np.float64).reshape(-1, 2)
     gl, hw = [], []
     for j in np.flatnonzero(near):
         if j == i or specs[j] is None:
             continue
         for g in _raw_ground_parts(feats, j):
-            gl.append((np.asarray(g, np.float64)[:, :2] - ring[0]) * [kx, ky])
+            g = (np.asarray(g, np.float64)[:, :2] - ring[0]) * [kx, ky]
+            # a road ending at a portal is the tunnel road's own approach going on (a junction there), neither a road
+            # crossing over the portal nor one running alongside it: the kernel's shrink took it for the latter and
+            # moved the portal of an underpass under I-280 (37.6002, -122.4240) 5 m in, up onto the embankment; with
+            # the cover over its floor line under TUNNEL_OPEN_COVER the underpass was graded as an open road, a trench
+            # up to 3.5 m deep across both carriageways (2026-11-09)
+            if len(ports) and np.min(np.hypot(*(ports[:, None, :] - g[[0, -1]][None, :, :]).transpose(2, 0, 1))) \
+                    < TUNNEL_PORTAL_END_M:
+                continue
+            gl.append(g)
             hw.append(specs[j].width / 2)
     if not gl:
         return rngs
@@ -1241,7 +1254,8 @@ def _level_ranges(feats, i):
     roads and its neighbours'), where no range of the map's is, and its underpasses' tunnel ranges made ground."""
     out = tag_level_ranges(feats, i)
     hook = feats.__dict__.get("_bnge_gradesep")
-    extra = hook(feats).get(i) if hook is not None else None
+    extra = list(hook(feats).get(i) or ()) if hook is not None else []
+    extra += _gradesep_elsewhere(feats, i)
     if not extra:
         return out
     for a, b, _k in (r for r in extra if r[2] == "ground"):       # (an underpass: its tunnel range is ground)
@@ -1274,6 +1288,51 @@ def _level_ranges(feats, i):
         else:
             merged.append((a, b, k))
     return merged
+
+
+def _gradesep_elsewhere(feats, i):
+    """The grade separations (gradesep) the other cells feature i crosses found for it, when this cell is its home
+    (home_copy: every copy of it takes its ranges from here). A cell finds those of the crossings in it, and in the
+    default mode (gradesep.TUNNELS) one with no short tunnel of its own looks for none: CA-1's 952 m segment by Wilder
+    Tunnel (36.9621, -122.0845) is at home in the cell east of the tunnel's, which never found the bridge over it,
+    while the tunnel's cell made the tunnel ground; the path under the highway was graded through its embankment, a
+    trench 2 m deep (2026-11-09). [] where this cell is not its home or it stays in this cell."""
+    me = feats.__dict__.get("_bnge_cell")
+    near_hook = feats.__dict__.get("_bnge_neighbours")
+    if me is None or near_hook is None or _home_cell(feats, i) != me[0]:
+        return []
+    import mapcells
+    lon0, lat0, lon1, lat1 = (float(v) for v in _feature_boxes(feats)[i])
+    if not np.isfinite([lon0, lat0, lon1, lat1]).all():
+        return []
+    try:
+        cells = {str(k) for k in mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)} - {me[0]}
+    except ValueError:                  # (a feature over thousands of cells: its neighbours' all the same)
+        cells = None
+    if cells is not None and not cells:
+        return []
+    import revisit
+    try:
+        near = [f for f in near_hook() if f is not None and f.__dict__.get("_bnge_cell")]
+    except Exception as e:              # (not kept: made again with them)
+        log.debug("gradesep elsewhere: neighbours: %s: %s", type(e).__name__, e)
+        revisit.fault()
+        return []
+    fid = feats.ids[i]
+    out = []
+    for other in near:
+        if cells is not None and other.__dict__["_bnge_cell"][0] not in cells:
+            continue
+        hook = other.__dict__.get("_bnge_gradesep")
+        if hook is None:
+            continue
+        pos = other.__dict__.get("_id_pos")
+        if pos is None:
+            pos = other.__dict__["_id_pos"] = {f: j for j, f in enumerate(other.ids.tolist())}
+        j = pos.get(fid)
+        if j is not None:
+            out.extend(hook(other).get(j) or ())
+    return out
 
 
 def tag_level_ranges(feats, i):
@@ -7548,7 +7607,9 @@ def _deck_pack(decks):
 def _off_wall_tops(chunks, walls):
     """chunks with the ground roads' surfaces and lines cut away over the retaining walls' tops (a path on the bank
     above a cutting lay on the lattice's low strip under the top, in patches through it, Munich's McGraw-Graben).
-    Decks, tunnels and filled polygons are left as they are."""
+    Decks, tunnels, filled polygons and the other bridge surfaces (a deck's sidewalks and lines: "fixed" at its heights,
+    with its "fid") are left as they are: a plan-only test cut the Juri overpass's sidewalks and edge lines where the
+    walls of the cutting under it pass, dark gaps in the strips (BNE_WALL_FIXED=off: as before)."""
     if not walls:
         return chunks
     blockers = []
@@ -7561,7 +7622,8 @@ def _off_wall_tops(chunks, walls):
     out = []
     for c in chunks:
         n = c.get("n")
-        if c.get("deck") or c.get("tunnel") or c.get("poly") is not None or not n or len(n) < 2:
+        if (c.get("deck") or c.get("tunnel") or c.get("poly") is not None or not n or len(n) < 2
+                or (WALL_TOP_FIXED and c.get("fixed") and c.get("fid") is not None)):
             out.append(c)
             continue
         pts = np.asarray(n, np.float64)
@@ -7579,6 +7641,7 @@ def _off_wall_tops(chunks, walls):
 
 
 WALL_TOP_EDGE_M = 0.3   # a road surface goes this far onto a wall's top at most (_off_wall_tops)
+WALL_TOP_FIXED = os.environ.get("BNE_WALL_FIXED", "on") != "off"
 
 
 def _taper(xy, run):
@@ -8306,6 +8369,13 @@ PAD_WALL_DROP_M = 1.0
 PAD_RIM_STEP_M = 1.0
 
 
+# A bridge's abutment (its only deck at the joint, ending on the ground: ABUT_GROUND_M) has solid ground under the joint:
+# the pad squares up the approach roads' meeting with it and takes just the deck's end of it (PAD_ABUT_REACH_M). Reaching
+# PAD_REACH_M along the deck it took the parapets off 14 m of it at each end, a gap with a sloped end section either side
+# of it (the Juri overpass over Tallinna ringtee: 29 m of the 57 m deck had parapets; BNE_PAD_ABUT=off: as before).
+PAD_ABUT_ON = os.environ.get("BNE_PAD_ABUT", "on") != "off"
+PAD_ABUT_REACH_M = 0.5
+
 PAD_FORK_MARGIN_M = 0.45    # m: a fork's pad past its carriageways (roadmesh.PARAPET_W: the decks' own slab edges)
 PAD_FORK_OPEN_M = 0.1       # ... its rim open only where a carriageway crosses it (PAD_OPEN_M is past its sides)
 PAD_FORK_COS = 0.85         # two parts leaving a joint this close in direction run on side by side (a fork) ...
@@ -8380,6 +8450,24 @@ def _pad_height_groups(parts):
     return [[parts[i] for i in sorted(group)] for group in groups]
 
 
+def _abutment_end(part, ground_fn):
+    """part (line from the joint (k, 2), z, half width) of the only deck at a joint, cut to PAD_ABUT_REACH_M when its end
+    lies on the ground (within ABUT_GROUND_M of ground_fn there): its abutment, else unchanged. Pure given ground_fn."""
+    line, z, half = part
+    try:
+        gz = float(np.asarray(ground_fn(line[:1]), np.float64)[0])
+    except Exception:
+        return part
+    if not np.isfinite(gz) or z[0] - gz > ABUT_GROUND_M:
+        return part
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+    if s[-1] <= PAD_ABUT_REACH_M:
+        return part
+    keep = s < PAD_ABUT_REACH_M
+    cut = np.array([np.interp(PAD_ABUT_REACH_M, s, line[:, 0]), np.interp(PAD_ABUT_REACH_M, s, line[:, 1])])
+    return (np.vstack([line[keep], cut]), np.r_[z[keep], np.interp(PAD_ABUT_REACH_M, s, z)], half)
+
+
 def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     """[(ring (k, 3), centre (3,), walls [(pts (m, 3), out (m, 2))])] of the junction pads of the joints of decks
     [(fid, spec, xy (k, 2), z (k,))] (the bridge parts round tile box, as bridges.parts gives them) whose joint the box
@@ -8404,6 +8492,10 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
                 nodes.append(xy[at].copy())
             line, zz = (xy, z) if at == 0 else (xy[::-1], z[::-1])
             inc.setdefault(nd, []).append((line, zz, spec.width / 2))
+    if PAD_ABUT_ON:
+        for incident in inc.values():
+            if len(incident) == 1:
+                incident[0] = _abutment_end(incident[0], ground_fn)
     out = []
     gl = [(np.asarray(pts, np.float64)[:, :2], spec.width / 2) for _fid, spec, pts, _ in ground_roads
           if spec is not None and len(pts) >= 2]
@@ -9684,16 +9776,9 @@ class Tracker:
         path, n = res
         self.sent.add(key)
         m = {"type": "roads_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
-        out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
-        data = staging.inline_json(out_dir, path) if out_dir else None
-        if data is not None:                # (the game need not open the file: staging.inline_json)
-            m["data"] = data
-        pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
-        if pool is not None:                # its meshes at pooled shape paths (matslots.py)
-            slots = pool(conn, shape_files(aid, *key))
-            if slots:
-                m["slots"] = slots
-        conn.send(m)
+        import tilepublish
+        tilepublish.send(conn, m, shape_files(aid, *key), valid=lambda: key in self.sent and aid == self.aid)
+
 
 
 TILE_RETRY_S = 3.0              # s before a road tile whose build failed is built again (Tracker._built)
@@ -9978,8 +10063,7 @@ class GeoTracker:
         self.fails.pop(key, None)
         gkey = geotiles.key(*key)
         s = getattr(conn, "s", None)
-        out_dir = getattr(s, "out_dir", None)
-        pool = getattr(s, "pool_shapes", None)
+        import tilepublish
         tm = res.get("time") or {}
         self.stats["content_cpu"] += float(tm.get("content_cpu", 0.0))
         self.stats["skin_cpu"] += float(tm.get("skin_cpu", 0.0))
@@ -9993,20 +10077,13 @@ class GeoTracker:
             self.stats["content"] += 1
             m = {"type": "roads_tile", "anchorId": aid, "key": gkey, "path": path, "n": n,
                  "frame": list(geotiles.centre(*key)), "h": info.get("h")}
-            data = staging.inline_json(out_dir, path) if out_dir else None
-            if data is not None:
-                m["data"] = data
-            if ex:                      # (the parts this anchor needs exact: the mod loads those, not the base)
+            if ex:
                 m["exact"] = dict(ex)
-            if pool is not None:
-                import blockworker
-                names = blockworker.geo_names(gkey)
-                files = {w: n_ for w, n_ in names.items() if w not in ("json", "inputs") and w not in ex}
-                files.update({f"x:{w}": os.path.basename(p) for w, p in ex.items()})
-                slots = pool(conn, files)
-                if slots:
-                    m["slots"] = slots
-            conn.send(m)
+            import blockworker
+            names = blockworker.geo_names(gkey)
+            files = {w: n_ for w, n_ in names.items() if w not in ("json", "inputs") and w not in ex}
+            files.update({f"x:{w}": os.path.basename(p) for w, p in ex.items()})
+            tilepublish.send(conn, m, files, valid=lambda: key in self.sent)
         if aid != self.aid:             # (an old anchor's skin and variants: the new anchor's come on their own)
             return
         sk = res.get("skin")
@@ -10014,16 +10091,10 @@ class GeoTracker:
             self.skins.add(key)
             self.stats["skins"] += 1
             m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": sk[0]}
-            data = staging.inline_json(out_dir, sk[0]) if out_dir else None
-            if data is not None:
-                m["data"] = data
-            if pool is not None:
-                import blockworker
-                names = blockworker.geo_names(gkey, aid)
-                slots = pool(conn, {w: n_ for w, n_ in names.items() if w != "json"})
-                if slots:
-                    m["slots"] = slots
-            conn.send(m)
+            import blockworker
+            names = blockworker.geo_names(gkey, aid)
+            tilepublish.send(conn, m, {w: n_ for w, n_ in names.items() if w != "json"},
+                             valid=lambda: key in self.sent and aid == self.aid)
         for w in ex:
             self.shown.setdefault(key, {})[w] = aid
         self.stats["exact"] += len(ex)
@@ -10032,11 +10103,8 @@ class GeoTracker:
             self.need[(key, aid)] = mk
         elif ex:
             m = {"type": "roads_exact", "anchorId": aid, "key": gkey, "parts": dict(ex)}
-            if pool is not None:
-                slots = pool(conn, {w: os.path.basename(p) for w, p in ex.items()})
-                if slots:
-                    m["slots"] = slots
-            conn.send(m)
+            tilepublish.send(conn, m, {w: os.path.basename(p) for w, p in ex.items()},
+                             valid=lambda: key in self.sent and aid == self.aid)
         if make and c is None:
             self.need[(key, aid)] = {w: v for w, v in (self.need.get((key, aid)) or {}).items() if w not in ex}
 

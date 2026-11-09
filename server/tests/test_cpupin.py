@@ -65,8 +65,6 @@ class BoostTest(unittest.TestCase):
         self.assertEqual(os.sched_getaffinity(0), cpus)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class WindowsSplitTest(unittest.TestCase):
@@ -199,3 +197,34 @@ class PlayerSettingsTest(unittest.TestCase):
         with open(os.path.join(mod, "ui", "ui-vue", "mods", "beamngEarth", "earthSettingsStore.js"),
                   encoding="utf-8") as f:
             self.assertTrue(re.search(r'\{ id: "models3dmr", type: "bool", default: true,', f.read()), "the page's row")
+
+
+class AsyncAffinityTest(unittest.IsolatedAsyncioTestCase):
+    async def test_slow_process_snapshot_does_not_stop_messages(self):
+        import asyncio
+        import threading
+        from unittest.mock import patch
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        calls = []
+        def snapshot():
+            entered.set()
+            release.wait(5)
+            return [(123, 0, 'worker')]
+        def set_mask(pid, cpus):
+            calls.append((pid, cpus))
+            finished.set()
+            return 1
+        with patch.object(cpupin, 'WIN', True), patch.object(cpupin, '_win_processes', snapshot), patch.object(cpupin, '_win_set', set_mask):
+            try:
+                self.assertEqual(cpupin.pin_tree({1}, 123), 0)
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                await asyncio.wait_for(asyncio.sleep(.01), .5)
+                self.assertFalse(calls)
+            finally:
+                release.set()
+            self.assertTrue(await asyncio.to_thread(finished.wait, 2))
+        self.assertEqual(calls, [(123, {1})])
+
+
+if __name__ == "__main__":
+    unittest.main()

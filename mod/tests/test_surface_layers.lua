@@ -150,15 +150,19 @@ do
   T.check(f['material#0'] == 'm_grass' and f['radius#0'] == '50' and f['maxElements#0'] == '153000', 'fields copied, elements scaled')
   T.check(f['shapesCastShadows#0'] == '0' and f['windGustLength#0'] == nil, 'booleans as 0/1, nulls left out')
   T.check(f['name#0'] == nil and f['position#0'] == nil and f['persistentId#0'] == nil and f['Types#0'] == nil, 'identity fields left out')
-  T.check(f['layer#0'] == 'bngEarthGroundGrass' and f['layer#1'] == 'bngEarthGroundGrass' and f['layer#2'] == nil,
-    'every plant type on our layer; an empty type stays empty')
+  T.check(f['layer#0'] == 'bngEarthGroundGrass' and f['layer#1'] == 'bngEarthGroundGrass' and f['layer#2'] == 'bngEarthGroundGrass',
+    'every plant type stays bound, including types without an explicit stock layer')
   T.check(f['billboardUVs#0'] == '0 0 1 0.5' and f['sizeMin#0'] == '0.15' and f['probability#0'] == nil and f['sizeMax#1'] == '0.5',
     'type fields by index')
   local again = gc.fieldsFor(def, 'bngEarthGroundGrass', 0.5)
   local same = #again == #calls
   for i = 1, #calls do same = same and again[i][1] == calls[i][1] and again[i][2] == calls[i][2] and again[i][3] == calls[i][3] end
   T.check(same, 'deterministic order')
-  T.check(gc.fieldsFor({ maxElements = 10 }, 'x', 0.01)[1][3] == '1', 'at least one element')
+  local minimum
+  for _, c in ipairs(gc.fieldsFor({ maxElements = 10 }, 'x', 0.01)) do
+    if c[1] == 'maxElements' then minimum = c[3] end
+  end
+  T.check(minimum == '1', 'at least one element')
   local names = {}
   local unique = true
   for _, d in ipairs(gc.DEFS) do

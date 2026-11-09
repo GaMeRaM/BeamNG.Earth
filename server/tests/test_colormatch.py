@@ -715,6 +715,18 @@ class NetfetchKindTest(unittest.TestCase):
 
 
 class LoopSideTest(unittest.TestCase):
+    def test_loop_requests_do_not_even_stat_cold_cache_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = cm.ColorMatch(tmp, "s2", region_z=RZ)
+            c.close()
+            with mock.patch.object(c, '_paths', side_effect=AssertionError('loop touched filesystem')):
+                w = World()
+                rk = regions(w)[0]
+                c.prepare(*lonlat(w, *w.P))
+                c.request((U, 16, rk[0] * 4, rk[1] * 4))
+                self.assertIsNone(c.status(rk))
+                self.assertTrue(c._peek(rk))
+
     def test_no_field_decoded_on_the_event_loop(self):
         """prepare (anchor), request (prefetch) and status (a finished tile) run on earthd's event
         loop: they never decode a field (stat calls only); field() (tile workers) decodes it without

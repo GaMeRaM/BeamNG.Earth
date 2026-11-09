@@ -2905,10 +2905,18 @@ class _Planner:
                   for ln, cls, fid, lv, h in zip(c["bridges"], c.get("bridge_cls", [None] * nb),
                                                  c.get("bridge_ids", [None] * nb), c.get("bridge_levels", [1.0] * nb),
                                                  c.get("bridge_half", [4.0] * nb))]
+        through = [line for line, _h, cl in c["ground"] if cl in ("motorway", "trunk", "primary")]
         for ln, br, cls, fid, lv, half in items:
             if _cw.family(cls) is None or len(ln) < 2:
                 continue
             ln = np.asarray(ln, np.float64)[:, :2]
+            # A short underpass access joining the through road shares its
+            # junction height; planning it independently punches the raised road.
+            if cls == 'service':
+                if br or roadsmod._length(ln) > 1000.:
+                    continue
+                if not any(min(_seg_dist(line, ln[0]), _seg_dist(line, ln[-1])) <= _cw.COUPLE_M for line in through):
+                    continue
             key = ("b" if br else "g", round(float(ln[0, 0]), 1), round(float(ln[0, 1]), 1),
                    round(float(ln[-1, 0]), 1), round(float(ln[-1, 1]), 1))
             if key in seen:
@@ -3075,7 +3083,7 @@ class _Planner:
         nonfam = []
         for c in cs:
             for line, bc in zip(c["bridges"], c.get("bridge_cls", [None] * len(c["bridges"]))):
-                if bc is not None and _cw.family(bc) is None and len(line) >= 2:
+                if bc is not None and (_cw.family(bc) is None or bc == "service") and len(line) >= 2:
                     nonfam.append(np.asarray(line, f64)[:, :2])
 
         def zraw(q):
@@ -3088,8 +3096,14 @@ class _Planner:
             return np.asarray(self.elev(np.asarray(a, f64), np.asarray(b_, f64)), f64).ravel()
         # the other roads on the ground (under the decks: they dip to clear them, except on low ground, where the
         # deck rises instead: a dug road there is under the water table, Wezep's street under the A28)
-        streets = [(np.asarray(line, f64)[:, :2], float(half)) for c in cs for line, half, gc in c["ground"]
-                   if _cw.family(gc) is None and gc not in _xs.PATHS and gc not in UNGRADED and len(line) >= 2]
+        def handled_service(line):
+            key = ("g", round(float(line[0, 0]), 1), round(float(line[0, 1]), 1),
+                   round(float(line[-1, 0]), 1), round(float(line[-1, 1]), 1))
+            return key in fam_keys
+        streets = [(np.asarray(line, f64)[:, :2], float(half)) for c in cs
+                   for line, half, gc in c["ground"]
+                   if (_cw.family(gc) is None or (gc == "service" and not handled_service(line)))
+                   and gc not in _xs.PATHS and gc not in UNGRADED and len(line) >= 2]
 
         def nearest(n, part_i, q):
             xy, s, pi, br, raw = samples[n]
