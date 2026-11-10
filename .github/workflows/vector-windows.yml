@@ -33,7 +33,7 @@ jobs:
           npm run build
       - name: Mark the experimental build
         shell: bash
-        run: printf '1.9.0-beta.maplibre.%s\n' '${{ github.run_number }}' > VERSION
+        run: printf '%s.maplibre.%s\n' "$(cat VERSION)" '${{ github.run_number }}' > VERSION
       - name: Rust kernels
         if: github.event_name != 'workflow_dispatch' || inputs.build_native
         run: python tools/build_native.py

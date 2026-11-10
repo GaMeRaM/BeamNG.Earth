@@ -276,6 +276,8 @@ class MapData:
         self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher, os.path.join(cache_dir, "dem", "lidarbc"))
         import lod2roofs                # (Germany's measured roofs: shape and height of each building)
         self.lod2_roofs = lod2roofs.Source(cache_dir, self.fetcher) if lod2roofs.ON else None
+        import bdtopo                   # (France's measured buildings: IGN BD TOPO, joined in cell(), BNE_BDTOPO)
+        self.bdtopo = bdtopo.Source(cache_dir, self.fetcher) if bdtopo.ON else None
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
         import regionaldata
@@ -334,7 +336,47 @@ class MapData:
         except Exception as e:      # (no lane data: the markings' guesses)
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
 
+    def _bdtopo(self, key, layer, feats):
+        """A French buildings layer with IGN BD TOPO's measured heights, storeys, materials and use (bdtopo.py), joined
+        once its cell's records are here; never waits for them nor asks for them: the building tiles do, for their own
+        cells (bdtopo_wait), not every reader of the outlines (the town coverage's 30-odd cells round a tile, the
+        trees' masks). Returns the layer."""
+        src = getattr(self, "bdtopo", None)
+        if src is None or layer != "buildings" or feats is None or feats.__dict__.get("_bdtopo") is not None:
+            return feats
+        import bdtopo
+        if not bdtopo.covers(_key(key).bounds()):
+            feats.__dict__["_bdtopo"] = False
+            return feats
+        recs = src.cached(key)
+        if recs is None:
+            return feats
+        try:
+            got = bdtopo.join(feats, recs) if len(feats) else None
+        except Exception as e:      # (the map's attributes alone)
+            log.warning("bdtopo join %s: %s: %s", key, type(e).__name__, e)
+            got = None
+        if got is not None:
+            feats.attrs = got       # (one swap: a reader holds either the old attrs or the new ones)
+        feats.__dict__["_bdtopo"] = recs.n
+        return feats
+
+    def bdtopo_wait(self, keys, wait=True):
+        """A building tile's wait for its French cells' measured buildings (bdtopo.Source.wait: together, bounded;
+        wait=False: their downloads started, not waited for). True when they are all here (or none is French); else
+        the tile is a revisit fault (built from the map's attributes alone: not kept, built again with them)."""
+        src = getattr(self, "bdtopo", None)
+        if src is None:
+            return True
+        ks = [_key(k) for k in keys]
+        ok = src.wait(ks) if wait else (not src.prefetch(ks) and src.wait(ks))
+        if not ok:
+            revisit.fault()
+        return ok
+
     def versions(self):
+        import europewalks
+
         rails = getattr(self, "rail_tags", None)
         lanes = getattr(self, "lane_tags", None)
         v = {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
@@ -344,6 +386,8 @@ class MapData:
              "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
         if roadsmooth.ON:                       # (a key only while on: what is built without it keeps its cache keys)
             v["roadsmooth"] = roadsmooth.VERSION
+        if europewalks.enabled():               # (PR #505's European street edges: the same, keyed only while on)
+            v["street_edges"] = europewalks.VERSION
         return v
 
     def bundle_versions(self):
@@ -399,20 +443,33 @@ class MapData:
         """True when the layer's file exists (not read: cheap enough for the event loop)."""
         return os.path.exists(self.path(key, layer))
 
-    def layer_provenance(self, key, layer):
-        """The provenance dict of a cached layer file, None when it is not cached (or has none): only that entry of
-        the file is read (np.load is lazy per array), and remembered per file (credits.feature_ids asks every second,
-        from the event loop). Never fetches."""
+    def layer_provenance(self, key, layer, wait=False):
+        """The provenance dict of a cached layer file, None when it is not cached (or has none, or, wait false, not
+        read yet: read on a thread of its own, the next ask has it): only that entry of the file is read (np.load is
+        lazy per array), and remembered per file (credits.feature_ids asks every second, from the event loop). Never
+        fetches."""
         path = self.path(_key(key), layer)
         memo = self.__dict__.setdefault("_prov_memo", {})
         if path in memo:
             return memo[path]
+        if not wait:
+            # (a first read, or a file not built yet, off the event loop: on a busy hard disk opening the cell took
+            # 5.2 s of the loop, GitHub #1054; the caller asks again a second later)
+            self._prov_ask(path)
+            return None
+        return self._prov_read(path)
+
+    PROV_MISS_S = 30.0      # s before a cell file that was not there is looked for again
+
+    def _prov_read(self, path):
+        memo = self.__dict__.setdefault("_prov_memo", {})
         p = None
         try:
             with np.load(path, allow_pickle=False) as z:
                 if "provenance" in z.files:
                     p = json.loads(str(z["provenance"]))
         except FileNotFoundError:
+            self.__dict__.setdefault("_prov_miss", {})[path] = time.monotonic()
             return None                 # (not remembered: it may be built later)
         except Exception:
             p = None
@@ -420,6 +477,34 @@ class MapData:
             memo.clear()
         memo[path] = p
         return p
+
+    def _prov_ask(self, path):
+        """Read path's provenance on the provenance thread (one at a time, newest asks first)."""
+        miss = self.__dict__.setdefault("_prov_miss", {})
+        if time.monotonic() - miss.get(path, -1e9) < self.PROV_MISS_S:
+            return
+        with self.__dict__.setdefault("_prov_lock", threading.Lock()):
+            queue = self.__dict__.setdefault("_prov_queue", [])
+            if path in queue:
+                return
+            queue.append(path)
+            if self.__dict__.get("_prov_thread") is None:
+                t = threading.Thread(target=self._prov_loop, name="mapdata provenance", daemon=True)
+                self.__dict__["_prov_thread"] = t
+                t.start()
+
+    def _prov_loop(self):
+        while True:
+            with self.__dict__["_prov_lock"]:
+                queue = self.__dict__["_prov_queue"]
+                if not queue:
+                    self.__dict__["_prov_thread"] = None
+                    return
+                path = queue.pop()
+            try:
+                self._prov_read(path)
+            except Exception:
+                pass
 
     def _load(self, path):
         """A layer file's arrays, or None when it is missing or unreadable (truncated, a damaged
@@ -825,6 +910,8 @@ class MapData:
             else:
                 entry, hit, dt = results[layer]
                 cd.layers[layer], prov, _ = entry
+            if layer == "buildings":
+                self._bdtopo(key, layer, cd.layers[layer])
             if prov:
                 pid = prov["id"]
                 if pid in provs:            # roads + connectors: one transportation record
@@ -900,7 +987,11 @@ class MapData:
         return len(todo)
 
     def side_prefetch(self, keys):
-        """The side_sources' background reads of these cells (a road tile's own) started now, without waiting."""
+        """The side_sources' background reads of these cells (a road tile's own) started now, without waiting; France's
+        measured buildings with them (bdtopo: a tile's own cells only, not the two rings of outlines warm() asks for
+        roadwidth's walls: 30 downloads for 4 Aix tiles built from 2 cells)."""
+        if getattr(self, "bdtopo", None) is not None:
+            self.bdtopo.prefetch(keys)
         for src in self.side_sources:
             try:
                 src.prefetch(keys)
@@ -912,6 +1003,8 @@ class MapData:
         is on disk; not loaded or mirrored (the session's cells keep the mirror). True when built now. Raises the
         sources' netfetch errors."""
         key = _key(key)
+        if layer == "buildings" and getattr(self, "bdtopo", None) is not None and self.bdtopo.wanted(key):
+            self.bdtopo.load(key, "predownload")    # (a saved area: France's measured buildings with it)
         path = self.path(key, layer)
         if os.path.exists(path):
             return False

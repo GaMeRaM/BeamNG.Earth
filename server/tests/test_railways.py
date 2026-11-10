@@ -331,6 +331,17 @@ class RailwayTest(unittest.TestCase):
         o = np.argsort(pts[:, 0])
         return f, pts[o, 0], z[o]
 
+    def test_a_deck_up_a_steep_line_does_not_lift_the_track_below(self):
+        """GitHub #1051, Andermatt: a rack railway climbing ~10 % from the station to a bridge up the slope; the deck's
+        height, carried down the track at GRADE, stood the station's tracks 14 m over their own ground. A deck at its
+        line's level lifts nothing: the track below keeps its own bed."""
+        def slope(xy):          # level to x = -100 (the station), then 10 % up
+            return 1000.0 + 0.10 * np.maximum(xy[:, 0] + 100.0, 0.0)
+        f, x, z = self._line(slope)
+        ground = slope(np.c_[x, np.zeros(len(x))])
+        station = x < -150
+        self.assertLess(float(np.abs(z[station] - ground[station]).max()), 0.5, "the station on its own ground")
+
     def test_bridge_over_a_dip_keeps_the_line_level(self):
         """A short bridge over a stream or an underpass road (the ground 3 m down under it): the deck straight at the
         line's height, no ramps (a 6 m clearance stood an 8 m culvert's track 6.8 m up on 4.5 m ramps, 2026-10-25)."""
@@ -583,6 +594,23 @@ class UnderpassNeighbourTest(unittest.TestCase):
         self.assertIsNone(railways.tile_mesh(FRAME, 0, 0, [], flat, return_decks=True)[0])
         plain = railways.tile_mesh(FRAME, 0, 0, [f], flat)
         self.assertEqual(len(plain), 5, "without return_decks the mesh tuple is unchanged")
+
+    def test_a_rail_bridge_under_a_model_bridge_is_not_drawn(self):
+        """GitHub #1071: Perth's Narrows and Mount Henry bridges' 3dmr models carry their railways; the rail decks were
+        drawn through them. The bridge is left out, the track on the ground either side stays."""
+        f = features([[(-400.0, 100.0), (100.0, 100.0)], [(100.0, 100.0), (150.0, 100.0)],
+                      [(150.0, 100.0), (640.0, 100.0)]], ["standard_gauge"] * 3, subtypes=["rail"] * 3,
+                     flags=[(1, "is_bridge")])
+        model = lambda xy: (np.asarray(xy)[:, 0] > 95.0) & (np.asarray(xy)[:, 0] < 155.0)    # noqa: E731
+        mesh, decks = railways.tile_mesh(FRAME, 0, 0, [f], flat, return_decks=True, under=model)
+        self.assertIsNotNone(mesh)
+        self.assertEqual(decks, [])
+        P = mesh[0]
+        self.assertFalse(((P[:, 0] > 105.0) & (P[:, 0] < 145.0)).any(), "nothing of the bridge")
+        self.assertTrue((P[:, 0] < 90.0).any() and (P[:, 0] > 160.0).any(), "the track either side")
+        mesh, decks = railways.tile_mesh(FRAME, 0, 0, [f], flat, return_decks=True,
+                                         under=lambda xy: np.zeros(len(xy), bool))
+        self.assertEqual(len(decks), 1)
 
     def test_non_crossing_neighbour_stays_on_ground(self):
         for y in (114.0, 122.0):

@@ -231,16 +231,18 @@ class GuardrailForestTest(unittest.TestCase):
             self.assertAlmostEqual(row[2], 0.0, delta=0.05)
             self.assertAlmostEqual(row[3], 20.0, delta=0.05)
 
-    def test_side_rail_inside_bridge_lane_is_not_a_median(self):
+    def test_side_rail_inside_bridge_lane_moves_into_median_gap(self):
         decks = [{"n": [[0., -8., 20.], [100., -8., 20.]], "w": 14.},
                  {"n": [[0., 8., 20.], [100., 8., 20.]], "w": 14.}]
-        # Between the axes but 3 m INSIDE the south carriageway: it used
-        # to be mistaken for a median merely because the axes straddled it.
-        self.assertEqual(self.rows_for([[10., -4.], [90., -4.]], 12., decks,
-                                      tags={"bridge": "yes"}), [])
-        rows = self.rows_for([[10., 0.], [90., 0.]], 12., decks,
-                            tags={"bridge": "yes"})
-        self.assertTrue(rows, 'the real separator outside both carriageways stays')
+        # Upstream now relocates mapped median barriers outside both lanes.
+        # This also clears the fork's deeply misplaced side-rail case.
+        for y in (-4., 0.):
+            rows = self.rows_for([[10., y], [90., y]], 12., decks,
+                                 tags={"bridge": "yes"})
+            self.assertTrue(rows)
+            for row in rows:
+                self.assertLessEqual(abs(row[2]), 1.0)
+                self.assertAlmostEqual(row[3], 20.)
 
     def test_side_rail_inside_approach_moves_to_the_bridge_edge(self):
         ends = guardrails._deck_ends([{'n': [[0., 0., 20.], [100., 0., 20.]], 'w': 8.}])
@@ -287,6 +289,17 @@ class GuardrailForestTest(unittest.TestCase):
         decks = [{"n": [[0.0, -6.0, 20.0], [100.0, -6.0, 20.0]], "w": 8.0},
                  {"n": [[0.0, 6.0, 20.0], [100.0, 6.0, 20.0]], "w": 8.0}]
         rows = self.rows_for([[10.0, 0.0], [90.0, 0.0]], 12.0, decks)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertAlmostEqual(row[2], 0.0, delta=0.05)
+            self.assertAlmostEqual(row[3], 20.0, delta=0.05)
+
+    def test_a_median_on_a_deck_s_lanes_goes_to_the_gap_between_the_decks(self):
+        """GitHub #1025: the S7's viaducts, a median barrier mapped where a drawn deck reaches over it, 1 m on its lanes:
+        moved to the middle of the gap between the decks' edges (y -2..2: 0), at deck height."""
+        decks = [{"n": [[0.0, -6.0, 20.0], [100.0, -6.0, 20.0]], "w": 8.0},
+                 {"n": [[0.0, 6.0, 20.0], [100.0, 6.0, 20.0]], "w": 8.0}]
+        rows = self.rows_for([[10.0, -3.0], [90.0, -3.0]], 12.0, decks)
         self.assertTrue(rows)
         for row in rows:
             self.assertAlmostEqual(row[2], 0.0, delta=0.05)
@@ -532,6 +545,22 @@ class GuardrailForestTest(unittest.TestCase):
                 self.assertTrue(beside)
                 for row in beside:
                     self.assertAlmostEqual(row[2], 8.0, delta=0.05)
+
+    def test_a_median_barrier_on_a_lane_goes_to_the_gap_between_the_carriageways(self):
+        """GitHub #1025 (the S7 at Gdansk): a jersey barrier mapped on the median line, the drawn carriageways reaching
+        over it, stood 1.2-1.6 m into a lane. It goes to the middle of the gap between their edges; one already in
+        the gap stays where it was mapped."""
+        # two 12 m carriageways 15 m apart: edges at y=6 and y=9, the gap's middle y=7.5
+        roads_ = [self.road([[0.0, 0.0], [100.0, 0.0]], width=12.0),
+                  self.road([[0.0, 15.0], [100.0, 15.0]], width=12.0)]
+        on_lane = self._on_road("jersey_barrier", [[10.0, 5.0], [90.0, 5.0]], roads_)
+        self.assertTrue(on_lane)
+        for row in on_lane:
+            self.assertAlmostEqual(row[2], 7.5, delta=0.05)
+        in_gap = self._on_road("jersey_barrier", [[10.0, 8.2], [90.0, 8.2]], roads_)
+        self.assertTrue(in_gap)
+        for row in in_gap:
+            self.assertAlmostEqual(row[2], 8.2, delta=0.05)
 
     def test_a_skewed_lower_road_rail_stays_on_the_ground(self):
         """A lower road 23° off a deck still clears the deck's parallel test (Drie Merenweg under the

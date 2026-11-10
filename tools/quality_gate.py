@@ -36,6 +36,8 @@ MODULES = (
     "test_cpupin", "test_asyncsubmit", "test_logqueue", "test_staging", "test_abutment_pad", "test_rail_crossing_assets", "test_native_stress",
     "test_bridge_level_spans", "test_container", "test_designs", "test_de_signs",
     "test_germany", "test_lane_rules", "test_regionaldata",
+    "test_bdtopo",
+
 )
 
 

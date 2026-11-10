@@ -31,7 +31,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -51,8 +51,9 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { ru_delineator = true, ru_pole_lamp = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
-  wallsign_lemon = true, wallsign_turboburger = true }
+M.NO_COLLIDE = { ru_delineator = true, ru_pole_lamp = true, tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+  wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
+
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
 -- ~20 shapes among ~130k items cost ~100 ms. A frame touches shapes whose items add up to SHAPE_ITEMS_PER_FRAME at most
@@ -90,13 +91,14 @@ M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshe
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
   rrgate_eu_l = true, rrgate_l = true, catmast = true, catmast_eu = true, catpost = true, catpost_eu = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
   sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
-  wallsign_turboburger = true }
+  wallsign_turboburger = true, rooftank = true }
 
 local ECA = '/levels/east_coast_usa/art/shapes/'
 local WCA = '/levels/west_coast_usa/art/shapes/'
 local UT = '/levels/Utah/art/shapes/'
 local JV = '/levels/johnson_valley/art/shapes/'
 local JRI = '/levels/jungle_rock_island/art/shapes/'
+local HIR = '/levels/hirochi_raceway/art/shapes/'
 local IT = '/levels/italy/art/shapes/'
 -- the stock shapes per group with their measured heights (m; TSStatic world boxes, 2026-10-13/14)
 M.CATALOG = {
@@ -113,6 +115,11 @@ M.CATALOG = {
     { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
     { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
   },
+  -- low ground plants of a roundabout island's planting (server roundabouts.plant_rows): patches of clover and daisies, ferns
+  -- (Hirochi's groundcover shapes, measured 2026-11-10: a patch 2.3 / 1.45 m wide, 0.17 / 0.11 high; ferns 0.62 .. 1.49 high)
+  tuft = { { HIR .. 'groundcover/daisies_closetop', 0.11 }, { HIR .. 'groundcover/Clover_closetop', 0.17 } },
+  fern = { { HIR .. 'groundcover/lush_ferns_02_a', 0.62 }, { HIR .. 'groundcover/lush_ferns_02_b', 0.75 },
+           { HIR .. 'groundcover/lush_ferns_01_a', 1.0 }, { HIR .. 'groundcover/lush_ferns_01_b', 1.49 } },
   conifer = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
@@ -319,6 +326,23 @@ M.CATALOG.chainlink = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
 M.CATALOG.noisewall = { { WCA .. 'objects/s_concrete_noiseblocker', 2.4 } }
 M.GROUP_MAX_M.chainlink = 800
 M.GROUP_MAX_M.noisewall = 2000
+for group, asset in pairs(require('beamngEarth/frFenceAssets')) do
+  M.CATALOG[group] = { asset }
+  M.GROUP_MAX_M[group] = 320
+  M.ONE_SPELLING[group] = true
+end
+M.CATALOG.fr_hedge = { M.CATALOG.shrub[1] } -- Stock East Coast USA broadleaf shrub.
+M.CATALOG.fr_fence_hedge = M.CATALOG.fr_hedge -- Older server rows still use the same stock bush.
+M.GROUP_MAX_M.fr_hedge = 350
+M.GROUP_MAX_M.fr_fence_hedge = 350
+M.NO_COLLIDE.fr_hedge = true
+M.NO_COLLIDE.fr_fence_hedge = true
+for group, asset in pairs(require('beamngEarth/frRadarAssets')) do
+  M.CATALOG[group] = { { asset[1], asset[2] } }
+  M.GROUP_MAX_M[group] = asset[3]
+  M.ONE_SPELLING[group] = true
+  M.NO_COLLIDE[group] = true
+end
 -- Picnic tables and grills in parks (server picnic.py): Utah's table (2 x 1.4 m, 0.85 m high) and East
 -- Coast's grill. The table's materials live with Utah's buildings.
 M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }
@@ -340,6 +364,10 @@ M.CATALOG.container = {
 }
 M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
 M.CATALOG.barn = { { '/levels/hirochi_raceway/art/shapes/buildings/farm_barn', 8.41 } }
+-- New York's rooftop water tanks (server buildings.tank_rows): Small Island's tank on legs (its materials with Small
+-- Island's buildings)
+M.CATALOG.rooftank = { { '/levels/small_island/art/shapes/buildings/si_water_tower', 6.1 } }
+M.GROUP_MAX_M.rooftank = 1500
 M.GROUP_MAX_M.celltower = 2500
 M.GROUP_MAX_M.watertower = 2000
 M.GROUP_MAX_M.container = 500
@@ -380,6 +408,9 @@ for group, a in pairs(require('beamngEarth/europeStopAssets')) do
 end
 local MATERIALS = {
   '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps',
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_radars',
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_fences',
+
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_stops',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_road_details',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic',
@@ -400,7 +431,9 @@ local MATERIALS = {
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
   UT .. 'ut_roadsigns', UT .. 'buildings', '/levels/driver_training/art/shapes/race',
   JV .. 'misc',     -- the cell tower
+  HIR .. 'groundcover',     -- the clover and daisy patches and ferns of a roundabout's island (server roundabouts.py)
   '/levels/hirochi_raceway/art/shapes/buildings',     -- the stock barn
+  '/levels/small_island/art/shapes/buildings',     -- the rooftop water tank
   -- the toll booth's (its kerbs, glass, trim and lamps)
   '/art/shapes/garage_and_dealership/garage', '/art/shapes/garage_and_dealership', '/art/shapes/race/dragstrip',
   '/art/shapes/objects/windows_doors_reflective',

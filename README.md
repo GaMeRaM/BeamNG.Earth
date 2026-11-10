@@ -51,7 +51,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   porches, churches with steeples, glass towers. Buildings show out to about 3 miles: simpler versions past 1 mile,
   and a light skyline beyond that; bridges show out to about 3 miles too.
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
-  traffic islands, roundabouts, rural motorways with shoulders and toll booths; the ground graded under them, with
+  traffic islands, roundabouts (a granite truck apron and a planted, raised island, curbs round the ring into the entries,
+  give-way lines at every entry, splitter islands where the map has a refuge), rural motorways with shoulders and toll booths; the ground graded under them, with
   retaining walls where a road is cut into a hill (dry stone in the mountains and towns, concrete along major roads)
   and stone parapets along mountain roads' drops; switchback mountain pass roads (the Stelvio) narrow, between their
   walls and parapets; metal guard rails, concrete and cable barriers where OpenStreetMap maps them; median
@@ -150,6 +151,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   databases' heights, and so do roads where the terrain data is coarse. Elsewhere, or where a source has nothing,
   the heights are estimated as before. The environment variables `BNE_ROADZ=off` (all of it) and
   `BNE_LIDAR_DECKS=off` (the US lidar only) turn it off.
+- Measured buildings in France: each building's height to the eaves and roof rise, storeys, wall and roof materials
+  (stone, brick, render; tiles, slate, zinc) and use (houses, shops, sheds, churches) come from IGN BD TOPO and are
+  joined to the map's outlines, where the map itself does not say (Aix-en-Provence's old town: 4 000 of 4 800
+  buildings measured, tiled pitched roofs instead of predicted flat blocks). Downloaded per map cell in the background
+  beside the map data, about 0.1-0.6 MB once; `BNE_BDTOPO=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
 - Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
@@ -343,7 +349,8 @@ as a GitHub **pre-release** named after the beta it follows, with a build number
 and not thoroughly tested**: expect bugs, and things may change or break from one build to the next. The beta
 releases are the tested ones. A development build says so in game, and its update check offers the next development
 build (or the next beta, if that is newer); a beta only ever offers betas. Only the newest three development builds
-are kept on the releases page.
+are kept on the releases page as their own pre-releases; older ones (the last 60) stay downloadable from one release,
+**Development builds (archive)**, whose page lists them newest first with their Windows and Linux files.
 
 **Uninstalling:** delete the `beamng_earth` folder in `<BeamNG user folder>/current/mods/unpacked/` and the
 downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your home folder (`~/.cache/beamng-earth` on Linux,
@@ -353,6 +360,10 @@ downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your
 your system's folder window, or type or paste a folder and press **Use**. Or start the app once with `--cache-dir PATH`
 (e.g. a shortcut to `BeamNG.Earth-<version>.exe --cache-dir "D:\BeamNG.Earth cache"`). It is used from the next start
 and remembered; `default` goes back. Move the old cache folder there first to keep what is already downloaded.
+
+**Deleting the whole map cache:** start the app once with `--clear-cache`. Its folders are moved aside at once and
+deleted in the background while you play (no long wait for the many small files). The in-game **Clear cache** button
+keeps the area around you.
 
 **BeamNG.drive installed somewhere else** (not in a Steam library the app finds, e.g. another launcher): the app asks
 where it is the first time (Enter opens your system's folder window, or type or paste the folder) and remembers it;

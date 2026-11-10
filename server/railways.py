@@ -42,6 +42,8 @@ REACH_M = 200.0             # m around a tile the lines are taken: the smoothing
 BALLAST_H = 0.3             # m of ballast over the bed line
 BALLAST_TOP_M = 1.8         # m: half the ballast's top width
 BALLAST_SLOPE = 1.5         # m out per m down on its sides
+RAIL_FOOT_CLEAR_M = 1.0      # m between a fill's foot and another track's deck/ballast edge
+ROAD_FOOT_CLEAR_M = 0.5      # m between a fill's foot and a road's carriageway edge
 BALLAST_FOOT_M = 0.4        # m its sides reach under the ground at their foot
 FOOT_MAX_M = 6.0            # m out at most (the grading fills a tall ramp's embankment; 15 fanned out, 2026-10-25)
 SLEEPER_EVERY = 0.6         # m between sleepers
@@ -1011,13 +1013,24 @@ def profile(rails, ground, underpasses=(), fixed_decks=None):
     if seeds:                                   # the decks' heights out along the track, GRADE per metre down
         top = max(seeds.values())
         d = roads._dijkstra(adj, {n: (top - h) / GRADE for n, h in seeds.items()})
+        # (a ground track: how far a deck stands over the track's own bed where they meet, run out at GRADE per metre
+        # on top of the bed, not the deck's height itself: on a mountain line climbing 10 % (a rack railway) a deck up
+        # the slope carried down at 2 % stood Andermatt's station 14 m over its own ground, GitHub #1051. On level ground
+        # the two are the same ramp.)
+        lifts = {node: h - float(np.mean(ends[node])) for node, h in seeds.items() if node in ends}
+        lifts = {node: v for node, v in lifts.items() if v > 0.0}
+        if lifts:
+            ltop = max(lifts.values())
+            dl = roads._dijkstra(adj, {node: (ltop - v) / GRADE for node, v in lifts.items()})
         for n, (a, b, s) in enumerate(edges):
-            reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
             if rails[n][2] == "bridge":         # (two decks end to end: still a straight run between their ends)
+                reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
                 if n not in fixed_decks:
                     zb[n] = _envelope(s, np.maximum(zb[n], reach))
-            else:                               # a ground track follows its own bed: a distant deck carries the
-                zb[n] = np.minimum(np.maximum(zb[n], reach), zb[n] + SEED_LIFT_MAX_M)   # ramps to it, no higher
+            elif lifts:                         # a ground track follows its own bed: a distant deck carries the
+                lift = np.maximum(ltop - GRADE * (dl[a] + s), ltop - GRADE * (dl[b] + s[-1] - s))     # ramps to it
+                zb[n] = zb[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M)
+
     return list(zip(zb, zgs))
 
 
@@ -1436,14 +1449,50 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     return out
 
 
-def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, road_decks=()):
+def _foot_limits(xy, side, foot, others, crossers):
+    """Per vertex: the ballast foot's width, clipped at a road's carriageway edge or another track's deck so a fill's
+    side is a wall there, not a slope over the road/track (the wide double-track embankment's foot ran over the road
+    under it and the line beside it: a hollow overhang the player could drive into)."""
+    p = np.asarray(xy, np.float64)[:, :2]
+    sd = np.asarray(side, np.float64)
+    lim = np.asarray(foot, np.float64).copy()
+
+    def clip(line, extra):
+        line = np.asarray(line, np.float64)[:, :2]
+        if len(line) < 2:
+            return
+        a, b = line[:-1], line[1:]
+        ab = b - a
+        ab2 = np.maximum((ab * ab).sum(1), 1e-9)
+        t = np.clip(((p[:, None, :] - a[None]) * ab[None]).sum(2) / ab2[None], 0.0, 1.0)
+        q = a[None] + t[:, :, None] * ab[None]
+        d = np.hypot(q[:, :, 0] - p[:, None, 0], q[:, :, 1] - p[:, None, 1])
+        k = np.argmin(d, axis=1)
+        near = d[np.arange(len(p)), k]
+        on = ((q[np.arange(len(p)), k] - p) * sd).sum(1) > 0.0
+        edge = near - extra
+        ok = on & (edge > 0.0) & (edge < lim)
+        lim[ok] = edge[ok]
+
+    for line, half, _z in crossers:
+        clip(line, float(half) + ROAD_FOOT_CLEAR_M)
+    for _fid, line in others:
+        clip(line, DECK_HALF_M + RAIL_FOOT_CLEAR_M)
+    return np.maximum(lim, BALLAST_TOP_M + 0.01)
+
+
+def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, under=None, road_decks=()):
+
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
     of the tile (the lines REACH_M round it only smooth the track and carry its ramps: the graded ground there made the
     grader plan the cells round every tile, and the railways doubled a tile's time, 2026-10-25). return_decks: also
     return the bridge decks' centrelines ([{"n": xy+z line, "w": width}], the bed plus its ballast), for mapped
-    furniture (fences.py) to stand on: the profile is already made here, no second pass."""
+    furniture (fences.py) to stand on: the profile is already made here, no second pass. under(xy (k, 2)) -> mask: the
+    points a 3dmr model bridge stands over (buildings.bridge_footprints'): a railway's or a walkway's bridge mostly
+    under one is not drawn (the model carries it: Perth's Narrows and Mount Henry bridges' rail decks, the Elizabeth
+    Quay footbridge, GitHub #1071); the track's profile still runs over it."""
     cells = list(cells)
     box = roads.tile_bbox(tx, ty)
     tunnels = road_underpasses(frame, cells, box)
@@ -1456,6 +1505,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     if not any(_box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()), exs) for *_, xy in rails):
         rails = []
     walk = [w for w in walk if _box_hit((w[1][:, 0].min(), w[1][:, 1].min(), w[1][:, 0].max(), w[1][:, 1].max()), exs)]
+    if under is not None:
+        walk = [w for w in walk if not np.asarray(under(w[1]), bool).mean() >= 0.5]
     if not rails and not walk:
         return (None, []) if return_decks else None
     fixed_decks = {}
@@ -1471,9 +1522,12 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                     fixed_decks[i] = shared[0] - FLUSH_LIFT_M
     prof = profile(rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails),
                    fixed_decks=fixed_decks) if rails else []
+    carried = [under is not None and kind == "bridge" and np.asarray(under(xy), bool).mean() >= 0.5
+               for _f, _c, kind, xy in rails]
     decks = ([{"n": np.column_stack((xy, zb + (FLUSH_LIFT_M if cls == "tram" else BALLAST_H))),
+
                "w": 2 * (TRAM_DECK_HALF_M if cls == "tram" else DECK_HALF_M)}
-              for (_, cls, kind, xy), (zb, _zg) in zip(rails, prof) if kind == "bridge"]
+              for (_, cls, kind, xy), (zb, _zg), gone in zip(rails, prof, carried) if kind == "bridge" and not gone]
              if return_decks else [])
     cr = crossings(frame, cells, box, reach=50.0) + tunnels
     crossers = []
@@ -1487,10 +1541,10 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     ballast, concrete, steel = mesh.mat(BALLAST), mesh.mat(CONCRETE), mesh.mat(STEEL)
     up = np.array([0.0, 0.0, 1.0])
     small = []                                      # sleepers and piers: drawn last, as room allows
-    for (fid, cls, kind, xy), (zb, zg) in zip(rails, prof):
+    for (fid, cls, kind, xy), (zb, zg), gone in zip(rails, prof, carried):
         inside = (xy[:, 0] >= ex[0] - STEP_M) & (xy[:, 0] <= ex[2] + STEP_M) & \
                  (xy[:, 1] >= ex[1] - STEP_M) & (xy[:, 1] <= ex[3] + STEP_M)
-        if not inside.any():
+        if gone or not inside.any():
             continue
         u = _left(xy)
         s = _arc(xy)
@@ -1516,6 +1570,15 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                     zs = zs.copy()
                     zs[far] = np.asarray(ground(xy[far] + sg * u[far] * foot[far, None]), np.float64)
                 feet.append((foot, zs))
+            # a fill's foot stops at a road's edge or another track's deck: a wall there, not a slope over them
+            others = [(f2, xy2) for f2, _c2, _k2, xy2 in rails if f2 != fid]
+            for k, sg in enumerate((1, -1)):
+                foot, zs = feet[k]
+                lim = _foot_limits(xy, sg * u, foot, others, crossers)
+                if np.any(lim < foot):
+                    foot = lim
+                    zs = np.asarray(ground(xy + sg * u * foot[:, None]), np.float64)
+                    feet[k] = (foot, zs)
         else:
             cut = ~inside
         for i, j in _runs(cut):
