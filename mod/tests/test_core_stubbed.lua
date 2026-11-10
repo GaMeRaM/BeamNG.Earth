@@ -401,6 +401,14 @@ do
   T.near(rp[1].pos.x, x1, 1e-6, 'recovery point mapped')
   T.near(rp[3].pos.x, lc.x + 1, 1e-9, 'point already in the new frame left alone (idempotent)')
   T.near(env.recovery.homePoint.pos.x, (xf:apply(0, 0, 1181)), 1e-6, 'home point at the old origin mapped')
+  -- Old-frame Home can numerically coincide with the new player/origin.
+  -- It is not an automatically recorded, already-transformed recovery point.
+  env.recovery = { homePoint = { pos = vec3(lc.x, lc.y, lc.z) } }
+  fn()
+  local hx, hy, hz = xf:apply(lc.x, lc.y, lc.z)
+  T.near(env.recovery.homePoint.pos.x, hx, 1e-6, 'Home near the new origin still maps from its saved frame')
+  T.near(env.recovery.homePoint.pos.y, hy, 1e-6, 'Home y keeps its geographic location')
+  T.near(env.recovery.homePoint.pos.z, hz, 1e-6, 'Home height keeps its geographic location')
   local fx = xf:rotate(1, 0, 0)
   T.near(rp[1].dirFront.x, fx, 1e-12, 'recovery direction rotated')
 end
@@ -955,5 +963,50 @@ do
   v = core.viewAway()
   T.check(v and v.x == 200 and v.y == 0, 'a free camera with no target')
   st.player, st.cam = was[1], was[2]
+end
+do
+  local st, h = core._state(), core.dropHoldState()
+  local was = { st.pending, st.placeFrames, st.teleportRetry, st.anchor }
+  st.pending, st.placeFrames, st.teleportRetry = nil, nil, nil
+  st.anchor = geodesy.newAnchor(56., 60.)
+  h.active, h.started = true, st.clock
+  T.check(not core.groundReady(), 'fresh Home hold blocks map teleport briefly')
+  h.started = st.clock - require('beamngEarth/drophold').RETRY_AFTER_S
+  T.check(core.groundReady(), 'stuck Home hold no longer disables map teleport')
+  core.cancelDropHold()
+  T.check(not h.active and core.groundReady(), 'completed teleport clears the previous hold')
+  st.pending, st.placeFrames, st.teleportRetry, st.anchor = was[1], was[2], was[3], was[4]
+end
+-- Home from outside the current origin prepares a teleport, not a paused rebase.
+do
+  local st, h = core._state(), core.dropHoldState()
+  local net_ = require('beamngEarth/net')
+  local roads_ = require('beamngEarth/roads')
+  local oldConnected, oldSend, oldPoll, oldReady = net_.isConnected, net_.send, net_.poll, roads_.readyAround
+  local hold_ = require('beamngEarth/simhold')
+  local oldPause, oldPaused = hold_.pause, hold_.paused
+  local paused = false
+  hold_.pause = function(on) paused = on end
+  hold_.paused = function() return paused end
+  local sent = {}
+  net_.isConnected = function() return true end
+  net_.send = function(m) sent[#sent + 1] = m; return true end
+  net_.poll = function() return {} end
+  roads_.readyAround = function() return false end
+  st.anchor, st.anchorId, st.active, st.inOurLevel = geodesy.newAnchor(56., 60.), 999, true, true
+  st.pending, st.rebasing, st.viewFrame, st.placeFrames, st.floorZ = nil, nil, nil, nil, nil
+  st.block = { cx = 0, cy = 0 }
+  h.active, h.last = false, { x = 0, y = 0, z = 100., speed = 0, anchorId = 999 }
+  veh.pos, veh.vel = vec3(100000., 0., 100.), vec3()
+  core.onUpdate(.05, .05)
+  local found = false
+  for _, m in ipairs(sent) do
+    if m.type == 'prepare_anchor' and m.purpose == 'teleport' then found = true end
+  end
+  T.check(found and st.pending and st.pending.purpose == 'teleport', 'distant Home prepares a fresh target')
+  T.check(h.active, 'car stays protected while the new target loads')
+  core.cancelDropHold()
+  hold_.pause, hold_.paused = oldPause, oldPaused
+  net_.isConnected, net_.send, net_.poll, roads_.readyAround = oldConnected, oldSend, oldPoll, oldReady
 end
 T.done('test_core_stubbed')

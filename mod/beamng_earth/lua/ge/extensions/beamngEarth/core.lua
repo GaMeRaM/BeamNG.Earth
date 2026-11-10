@@ -545,6 +545,7 @@ local function commitTeleport(msg)
     st.retryAt = st.clock + rebase.RETRY_S -- don't re-request every frame
     return false, err
   end
+  if M.cancelDropHold then M.cancelDropHold() end
   -- (the global far tiles stay, placed into the new anchor's world: farfield.lua)
   -- the 3D map's Drive here, watched from above: every shown tile moved into the new frame and kept until the new
   -- anchor's cover it, as a rebase (the user, 2026-11-07: "make it look seamless"; dropped, the land round the view
@@ -1601,7 +1602,7 @@ function M.groundReady()
   -- (no ground yet and nothing on its way: the first place's terrain failed to import, commitTeleport; another may be
   -- asked, else Go stayed greyed until the level was loaded again)
   if not st.anchor then return p == nil and st.randomStart == nil end
-  return st.placeFrames == nil and not dropHold.active
+  return st.placeFrames == nil and drophold.canLeave(dropHold, st.clock)
 end
 
 -- The game's own pause (simTimeAuthority, what the pause key does): holding the car by setting its position every frame
@@ -1623,6 +1624,13 @@ end
 local function endHold(h)
   if h.pausedByUs and simPaused() then simPause(false) end
   h.pausedByUs = nil
+  roads.setHold(false)
+end
+
+-- A completed map teleport supersedes a hold at the previous location.
+function M.cancelDropHold()
+  drophold.cancel(dropHold)
+  endHold(dropHold)
   roads.setHold(false)
 end
 
@@ -1651,6 +1659,11 @@ local function updateDropHold(dt)
     if not simPaused() then
       simPause(true)
       h.pausedByUs = true
+    end
+    if pl.dist > rebase.distance and not st.pending and net.isConnected() then
+      -- Home/F7 can return outside the current origin. A normal rebase cannot
+      -- commit while this hold pauses physics: prepare a fresh teleport instead.
+      teleportTo(pl.lat, pl.lon, nil, 'tool')
     end
   end
   roads.setHold(h.active)

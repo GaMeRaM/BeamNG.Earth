@@ -275,7 +275,9 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
 
 # A short road tunnel may be tagged only on the lower road, with no bridge flag on
 # the railway above. Its ballast and grading must not fill the lower carriageway.
-UNDERPASS_CLEAR_M = 3.6
+# Match road bridges: a 3.6 m rail underpass blocks ordinary semi-trucks.
+# Reserve the margin at the concrete underside, not at the track/ballast top.
+UNDERPASS_CLEAR_M = roads.MIN_BRIDGE_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M
 UNDERPASS_SIDE_M = 1.0
 UNDERPASS_MIN_SIN = 0.25    # conservatively exclude near-parallel tracks beside a tunnel
 

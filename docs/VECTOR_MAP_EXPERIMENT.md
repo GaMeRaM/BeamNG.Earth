@@ -1,6 +1,9 @@
-# MapLibre vector map experiment
+# Vector map renderer
 
 Branch: `experiment/maplibre-dashboard` in https://github.com/GaMeRaM/BeamNG.Earth
+
+In BeamNG CEF the map uses the Canvas2D renderer. The original MapLibre
+experiment survives as an optional WebGL path, not as the fork's build name.
 
 Both the vehicle navigator and the M map use OpenFreeMap's Dark style:
 https://tiles.openfreemap.org/styles/dark. No API key is needed.

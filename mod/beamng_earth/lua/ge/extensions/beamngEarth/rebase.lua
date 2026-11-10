@@ -122,7 +122,7 @@ end
 -- - Vehicle Lua recovery points (vehicle/recovery.lua: recoveryPoints dequeue + homePoint, each
 --   { pos, dirFront, dirUp } in world coordinates) feed the Insert-key rewind and loadHome. They are
 --   mapped in the vehicle VM. A point recorded after the move (within metres of the new position)
---   is left alone, so the command is correct whichever physics frame it runs in. Only points within
+--   is left alone for the automatic recovery tail. The explicitly saved Home always belongs to the old frame. Only tail points within
 --   50 m of the new position are tested that way: the new position's coordinates are small (near the
 --   new origin), so a plain "nearer old than new" test would skip old-frame points near the OLD
 --   origin, e.g. the home point saved at the teleport target.
@@ -143,11 +143,11 @@ local R = {%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g}
 local T = {%.17g,%.17g,%.17g}
 local ox, oy, oz, nx, ny, nz = %.17g,%.17g,%.17g,%.17g,%.17g,%.17g
 local function rot(v) return vec3(R[1]*v.x+R[2]*v.y+R[3]*v.z, R[4]*v.x+R[5]*v.y+R[6]*v.z, R[7]*v.x+R[8]*v.y+R[9]*v.z) end
-local function map(pt)
+local function map(pt, savedHome)
   if type(pt) ~= 'table' or not pt.pos then return end
   local q = pt.pos
   local dn = (q.x-nx)^2+(q.y-ny)^2+(q.z-nz)^2
-  if dn < 2500 and (q.x-ox)^2+(q.y-oy)^2+(q.z-oz)^2 >= dn then return end
+  if not savedHome and dn < 2500 and (q.x-ox)^2+(q.y-oy)^2+(q.z-oz)^2 >= dn then return end
   local w = rot(q)
   pt.pos = vec3(w.x+T[1], w.y+T[2], w.z+T[3])
   if pt.dirFront then pt.dirFront = rot(pt.dirFront) end
@@ -156,7 +156,9 @@ end
 if recovery then
   local d = recovery.recoveryPoints
   if d and d.head and d.tail then for i = d.head + 1, d.tail do map(d[i]) end end
-  map(recovery.homePoint)
+  -- Home is explicitly saved, unlike the automatically recorded recovery tail.
+  -- Its old coordinates can coincide with the new origin after a long drive.
+  map(recovery.homePoint, true)
 end
 -- the vehicle's copy of the road graph moved with it, as a new table: the AI drops its plan (ai.lua updateGFX: a
 -- new mapmgr.mapData) and plans again on the moved points in this very step (it kept the old frame's points until the

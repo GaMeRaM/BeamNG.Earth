@@ -3528,8 +3528,26 @@ class _Planner:
             # the steepest of its parts' classes' limits (a chain is of one family; a link's limits are looser)
             gr = max(_cw.limits(p_[3])[0] for p_ in parts)
             K = min(_cw.limits(p_[3])[1] for p_ in parts)
+            lower = np.full(len(s), -np.inf)
+            # The network replaces the rendered bridge profile too. A long
+            # mapped span can cross rising ground: interpolation between its
+            # abutments must not leave the driving surface inside that ground.
+            if br.any():
+                tangent = np.gradient(xy, axis=0)
+                tangent /= np.maximum(np.hypot(*tangent.T), 1e-9)[:, None]
+                normal = np.c_[-tangent[:, 1], tangent[:, 0]][br]
+                tangent = tangent[br]
+                half = np.array([_cw_half(parts[int(j)]) for j in pi[br]])
+                # Cover the driving width and the gaps between profile samples,
+                # not just the axis (a hillside can poke through the outer lane).
+                probes = np.concatenate([xy[br] + normal * (side * half)[:, None]
+                                         + tangent * along
+                                         for side in (-1., 0., 1.)
+                                         for along in (-step / 2., 0., step / 2.)])
+                terrain = self._z_raw(probes).reshape(9, -1).max(axis=0)
+                lower[br] = np.maximum(raw[br], terrain) + ROAD_LIFT + 0.15
             data.append(dict(t=t, w=w, grade=gr, K=K, step=step,
-                             lo=np.full(len(s), -np.inf), hi=np.full(len(s), np.inf)))
+                             lo=lower, hi=np.full(len(s), np.inf)))
             samples.append((xy, s, pi, br, raw))
         # bounds: tracks under its decks; other decks (not of the family) over its roads
         allpts = np.concatenate([x[0] for x in samples])

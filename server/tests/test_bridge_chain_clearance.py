@@ -177,3 +177,25 @@ class M12ServiceJoinTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BridgeTerrainFloorTest(unittest.TestCase):
+    def test_long_bridge_cannot_bury_either_lane_in_a_hillside(self):
+        from test_roads import features
+        xy = np.c_[np.linspace(-600., 600., 301), np.zeros(301)]
+        f = features([xy], ['trunk'], flags=[(0, 'is_bridge')])
+
+        def terrain(la, lo):
+            x, y, _ = FRAME.geodetic_to_enu(la, lo, 0.)
+            # A long mapped bridge's middle crosses rising terrain and a bank
+            # beside its axis, while both abutments are lower (Revda, M-12).
+            return 100. + 5. * np.exp(-(np.asarray(x) / 180.) ** 2) + .25 * np.asarray(y)
+
+        p = grading._Planner(FRAME, FakeMD(f), terrain)
+        key = ('b', -600., 0., 600., 0.)
+        part = (key, xy, True, 'trunk', str(f.ids[0]), 1., 5.)
+        profiles = p._cw_cluster_solve([([part], [(0, False)])])
+        q, z = profiles[key]
+        for side in (-5., 0., 5.):
+            la, lo, _ = FRAME.enu_to_geodetic(q[:, 0], q[:, 1] + side, 0.)
+            self.assertGreaterEqual(float(np.min(z - terrain(la, lo))), grading.ROAD_LIFT)

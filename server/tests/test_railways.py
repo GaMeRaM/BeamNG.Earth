@@ -534,6 +534,19 @@ class RoadUnderpassTest(unittest.TestCase):
         self.assertTrue(over.any())
         self.assertGreater(float(tri[over, :, 2].min()), 10 + railways.UNDERPASS_CLEAR_M - 0.1)
 
+    def test_rail_underpass_collision_clears_a_six_metre_truck(self):
+        from test_bridge_junction_surface import heights
+        f = self.features()
+        mesh = railways.collision_mesh(railways.tile_mesh(FRAME, 0, 0, [f], flat))
+        # The full lane corridor, including the skew/edge footprint of a truck.
+        points = np.array([[x, y] for x in np.linspace(117., 123., 7)
+                           for y in np.linspace(98., 102., 9)])
+        hits = heights(mesh, points)
+        self.assertEqual(len(hits), len(points))
+        for values in hits:
+            self.assertTrue(len(values), 'the actual collision slab covers the road')
+            self.assertGreaterEqual(float(np.min(values)) - 10., 6.)
+
     def test_no_bridge_for_level_crossing_or_parallel_track(self):
         for f in (self.features(tunnel=False), self.features(parallel=True)):
             self.assertTrue(all(p[2] == "ground" for p in railways.parts(FRAME, [f], roads.tile_bbox(0, 0))))

@@ -5,6 +5,11 @@ upstream for this fork. `main` and release tags remain the reference for officia
 releases. Locally, `origin/HEAD` and the tracking branch `upstream-dev` point to
 `origin/dev`; `experiment/maplibre-dashboard` tracks the fork's branch for pushes.
 
+Fork builds use `<upstream VERSION>.<workflow run number>`, for example
+`1.9.1-beta.24`. The old `maplibre.` suffix was retired: the in-game vector
+map renders through Canvas2D. Historical release tags and the branch name stay
+unchanged so existing links and CI triggers keep working.
+
 Fetch upstream before comparing or merging. Integrate `origin/dev` explicitly,
 resolve overlaps with the fork's world-generation changes, and run the quality
 gate and reported-site audit before building or deploying. Do not reuse an

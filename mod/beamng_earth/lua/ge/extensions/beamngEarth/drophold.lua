@@ -11,7 +11,7 @@
 -- damaged it (2026-10-18).
 -- The hold ends once the committed block covers the car (EDGE_MARGIN inside) and a ray down meets ground there:
 -- the car is set on the ground if the drop point is under it, else let go where it was dropped (a drop from the
--- air falls, as the game's drop does). MAX_S at most, then it is let go anyway.
+-- air falls, as the game's drop does). MAX_S without building, MAX_TOTAL_S even if a build is stuck.
 --
 -- Pure decisions here (tests: mod/tests/test_drophold.lua); core.lua does the vehicle calls.
 local M = {}
@@ -20,6 +20,8 @@ M.JUMP_M = 250          -- m in one frame: a drop / switch, not driving (1000 mp
 M.EDGE_MARGIN = 40      -- m inside the block's collidable box before the ground there counts
 M.SETTLE_FRAMES = 3     -- frames after the covering block's commit (its collision applies the next frame)
 M.MAX_S = 30            -- s without progress (no block being built: offline, a server that cannot build there): let go
+M.MAX_TOTAL_S = 120     -- absolute deadline even when a stuck build keeps reporting busy
+M.RETRY_AFTER_S = 30    -- allow a map teleport to escape an unresolved hold
 M.UNDER_M = 0.5         -- the drop point this close over the ground or under it: the car goes onto the ground
 M.LIFT_M = 1.0          -- ... this far above it
 -- Bridges and buildings too (the user, 2026-10-19: "The teleport pause works for the ground but bridges and buildings
@@ -52,6 +54,7 @@ function M.observe(h, x, y, z, speed, dt, anchorId, box, busy, nearReady)
   -- dropped onto the block (up to its edge): its ground is there, and the bridges and buildings too unless nearReady says
   if inside(box, x, y, 0) and (not nearReady or nearReady(x, y)) then return nil end
   h.active, h.x, h.y, h.z, h.since, h.settle, h.nearSince = true, x, y, z, nil, nil, nil
+  h.started = nil
   return 'start'
 end
 
@@ -68,8 +71,9 @@ end
 -- near: the colliders around the hold point are in (roads.readyAround; nil counts as yes).
 function M.step(h, now, box, blockSerial, groundZ, building, near)
   if not h.active then return nil end
+  h.started = h.started or now
   h.since = (building or h.since == nil) and now or h.since
-  if now - h.since > M.MAX_S then
+  if now - h.since > M.MAX_S or now - h.started > M.MAX_TOTAL_S then
     h.active = false
     return 'timeout'
   end
@@ -89,6 +93,10 @@ function M.step(h, now, box, blockSerial, groundZ, building, near)
   h.active = false
   if h.z < groundZ + M.UNDER_M then return 'place', groundZ + M.LIFT_M end
   return 'release'
+end
+
+function M.canLeave(h, now)
+  return not h.active or (h.started ~= nil and now - h.started >= M.RETRY_AFTER_S)
 end
 
 function M.cancel(h) h.active = false end

@@ -99,4 +99,21 @@ h = d.new()
 d.observe(h, 0, 0, 10, 0, dt, 1, box, false)
 T.check(d.observe(h, 600, 0, 10, 0, dt, 1, box, false, function() return true end) == nil, 'onto the block, colliders in: no hold')
 
+-- A build repeatedly claiming to be busy cannot trap Home forever.
+h = d.new()
+d.observe(h, 0, 0, 10, 0, dt, 1, box, false)
+d.observe(h, 5000, 0, 30, 0, dt, 1, box, false)
+d.step(h, 10, box, 'old', nil, true, false)
+T.check(not d.canLeave(h, 10), 'a fresh hold still protects loading')
+T.check(d.canLeave(h, 10 + d.RETRY_AFTER_S), 'map teleport can escape a stuck hold')
+for now = 11, 10 + d.MAX_TOTAL_S do
+  T.check(d.step(h, now, box, 'old', nil, true, false) == nil, 'busy before absolute deadline')
+end
+T.check(d.step(h, 11 + d.MAX_TOTAL_S, box, 'old', nil, true, false) == 'timeout',
+  'busy does not reset the absolute deadline')
+T.check(not h.active and d.canLeave(h, 999), 'timeout ends the hold')
+d.observe(h, 10000, 0, 10, 0, dt, 1, box, false)
+d.step(h, 1000, box, 'old', nil, true, false)
+T.check(h.active and not d.canLeave(h, 1000), 'a subsequent hold starts its own deadline')
+
 T.done('test_drophold')

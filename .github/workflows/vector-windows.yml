@@ -1,4 +1,4 @@
-name: Vector maps Windows experiment
+name: Fork Windows build
 
 on:
   push:
@@ -31,9 +31,9 @@ jobs:
           npm ci
           npm test
           npm run build
-      - name: Mark the experimental build
+      - name: Mark the fork build
         shell: bash
-        run: printf '%s.maplibre.%s\n' "$(cat VERSION)" '${{ github.run_number }}' > VERSION
+        run: printf '%s.%s\n' "$(cat VERSION)" '${{ github.run_number }}' > VERSION
       - name: Rust kernels
         if: github.event_name != 'workflow_dispatch' || inputs.build_native
         run: python tools/build_native.py
@@ -85,7 +85,7 @@ jobs:
       - name: Lua sign and streaming checks
         run: |
           python -m pip install lupa==2.8
-          python tools/run_lua_tests.py test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_settings
+          python tools/run_lua_tests.py test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_drophold test_rebase test_simhold test_settings
       - name: Bootloader from source
         run: python tools/build_bootloader.py
       - name: Build the exe
@@ -101,7 +101,7 @@ jobs:
         run: python tools/package.py --out dist --beammp
       - uses: actions/upload-artifact@v4
         with:
-          name: BeamNG-Earth-MapLibre-Windows
+          name: BeamNG-Earth-Windows
           path: |
             dist/*.exe
             dist/*.zip
