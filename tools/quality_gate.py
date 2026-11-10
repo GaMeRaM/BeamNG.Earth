@@ -26,7 +26,7 @@ MODULES = (
     "test_ru_infrastructure", "test_furniture", "test_buildings", "test_roads",
     "test_blockworker", "test_roadsigns", "test_townentry", "test_markings",
     "test_sign_packaging", "test_walk_clearance", "test_sidewalk_collision", "test_islands",
-    "test_junction_landing", "test_junction_corridor", "test_junction_pads", "test_approaches",
+    "test_carriageway_cell_seams", "test_junction_landing", "test_junction_corridor", "test_junction_pads", "test_approaches",
     "test_bridge_junction_surface", "test_building_passages", "test_bridge_chain_clearance", "test_under_deck",
     "test_underpass_profiles", "test_bridge_clearance", "test_crossings", "test_carriageways",
     "test_package_stamps", "test_carriageway_solver", "test_portugal_imagery", "test_gradesep",

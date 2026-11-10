@@ -3825,7 +3825,19 @@ class _Planner:
         mid = line[len(line) // 2]
         la, lo, _ = self.frame.enu_to_geodetic(np.array([mid[0]]), np.array([mid[1]]), 0.0)
         try:
-            reg = self._cw_region(mapcells.cell_of(float(la[0]), float(lo[0])))
+            home = mapcells.cell_of(float(la[0]), float(lo[0]))
+            if fid is not None:
+                # A long road is clipped differently by each planning cell.
+                # Select its network by the original map part, not that clip's
+                # midpoint, or adjacent cells solve it in different networks.
+                source = [q for q in self._cw_cell_parts(home)
+                          if q[4] == fid and _seg_dist(q[1], mid) <= 1.0]
+                if source:
+                    q = min(source, key=lambda q: _seg_dist(q[1], mid))[1]
+                    centre = q[len(q) // 2]
+                    a, b, _ = self.frame.enu_to_geodetic(centre[0], centre[1], 0.0)
+                    home = mapcells.cell_of(float(a), float(b))
+            reg = self._cw_region(home)
         except Exception as e:      # (the rules as before)
             log.debug("grading: carriageway at %s: %s: %s", np.round(mid, 1), type(e).__name__, e)
             return None
