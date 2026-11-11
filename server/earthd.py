@@ -324,6 +324,12 @@ QUICK_SHARE_WAIT_S = 30.0       # Server._quick_once: a caller waits this long f
 QUICK_MADE_KEPT = 256           # blocks whose stand-in file names _quick_once remembers
 QUICK_BASE_PX = 512             # a block's stand-in photo (write_quick_base): the imagery alone, 2 m texels
 BASE_NO_STANDIN_MAX_S = 8.0     # a block with no stand-in possible waits this long at most for its photo
+# A teleport's provisional first block waits this long at most for its photo after its heights, then goes with its
+# stand-in (made beside it), the photo swapped in when done (_base_later): the car placed ~1-2 s sooner on a fresh place
+PROVISIONAL_BASE_WAIT_S = 0.3
+PADS_REFRESH_IN_USE = os.environ.get("BNGE_PADS_REFRESH", "on") != "off"     # (Connection.pads_refresh; A/B runs)
+# Full priority loading (the settings page's teleportPriority) squeezes the game onto two cores only with this on
+FULL_PIN_GAME = os.environ.get("BNGE_FULL_PIN_GAME", "off") == "on"
 BASE_WAIT_S = 2.5               # ... and slower, this long: a slow photo held the heightmap thread and the blocks behind
                                 # it (a city's first visit at 127 mph: 4.75 s for one photo, the next block 7.8 s and the
                                 # car at the edge of its ground; a 4-core PC's photos took ~26 s, GitHub #496); it then
@@ -2097,7 +2103,10 @@ class Server:
             if full:
                 try:
                     n = cpupin.pin_tree(full[0])
-                    g = cpupin.pin_game(full[1])
+                    # (the game left on its own cores unless BNGE_FULL_PIN_GAME=on: its threads squeezed onto two and
+                    # spread back at the end, three of six cold teleports froze the game for good in its
+                    # TextureCooker within a second of the spread, a texture import under way; 2026-11-11)
+                    g = cpupin.pin_game(full[1]) if FULL_PIN_GAME else 0
                 except OSError as e:
                     log.warning("full priority loading: %s", e)
                 else:
@@ -2110,7 +2119,8 @@ class Server:
         if not on and self.boost_full:
             try:
                 cpupin.pin_tree(self.server_cpus)
-                cpupin.pin_game(getattr(self, "game_cpus", None))
+                if FULL_PIN_GAME:
+                    cpupin.pin_game(getattr(self, "game_cpus", None))
             except OSError as e:
                 log.warning("full priority loading: %s", e)
             self.boost_on = self.boost_full = False
@@ -2150,7 +2160,7 @@ class Server:
                 return False
             try:
                 n = cpupin.pin_tree(full[0])
-                g = cpupin.pin_game(full[1])
+                g = cpupin.pin_game(full[1]) if FULL_PIN_GAME else 0      # (load_boost's FULL_PIN_GAME)
             except OSError as e:
                 log.warning("%s boost: %s", why, e)
                 return False
@@ -2165,7 +2175,8 @@ class Server:
             return False                # (full priority loading came meanwhile: its split stays)
         try:
             cpupin.pin_tree(self.boost_cpus if self.boost_on and self.boost_cpus else self.server_cpus)
-            cpupin.pin_game(getattr(self, "game_cpus", None))
+            if FULL_PIN_GAME:
+                cpupin.pin_game(getattr(self, "game_cpus", None))
         except OSError as e:
             log.warning("%s: %s", why, e)
         log.info("%s: the cores back as before", why)
@@ -3474,7 +3485,13 @@ class Server:
             from worldbundle import BundleError
             raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         t0 = time.perf_counter()
-        q = self.anchor_q(anchor)
+        # (the anchor's height quantum, its survey's DEM reads at the urgent priority as the block's own: queued behind
+        # the teleport's other downloads, the survey (+-15 km of DEM z10, 0.1-0.6 s alone cold) was 3.6 s of a fresh
+        # Spokane's 5.2 s first block, 2026-11-11. A quantum of the block's own instead (block_params) made the far
+        # tiles over it two steps off the graded block, test_integration_drive's l2 check)
+        urgent = getattr(self.dem, "urgent", None)     # (test DEMs have no lane)
+        with urgent() if urgent is not None else contextlib.nullcontext():
+            q = self.anchor_q(anchor)
         base = None
         if self.near_visual == "detail" and self.imagery is not None:
             # (here, not in a block process: the other lane's process can still be busy with the old place's block,
@@ -3487,12 +3504,22 @@ class Server:
             # roadPaint above all), 3.9 s for the same block in a fresh process (.claude/work/rust_port_plan.md 1a,
             # 2026-11-07); the follow blocks' stand-ins went there before (make_provisional_follow)
             key = (anchor.id, cx, cy)
+            if base is not None and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
+                # (its stand-in photo too, made here beside the heights (the photo process builds them): the block goes
+                # with it when its photo is not done PROVISIONAL_BASE_WAIT_S after the heights, the photo swapped in
+                # when done; it waited for the photo, 2 of a 2.9 s first block in Lower Manhattan, 2026-11-11)
+                self.quick_futs[key] = self.quick_early.submit(
+                    self._quick_once, anchor, cx, cy, lambda: self.write_quick_base(anchor, cx, cy))
+            ts = time.time()
             info = pool.submit(blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                                self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
                                provisional=True, ground_at=tuple(ground_at)).result()
-            info.pop("started", None)
-            info.pop("finished", None)
-            info = self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=True)
+            started, finished = info.pop("started", None), info.pop("finished", None)
+            if started is not None and finished is not None:    # (where a first block's seconds go)
+                info.setdefault("stages", {}).update(queue=max(0.0, started - ts), work=max(0.0, finished - started),
+                                                     back=max(0.0, time.time() - finished))
+            info = self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=True,
+                                          base_wait=PROVISIONAL_BASE_WAIT_S)
             log.info("provisional block %s in %.2f s in a worker (%s)", key, time.perf_counter() - t0,
                      " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
             return info
@@ -3709,10 +3736,16 @@ class Server:
         t1 = time.perf_counter()
         photo = []
         plain = URGENT_ELSEWHERE and urgent       # (analyses on: its photo without them at once, then refreshed)
-        name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain) if pool is not None else None
+        # (a block in use built again (gas station pads, a refresh): its photo under a new name, as base_refresh's. The
+        # engine watches the photo it shows: written over in place, it reloaded it and froze for good in its
+        # TextureCooker (Billings and Fargo, 2026-11-11, both right after "built again with its gas station pads")
+        aid = getattr(anchor, "id", None)
+        rev = next(self.base_rev) if aid is not None and (aid, cx, cy) in getattr(self, "hm_committed", ()) else 0
+        kw = {"rev": rev} if rev else {}
+        name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, **kw) if pool is not None else None
         if name is None:
             with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
-                name = self.write_base(anchor, cx, cy, photo=photo, quick=quick)
+                name = self.write_base(anchor, cx, cy, photo=photo, quick=quick, **kw)
         return name, photo, time.perf_counter() - t1
 
     def _base_elsewhere(self, anchor, cx, cy, pool, photo, plain=False, rev=0):
@@ -3771,24 +3804,26 @@ class Server:
         else:
             self.base_stale.add(key)
 
-    def _finish_heightmap(self, anchor, cx, cy, info, t0, base=None, urgent=False, lane=None):
+    def _finish_heightmap(self, anchor, cx, cy, info, t0, base=None, urgent=False, lane=None, base_wait=None):
         """_finish_heightmap_now; a block the game asked for (urgent) waiting for its photo: urgent work (urgency.py),
         the background jobs in this process wait to start meanwhile (its stand-in photo, 0.2 s of work, took 5 s and
         more beside the far tiles' and the vegetation's, the edge guard holding the car at 130-175 mph, 2026-10-31)."""
         if urgent and base is not None and not base.done():
             with urgencymod.urgent():
-                return self._finish_heightmap_now(anchor, cx, cy, info, t0, base, lane)
-        return self._finish_heightmap_now(anchor, cx, cy, info, t0, base, lane)
+                return self._finish_heightmap_now(anchor, cx, cy, info, t0, base, lane, base_wait)
+        return self._finish_heightmap_now(anchor, cx, cy, info, t0, base, lane, base_wait)
 
-    def _finish_heightmap_now(self, anchor, cx, cy, info, t0, base=None, lane=None):
+    def _finish_heightmap_now(self, anchor, cx, cy, info, t0, base=None, lane=None, base_wait=None):
         """The base photo (detail mode; rendered here: the imagery corrections live in this process; base: its
-        future from _base_photo, started with the heights), the timings."""
+        future from _base_photo, started with the heights), the timings. base_wait: s it waits for the photo at most
+        (default by speed: BASE_FAST_WAIT_S / BASE_WAIT_S)."""
         if base is not None:
             t1 = time.perf_counter()
             if not base.done():
                 # below FAST_BASE_V it waits for its own photo (BASE_WAIT_S at most): sent before it, each block's
                 # ground swapped twice (stand-in, then the photo) and flashed at each (the user at 57-124 mph, 2026-10-30)
-                concurrent.futures.wait([base], timeout=BASE_FAST_WAIT_S if self.fast else BASE_WAIT_S)
+                concurrent.futures.wait([base], timeout=base_wait if base_wait is not None
+                                        else BASE_FAST_WAIT_S if self.fast else BASE_WAIT_S)
             quick = None
             early = self.quick_futs.pop((anchor.id, cx, cy), None)
             if not base.done() and early is not None:
@@ -3858,6 +3893,8 @@ class Server:
         return info
 
     def _photo_lawns(self, key, ter, layers, rgb):
+        if key in self.hm_committed:            # (in use since it was asked for: its .ter is the engine's, _base_later)
+            return
         try:
             surfacemod.photo_lawns(self.out_dir, ter, layers, rgb)
         except Exception as e:
@@ -3914,10 +3951,12 @@ class Server:
                 return
             if info is not None and (not info.get("base") or info["base"] == self.quick_base_name(key)):
                 info["base"] = name
-                if photo and info.get("layers") and info.get("ter"):
+                if photo and info.get("layers") and info.get("ter") and key not in self.hm_committed:
                     # lawns only where the photo is green (_finish_heightmap), in time for a block not committed
-                    # yet (the mod reads its .ter at the commit; one in use keeps its lawns until it is read again);
-                    # off the event loop (7.6 s of a Steam Deck's loop in a drive)
+                    # yet (the mod reads its .ter at the commit); off the event loop (7.6 s of a Steam Deck's loop in
+                    # a drive). Never a block in use: the engine watches its .ter, reloaded it when patched here and
+                    # froze in its TextureCooker (a pads refresh's block whose photo came a second after it, Billings
+                    # 2026-11-11: "File changed [hm_2_0_384_5.ter]", the game hung)
                     self.quick_pool.submit(self._photo_lawns, key, info["ter"], info["layers"], photo[0])
             for c in list(self.connections):    # (the mod drops another anchor's)
                 c.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
@@ -8330,6 +8369,8 @@ class Connection:
         brings several); one at a time."""
         s = self.s
         now = time.monotonic() if now is None else now
+        if not PADS_REFRESH_IN_USE:
+            return
         if (self.pads_busy or not s.pads_rebuild or math.hypot(*self.vel) > PADS_REFRESH_MS
                 or now - s.pads_changed_at < PADS_SETTLE_S):
             return
