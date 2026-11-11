@@ -29,7 +29,7 @@ class NameTest(unittest.TestCase):
 
     def test_the_initializer_still_runs(self):
         seen = []
-        pools._named_init("test", seen.append, 7)
+        pools._named_init("test", seen.append, None, 7)
         self.assertEqual(seen, [7])
 
 

@@ -55,6 +55,8 @@ pub struct Diagnostics {
     pub constraint_nnz: usize,
     pub constraint_rows: usize,
     pub factor_nnz: usize,
+    pub objective_scale: f64,
+    pub scale_retried: bool,
 }
 
 struct Factor {
@@ -186,9 +188,37 @@ pub fn solve(
     budget: f64,
 ) -> Result<(Vec<f64>, Diagnostics), String> {
     let start = Instant::now();
+    // Multiplying the ENTIRE objective by a positive constant preserves the
+    // minimizer and all physical constraints. Keep the banded fast path and
+    // feasibility tolerances unchanged. Some ill-conditioned networks still
+    // prefer the original scale: retry it within the SAME total time budget.
+    let first = solve_scaled(problem, rounds, budget, 1000.);
+    if matches!(&first, Ok((_, d)) if d.converged && d.feasible) {
+        return first;
+    }
+    let remaining = (budget - start.elapsed().as_secs_f64()).max(0.);
+    if remaining == 0. {
+        return first;
+    }
+    let mut retry = solve_scaled(problem, rounds, remaining, 1.);
+    if let Ok((_, d)) = &mut retry {
+        d.scale_retried = true;
+        d.elapsed_s = start.elapsed().as_secs_f64();
+    }
+    retry
+}
+
+fn solve_scaled(
+    problem: &Problem,
+    rounds: usize,
+    budget: f64,
+    scale: f64,
+) -> Result<(Vec<f64>, Diagnostics), String> {
+    let start = Instant::now();
     let n = problem.target.len();
     let mut d = Diagnostics {
         backend: "banded",
+        objective_scale: 1.,
         ..Default::default()
     };
     let (mut pr, mut pc, mut pv) = (
@@ -317,6 +347,14 @@ pub fn solve(
         d.timed_out = !d.infeasible;
         d.elapsed_s = start.elapsed().as_secs_f64();
         return Ok((z, d));
+    }
+    // Scale only after the unconstrained/contradictory-bounds fast paths.
+    // Scaling assembled P and q also preserves the original W_MIN floor.
+    if scale != 1. && pv.iter().chain(&q).all(|v| v.abs() <= f64::MAX / scale) {
+        for v in pv.iter_mut().chain(&mut q) {
+            *v *= scale;
+        }
+        d.objective_scale = scale;
     }
     let pmat = CscMatrix::new_from_triplets(n, n, pr, pc, pv);
     let neq = eq.len();

@@ -88,16 +88,6 @@ class SlabKernelTest(unittest.TestCase):
         self.assertEqual(len(got[0]) if got else 0, 16 * n, "the box's segments: 4 quads each")
 
 
-class Loop:
-    def __init__(self):
-        self.futs = []
-
-    def run_in_executor(self, pool, fn, *args):
-        f = pool.submit(fn, *args)
-        self.futs.append(f)
-        return f
-
-
 class Conn:
     def __init__(self):
         self.msgs, self.lock = [], threading.Lock()
@@ -118,22 +108,26 @@ class TrackerTest(unittest.TestCase):
         return c
 
     def drive(self, trs, frames, builds):
-        from concurrent.futures import wait
-        loop, conn = Loop(), Conn()
-        counts = []
-        for aid, f in frames:
-            n0 = len(builds)
-            x, y, _ = f.geodetic_to_enu(LAT, LON, 0.0)
-            for _ in range(400):
-                for kind, tr, build in trs:
-                    tr.on_pose(conn, aid, float(x), float(y), loop, build(aid), frame=f)
-                wait(loop.futs)
-                if all(not tr.building and all(k in tr.sent for k in tr.car) for _k, tr, _b in trs):
-                    break
-            counts.append(len(builds) - n0)
-        for _k, tr, _b in trs:
-            tr.close()
-        return counts, conn.msgs
+        import asyncio
+        async def go():
+            loop, conn = asyncio.get_running_loop(), Conn()
+            counts = []
+            try:
+                for aid, f in frames:
+                    n0 = len(builds)
+                    x, y, _ = f.geodetic_to_enu(LAT, LON, 0.0)
+                    for _ in range(400):
+                        for kind, tr, build in trs:
+                            tr.on_pose(conn, aid, float(x), float(y), loop, build(aid), frame=f)
+                        await asyncio.gather(*(fut for _k, tr, _b in trs for fut in list(tr.futs.values())))
+                        if all(not tr.building and all(k in tr.sent for k in tr.car) for _k, tr, _b in trs):
+                            break
+                    counts.append(len(builds) - n0)
+                return counts, conn.msgs
+            finally:
+                for _k, tr, _b in trs:
+                    tr.close()
+        return asyncio.run(go())
 
     def test_rebase_builds_and_sends_no_far_content(self):
         builds, lock = [], threading.Lock()

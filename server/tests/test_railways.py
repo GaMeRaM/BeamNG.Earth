@@ -21,6 +21,22 @@ def flat(xy):
 
 
 class RailwayTest(unittest.TestCase):
+    def test_underpass_projection_clamps_ends_and_keeps_first_equal_segment(self):
+        line = np.array([[0., 0.], [10., 0.], [10., 10.]])
+        points = np.array([[-2., 0.], [5., 3.], [12., 5.], [10., 20.], [8., 2.]])
+        distance, fraction = railways._underpass_distance(points, line)
+        np.testing.assert_allclose(distance, [2., 3., 2., 10., 2.], atol=1e-12)
+        np.testing.assert_allclose(fraction, [0., .25, .75, 1., .4], atol=1e-12)
+
+    def test_underpass_projection_skips_degenerate_segments(self):
+        points = np.array([[5., 2.]])
+        distance, fraction = railways._underpass_distance(points, np.array([[0., 0.], [0., 0.], [10., 0.]]))
+        np.testing.assert_allclose(distance, [2.])
+        np.testing.assert_allclose(fraction, [.5])
+        distance, fraction = railways._underpass_distance(points, np.zeros((3, 2)))
+        self.assertTrue(np.isinf(distance).all())
+        np.testing.assert_array_equal(fraction, [0.])
+
     def test_distant_bridge_of_a_nearby_feature_is_not_profiled(self):
         # One feature crosses the tile, but its last 100 m is a bridge 5 km away.
         f = features([[(-100.0, 100.0), (5000.0, 100.0), (5100.0, 100.0)]],

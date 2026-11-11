@@ -131,6 +131,8 @@ pub fn carriageway_profiles<'py>(
     diagnostics.set_item("constraint_nnz", d.constraint_nnz)?;
     diagnostics.set_item("constraint_rows", d.constraint_rows)?;
     diagnostics.set_item("factor_nnz", d.factor_nnz)?;
+    diagnostics.set_item("objective_scale", d.objective_scale)?;
+    diagnostics.set_item("scale_retried", d.scale_retried)?;
     diagnostics.set_item("feasible", d.feasible)?;
     diagnostics.set_item("grade_excess", d.grade_excess)?;
     diagnostics.set_item("curve_excess", d.curve_excess)?;

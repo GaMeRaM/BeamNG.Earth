@@ -188,18 +188,9 @@ class GeoTrackerRebaseTest(unittest.TestCase):
     no content is built again, a skin for each tile round the car."""
 
     def test_rebase_sends_skins_only(self):
-        from concurrent.futures import ThreadPoolExecutor, wait  # noqa: F401
+        import asyncio
         jobs = []
         lock = threading.Lock()
-
-        class Loop:
-            def __init__(self):
-                self.futs = []
-
-            def run_in_executor(self, pool, fn, *args):
-                f = pool.submit(fn, *args)
-                self.futs.append(f)
-                return f
 
         class Conn:
             def __init__(self):
@@ -226,21 +217,22 @@ class GeoTrackerRebaseTest(unittest.TestCase):
         a, b = east(LAT, LON, -15.0), geodesy.EnuFrame(LAT, LON)
         frames = {1: a, 2: b}
         tr = roads.GeoTracker()
-        loop, conn = Loop(), Conn()
+        conn = Conn()
 
-        def drive(aid, f):
+        async def drive(aid, f):
+            loop = asyncio.get_running_loop()
             x, y, _ = f.geodetic_to_enu(LAT, LON, 0.0)
             n0 = len(jobs)
             for _ in range(60):
                 tr.on_pose(conn, aid, float(x), float(y), loop, build, frame=f)
-                wait(loop.futs)
+                await asyncio.gather(*list(tr.futs.values()))
                 if not tr.building and all(k in tr.sent and k in tr.skins for k in tr.car) and \
                         not any(tr.need.get((k, aid)) for k in tr.car):
                     break
             return jobs[n0:]
-        first = drive(1, a)
+        first = asyncio.run(drive(1, a))
         m0 = len(conn.msgs)
-        second = drive(2, b)
+        second = asyncio.run(drive(2, b))
         tr.close()
         msgs = conn.msgs[m0:]
         content_after = [j for j in second if j[3]]

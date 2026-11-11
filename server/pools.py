@@ -47,7 +47,7 @@ def proc_name(name):
     return ("bnge:" + name.replace(" ", ""))[:15]
 
 
-def _named_init(name, init, *initargs):
+def _named_init(name, init, cancel_flags, *initargs):
     """A pool's initializer, after naming its process (proc_name)."""
     if sys.platform.startswith("linux"):
         try:
@@ -55,6 +55,8 @@ def _named_init(name, init, *initargs):
             ctypes.CDLL(None, use_errno=True).prctl(15, proc_name(name).encode(), 0, 0, 0)     # PR_SET_NAME
         except (OSError, AttributeError):
             pass
+    import workcancel
+    workcancel.attach(cancel_flags)
     if init is not None:
         init(*initargs)
 
@@ -78,15 +80,19 @@ def _arm_dump():
         return False
 
 
-def _call(fn, args, kwargs):
+def _call(fn, args, kwargs, cancel_slot=None):
     """A job in the worker, then its memory ceiling (budget.maybe_shed: on a small machine a worker over it drops its
     caches between jobs); never during an idle shed (budget.JOB_LOCK), whose clock it starts again. A job still running
     after HUNG_DUMP_S writes the worker's stacks (_arm_dump)."""
     import budget
+    import workcancel
     armed = _arm_dump()
-    with budget.job_lock():
+    with budget.job_lock(), workcancel.worker_scope(cancel_slot):
         try:
-            return fn(*args, **kwargs)
+            workcancel.checkpoint()
+            result = fn(*args, **kwargs)
+            workcancel.checkpoint()
+            return result
         finally:
             if armed:
                 try:
@@ -101,16 +107,21 @@ def _call(fn, args, kwargs):
                 pass
 
 
-def _shedding(submit):
+def _shedding(submit, cancel_slot=None):
     """pool.submit with every job wrapped in _call."""
-    return lambda fn, *args, **kwargs: submit(_call, fn, args, kwargs)
+    return lambda fn, *args, **kwargs: submit(_call, fn, args, kwargs, cancel_slot)
 
 
 class RespawningPool:
     """ProcessPoolExecutor(*args, **kwargs) made again when broken. submit / shutdown as the executor's."""
 
-    def __init__(self, name, *args, hung_s=None, **kwargs):
-        kwargs = dict(kwargs, initializer=functools.partial(_named_init, name, kwargs.get("initializer")),
+    def __init__(self, name, *args, hung_s=None, cancellable=False, **kwargs):
+        import multiprocessing
+        ctx = kwargs.get('mp_context') or multiprocessing.get_context()
+        self._cancel_flags = ctx.RawArray('b', 1024) if cancellable else None
+        self._cancel_free = collections.deque(range(1024)) if cancellable else collections.deque()
+        self._cancel_lock = threading.Lock()
+        kwargs = dict(kwargs, initializer=functools.partial(_named_init, name, kwargs.get("initializer"), self._cancel_flags),
                       initargs=tuple(kwargs.get("initargs", ())))         # (its processes named: proc_name)
         self.name, self._args, self._kwargs = name, args, kwargs
         self._lock = threading.Lock()
@@ -138,12 +149,57 @@ class RespawningPool:
             threading.Thread(target=self._watch, name=f"{name} watchdog", daemon=True).start()
 
     def submit(self, fn, *args, **kwargs):
+        return self._submit(fn, args, kwargs, None)
+
+    def submit_cancellable(self, fn, *args, **kwargs):
+        """Only for an owned build: shared producers must use ordinary submit."""
+        import workcancel
+        request = workcancel.current()
+        if not isinstance(request, workcancel.Request):
+            return self.submit(fn, *args, **kwargs)
+        request.checkpoint()
+        if self._cancel_flags is None:
+            future = self.submit(fn, *args, **kwargs)
+            request.bind(future.cancel)
+            return future
+        with self._cancel_lock:
+            slot = self._cancel_free.popleft() if self._cancel_free else None
+        if slot is None:                 # capacity exhausted: still allow ordinary queued cancellation
+            future = self.submit(fn, *args, **kwargs)
+            request.bind(future.cancel)
+            return future
+        active = [True]
+
+        def release(_future=None):
+            with self._cancel_lock:
+                if active[0]:
+                    active[0] = False
+                    self._cancel_flags[slot] = 0
+                    self._cancel_free.append(slot)
+
+        try:
+            future = self._submit(fn, args, kwargs, slot)
+        except BaseException:
+            release()
+            raise
+        future.add_done_callback(release)
+
+        def cancel():
+            with self._cancel_lock:
+                if active[0]:
+                    self._cancel_flags[slot] = 1
+            future.cancel()              # outside lock: its callbacks may release this slot immediately
+
+        request.bind(cancel)
+        return future
+
+    def _submit(self, fn, args, kwargs, cancel_slot):
         with self._lock:
             pool = self._pool
         try:
-            fut = runtimeprofiler.collector.submit(_shedding(pool.submit), self.name, fn, args, kwargs)
+            fut = runtimeprofiler.collector.submit(_shedding(pool.submit, cancel_slot), self.name, fn, args, kwargs)
         except BrokenProcessPool:
-            fut = runtimeprofiler.collector.submit(_shedding(self._renew(pool).submit), self.name, fn, args, kwargs)
+            fut = runtimeprofiler.collector.submit(_shedding(self._renew(pool).submit, cancel_slot), self.name, fn, args, kwargs)
         with self._count_lock:
             self.inflight += 1
         if self.hung_s:

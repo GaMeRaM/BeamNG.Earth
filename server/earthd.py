@@ -2388,7 +2388,8 @@ class Server:
         if anchor is None or self.mapdata is None or self.road_pool is None:
             return None
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
-        fut = self.road_pool.submit(
+        submit = getattr(self.road_pool, 'submit_cancellable', self.road_pool.submit)
+        fut = submit(
             blockworker.roads_geo, aid, anchor.lat, anchor.lon, anchor.zooms[0], gx, gy, gzoom, self.out_dir,
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
@@ -2496,7 +2497,8 @@ class Server:
             return None
         if self.road_pool is not None:
             t0 = time.perf_counter()
-            fut = self.road_pool.submit(
+            submit = getattr(self.road_pool, 'submit_cancellable', self.road_pool.submit)
+            fut = submit(
                 blockworker.roads_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
                 self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                 self.buildings, self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor),
@@ -9319,6 +9321,7 @@ async def main_async(args):
     if args.block_process == "on" and args.roads == "on" and args.road_processes > 0:
         road_pool = poolsmod.RespawningPool(      # road tiles (blockworker.roads_tile)
             "road tile", args.road_processes, mp_context=ctx, initializer=blockworker.init,
+            cancellable=True,
             hung_s=ROAD_TILE_TIMEOUT_S + ROAD_HUNG_EXTRA_S,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,

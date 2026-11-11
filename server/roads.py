@@ -39,6 +39,7 @@ import photosurface
 import roadmesh
 import roadsmooth
 import staging
+import asyncsubmit
 
 log = logging.getLogger("earthd.roads")
 
@@ -10932,6 +10933,8 @@ class Tracker:
         town signs' switches, roads_reset) sends the tile built anew; this one's, built before the switch, had come
         after it and stayed (Codex on PR #892)."""
         self.closed = True
+        for future in self.futs.values():
+            asyncsubmit.request_cancel(future)
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
@@ -10975,6 +10978,12 @@ class Tracker:
             others.update(tiles_near(f[0], f[1], min(SEND_M, f[2] + TILE / 2)))
         others -= car | seen
         wanted = car | seen | others
+        def far(k):
+            return tile_distance(k[0], k[1], x, y) > DROP_M and (not view or tile_distance(k[0], k[1], *view) > DROP_M) \
+                and all(tile_distance(k[0], k[1], f[0], f[1]) > f[2] + TILE for f in foci)
+        for k in self.building - wanted:
+            if far(k):
+                asyncsubmit.request_cancel(self.futs.get(k))
         start = set(tiles_near(x, y, SEND_M)) if ground_busy else wanted
         now = time.monotonic()
         want = [k for k in start if k not in self.sent and k not in self.building and k not in self.empty
@@ -10987,7 +10996,7 @@ class Tracker:
         for tx, ty in want[:max(0, BUILD_PER_POSE - len(self.building))]:   # in flight at most (vegetation.Tracker)
             self.building.add((tx, ty))
             self.started[(tx, ty)] = now
-            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, build, aid, tx, ty)
+            fut = self.futs[(tx, ty)] = asyncsubmit.submit(loop, self.pool, build, aid, tx, ty, owned=True)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
         # a build that never ends leaves the loading line at "roads & buildings 0/36" with nothing in the log (GitHub
         # #241, a Discord report): said once per tile, with how many are in flight
@@ -10999,9 +11008,6 @@ class Tracker:
                 # try slower; the time counts the wait for a free road process too)
                 log.warning("roads tile %s of anchor %d: not ready after %.0f s (%d tiles in flight, %d sent): "
                             "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
-        def far(k):
-            return tile_distance(k[0], k[1], x, y) > DROP_M and (not view or tile_distance(k[0], k[1], *view) > DROP_M) \
-                and all(tile_distance(k[0], k[1], f[0], f[1]) > f[2] + TILE for f in foci)
         drop = [k for k in self.sent if k not in wanted and far(k)]
         for k in drop:
             self.sent.discard(k)
@@ -11135,6 +11141,8 @@ class GeoTracker:
     def close(self):
         """No more tiles from this tracker (Tracker.close: a running build's result is not sent)."""
         self.closed = True
+        for future in self.futs.values():
+            asyncsubmit.request_cancel(future)
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
@@ -11244,6 +11252,16 @@ class GeoTracker:
             for a, b, d in geotiles.tiles_near(frame, f[0], f[1], min(SEND_M, f[2] + TILE / 2)):
                 others.setdefault((a, b), d)
         wanted = set(car) | set(seen) | set(others)
+        def far(k):
+            q = geotiles.quad(frame, *k)
+            if geotiles.quad_dist(q, x, y) <= DROP_M:
+                return False
+            if view and geotiles.quad_dist(q, *view) <= DROP_M:
+                return False
+            return all(geotiles.quad_dist(q, f[0], f[1]) > f[2] + TILE for f in foci)
+        for k in self.building - wanted:
+            if far(k):
+                asyncsubmit.request_cancel(self.futs.get(k))
         start = {(a, b) for a, b, _ in geotiles.tiles_near(frame, x, y, SEND_M)} if ground_busy else wanted
         now = time.monotonic()
         jobs = []
@@ -11291,7 +11309,7 @@ class GeoTracker:
         for k, content, skin, make in jobs[:max(0, BUILD_PER_POSE - len(self.building))]:
             self.building.add(k)
             self.started[k] = now
-            fut = self.futs[k] = loop.run_in_executor(self.pool, build, aid, k[0], k[1], content, skin, make)
+            fut = self.futs[k] = asyncsubmit.submit(loop, self.pool, build, aid, k[0], k[1], content, skin, make, owned=True)
             fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
                                   self._built(conn, a, kk, f, c, sk, m))
         for k in self.building:
@@ -11302,13 +11320,6 @@ class GeoTracker:
                             "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
                 _stuck_dump(f"road geotile {k} of anchor {aid} not ready after {now - t0:.0f} s")
 
-        def far(k):
-            q = geotiles.quad(frame, *k)
-            if geotiles.quad_dist(q, x, y) <= DROP_M:
-                return False
-            if view and geotiles.quad_dist(q, *view) <= DROP_M:
-                return False
-            return all(geotiles.quad_dist(q, f[0], f[1]) > f[2] + TILE for f in foci)
         for k in [k for k in self.sent if k not in wanted and k not in self.building and far(k)]:
             self.sent.discard(k)
             self.skins.discard(k)

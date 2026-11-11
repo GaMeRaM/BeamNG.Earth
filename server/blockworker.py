@@ -1935,6 +1935,8 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
     fuel pads) or None, "skin": (vfs path, info) or None, "exact": {what: vfs path}, "stages": {...}}."""
     watch = _stack_watch(f"road geotile {gx}_{gy}")
     try:
+        import workcancel
+        workcancel.checkpoint()
         out = {"content": None, "skin": None, "exact": {}, "stages": {}}
         t0 = time.perf_counter()
         c0 = time.process_time()
@@ -1945,10 +1947,12 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         if content:
             out["content"] = build_content()
             out["stages"]["content"] = last_tile_stages()
+        workcancel.checkpoint()
         t1, c1 = time.perf_counter(), time.process_time()
         if skin:
             out["skin"] = _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, build_content)
             out["stages"]["skin"] = last_tile_stages()
+        workcancel.checkpoint()
         t2, c2 = time.perf_counter(), time.process_time()
         if exact == "auto":             # (a fresh content: the parts its anchor needs exact, roads.geo_exact_auto)
             import geotiles

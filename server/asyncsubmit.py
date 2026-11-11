@@ -1,24 +1,38 @@
 """Keep ThreadPoolExecutor's lazy thread creation off the world event loop."""
 import contextvars
+import functools
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError
+import workcancel
 
 # Imported with the world server, before its event loop starts.
 _submitter = ThreadPoolExecutor(1, thread_name_prefix='tile-submit')
 _submitter.submit(lambda: None).result()
 
 
-def submit(loop, pool, fn, *args):
+def submit(loop, pool, fn, *args, owned=False):
     result = loop.create_future()
+    request = workcancel.Request()
+    result.work_request = request
     context = contextvars.copy_context()
     pending = [None]
 
     def deliver(future):
         if result.done():
             return
+        try:
+            request.checkpoint()
+        except workcancel.WorkCancelled:
+            result.cancel()          # completed meanwhile, but no longer wanted: do not publish stale output
+            return
         if future.cancelled():
             result.cancel()
         elif future.exception() is not None:
-            result.set_exception(future.exception())
+            error = future.exception()
+            if isinstance(error, (CancelledError, workcancel.WorkCancelled)):
+                result.cancel()
+            else:
+                result.set_exception(error)
         else:
             result.set_result(future.result())
 
@@ -34,12 +48,23 @@ def submit(loop, pool, fn, *args):
         if result.cancelled():
             return
         try:
-            future = pool.submit(fn, *args)
+            request.checkpoint()
+            @functools.wraps(fn)
+            def run():
+                request.checkpoint()
+                # Shared/coalesced producers must finish for their other
+                # consumers. Only explicitly owned builds expose inner checkpoints.
+                with workcancel.scope(request if owned else None):
+                    value = fn(*args)
+                request.checkpoint()
+                return value
+            future = pool.submit(run)
         except BaseException as error:
             from concurrent.futures import Future
             future = Future()
             future.set_exception(error)
         pending[0] = future
+        request.bind(future.cancel)
         if result.cancelled():
             future.cancel()
         # Deliver directly, avoiding two extra trips through the event loop for
@@ -47,9 +72,20 @@ def submit(loop, pool, fn, *args):
         future.add_done_callback(notify)
 
     def cancel(done):
-        if done.cancelled() and pending[0] is not None:
-            pending[0].cancel()
+        if done.cancelled():
+            request.cancel()
 
     result.add_done_callback(cancel)
-    _submitter.submit(context.run, prepare)
+    preparation = _submitter.submit(context.run, prepare)
+    request.bind(preparation.cancel)
+    def prepared(future):
+        if future.cancelled() or future.exception() is not None:
+            notify(future)
+    preparation.add_done_callback(prepared)
     return result
+
+
+def request_cancel(future):
+    """Ask a build to stop; leave its slot occupied until it actually stops."""
+    request = getattr(future, 'work_request', None)
+    return request.cancel() if request is not None else False

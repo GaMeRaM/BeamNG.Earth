@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -64,7 +65,10 @@ class OsmFuelTilesTest(unittest.TestCase):
         k = sorted(car)[0]
         t.again({k, (10 ** 6, 10 ** 6)})
         self.assertNotIn(k, t.sent)
-        t.on_pose(None, 1, 0.0, 0.0, Loop(), None, frame=frame)
+        # This test spies on scheduling; real async dispatch/cancellation is
+        # exercised by test_asyncsubmit and test_workcancel.
+        with mock.patch('asyncsubmit.submit', side_effect=lambda loop, pool, fn, *args, **kw: loop.run_in_executor(pool, fn, *args)):
+            t.on_pose(None, 1, 0.0, 0.0, Loop(), None, frame=frame)
         t.close()
         self.assertEqual([(a[1], a[2], a[3], a[4]) for a in jobs], [(k[0], k[1], True, True)])
         self.assertTrue(all(isinstance(g, int) for g in k) and geotiles.key(*k))

@@ -44,6 +44,15 @@ class NativeProfilesTest(unittest.TestCase):
         (z,), info = self.solve([c])
         np.testing.assert_allclose(z, np.linalg.solve(h, c["w"] * t), atol=1e-11)
         self.assertEqual(info["backend"], "banded")
+        self.assertEqual(info["objective_scale"], 1.)
+
+    def test_scaled_qp_preserves_zero_weight_floor_and_analytic_minimum(self):
+        c = road([0.])
+        c['w'][:] = 0.
+        z, info = self.solve([c, c], [(0, 0, 1, 0, 'ge', 7.)])
+        np.testing.assert_allclose(np.concatenate(z), [3.5, -3.5], atol=1e-4)
+        self.assertEqual(info['objective_scale'], 1000.)
+        self.assertFalse(info['scale_retried'])
 
     def test_analytic_junction_and_clearance(self):
         a, b = road([0.]), road([10.])
@@ -87,6 +96,7 @@ class NativeProfilesTest(unittest.TestCase):
                 z = cw.solve(roads, couplings, diagnostics=info)
             self.assertTrue(info["infeasible"], info)
             self.assertFalse(info["converged"], info)
+            self.assertTrue(info['scale_retried'], 'a failed scaled solve must try the original scale')
             # Clarabel's infeasibility certificate must never be mistaken for world elevations.
             np.testing.assert_allclose(np.concatenate(z), np.full(len(roads), 20.), atol=1e-8)
 
@@ -98,6 +108,8 @@ class NativeProfilesTest(unittest.TestCase):
                 z = cw.solve([c], diagnostics=info, **options)
             self.assertFalse(info["converged"], info)
             self.assertEqual(info["timed_out"], timed_out, info)
+            if timed_out:
+                self.assertFalse(info['scale_retried'], 'retry must not reset an exhausted time budget')
             self.assertTrue(np.isfinite(z[0]).all())
 
     def test_invalid_inputs_fail_before_native_indexing(self):

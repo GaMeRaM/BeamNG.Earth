@@ -17,7 +17,8 @@ import threading
 import time
 import uuid
 import ioprofiler
-from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor, CancelledError
+import workcancel
 
 _context = contextvars.ContextVar("earth_profile_job", default=None)
 _live, _live_lock, _wake, _heartbeat_thread = {}, threading.Lock(), threading.Event(), None
@@ -25,6 +26,15 @@ MAX_ACTIVE = 512
 MAX_RECENT = 120
 MAX_STEPS = 64
 PUBLISH_S = 0.5
+
+
+def _future_outcome(future):
+    if future.cancelled():
+        return 'cancelled'
+    error = future.exception()
+    if isinstance(error, (CancelledError, asyncio.CancelledError, workcancel.WorkCancelled)):
+        return 'cancelled'
+    return 'error' if error is not None else 'ok'
 
 
 def _emit(ctx, kind, data):
@@ -130,8 +140,8 @@ def _run(channel, session, job_id, fn, args, kwargs, root_id=None, io_config=Non
     outcome = "ok"
     try:
         return fn(*args, **kwargs)
-    except BaseException:
-        outcome = "error"
+    except BaseException as error:
+        outcome = "cancelled" if isinstance(error, (CancelledError, asyncio.CancelledError, workcancel.WorkCancelled)) else "error"
         raise
     finally:
         with _live_lock:
@@ -233,7 +243,7 @@ class Collector:
                 row = self.active.get(job_id)
                 if session == self.session and row is not None:
                     row["doneAt"] = time.perf_counter()
-                    row["outcome"] = "cancelled" if f.cancelled() else ("error" if f.exception() else "ok")
+                    row["outcome"] = _future_outcome(f)
         fut.add_done_callback(done)
         return fut
 
@@ -334,7 +344,7 @@ class ThreadPoolExecutor(_ThreadPoolExecutor):
                 raise
             def done(f):
                 _emit(ctx, "notice", {"doneAt": time.perf_counter(),
-                      "outcome": "cancelled" if f.cancelled() else ("error" if f.exception() else "ok")})
+                      "outcome": _future_outcome(f)})
             fut.add_done_callback(done)
             return fut
         return collector.submit(super().submit, self._thread_name_prefix, fn, args, kwargs)

@@ -41,6 +41,7 @@ import mapcells
 import railways as railwaysmod
 import roads as roadsmod
 import seatiles
+import workcancel
 
 log = logging.getLogger("earthd.grading")
 
@@ -2096,6 +2097,7 @@ class _Planner:
             return self._plan_cell(key)
 
     def _plan_cell(self, key):
+        workcancel.checkpoint()
         with self.lock:
             got = self.cells.get(key)
             failed = self.failed.get(key)
@@ -2145,7 +2147,9 @@ class _Planner:
             self.covers.setdefault(key, covers)
             self.opens.setdefault(key, opens)
             self.dgcells.setdefault(key, dg)
-            return self.cells[key]
+            result = self.cells[key]
+        workcancel.checkpoint()
+        return result
 
     def _make_cell(self, key):
         """(plans, keeps, covers, opens) of cell key, or None when its roads could not be fetched."""
@@ -3630,6 +3634,7 @@ class _Planner:
         chains (carriageways.chains) and those solved together (_cw_solve): {"parts": [...], "chains": [...],
         "prof": {part key: (chain samples xy, z)}}, cached. Every road and deck is answered by the region of the cell
         holding its middle, so every cell and process asking gets the same heights."""
+        workcancel.checkpoint()
         memo = self.__dict__.setdefault("_cw_regions", {})
         hk = str(home)
         with self.lock:
@@ -3683,6 +3688,9 @@ class _Planner:
             if len(memo) > 64:
                 memo.clear()
             memo[hk] = got
+        # A finished region is reusable by the new tiles, even if this tile is
+        # obsolete. Release its claim and cache it BEFORE honouring cancellation.
+        workcancel.checkpoint()
         return got
 
     def _cw_region_calc(self, home, hk):
@@ -4007,6 +4015,7 @@ class _Planner:
         cp = list(couplings) + [(nu, ju, nl, jl, "ge", clear) for nu, ju, nl, jl, clear in seps]
 
         def solve_network():
+            workcancel.checkpoint()
             info = {}
             result = _cw.solve(data, cp, deadline=deadline, diagnostics=info)
             if not info["converged"]:
@@ -5524,7 +5533,14 @@ class _Planner:
         dem = getattr(self, "dem", None)
         urgent = dem is not None and getattr(dem, "is_urgent", lambda: False)()
 
+        request = workcancel.current()
+
         def one(k):
+            with workcancel.scope(request):
+                workcancel.checkpoint()
+                return plan_one(k)
+
+        def plan_one(k):
             if urgent:
                 with dem.urgent():
                     return self._cell_plans(k)

@@ -593,6 +593,16 @@ def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
 def _underpass_distance(xy, line):
     """Distance to a finite tunnel centreline, and fraction along it, per point."""
     s = _arc(line)
+    # Reuse the native batched projection. Its station extrapolates past the
+    # ends, whereas this query is finite; clamp it before forming the fraction.
+    # The original skips sub-micrometre segments and ignores NaN candidates.
+    # Keep that path for degenerate/nonfinite inputs instead of changing ties.
+    if (len(line) >= 2 and np.isfinite(line).all() and np.isfinite(xy).all()
+            and (np.hypot(*np.diff(line, axis=0).T) >= 1e-6).all()):
+        import fast
+        station, _near, _tangent, _offset, distance = fast._ef.polyline_project(
+            np.ascontiguousarray(line, np.float64), np.ascontiguousarray(xy, np.float64))
+        return distance, np.clip(station, 0., s[-1]) / max(s[-1], 1e-6)
     dist = np.full(len(xy), np.inf)
     along = np.zeros(len(xy))
     for j, (a, b) in enumerate(zip(line[:-1], line[1:])):

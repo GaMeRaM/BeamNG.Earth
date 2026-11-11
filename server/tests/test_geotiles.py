@@ -378,16 +378,7 @@ class VegGeoTilesTest(unittest.TestCase):
     def test_tracker_keeps_tiles_across_a_rebase(self):
         """A scripted rebase: the geo tracker builds nothing again; the anchor tracker builds every tile again."""
         import vegetation
-        from concurrent.futures import ThreadPoolExecutor, wait
-
-        class Loop:
-            def __init__(self):
-                self.futs = []
-
-            def run_in_executor(self, pool, fn, *args):
-                f = pool.submit(fn, *args)
-                self.futs.append(f)
-                return f
+        import asyncio
 
         class Conn:
             def __init__(self):
@@ -407,19 +398,23 @@ class VegGeoTilesTest(unittest.TestCase):
             return "/x/veg.json", 1
 
         def drive(tr, build, frames):
-            loop, conn = Loop(), Conn()
-            counts = []
-            for aid, f in frames:
-                n0 = len(built)
-                x, y, _ = f.geodetic_to_enu(LAT, LON, 0.0)
-                for _ in range(40):         # (poses until nothing more is wanted)
-                    tr.on_pose(conn, aid, float(x), float(y), loop, build, frame=f)
-                    wait(loop.futs)
-                    if len(tr.building) == 0 and all(k in tr.sent for k in tr.car):
-                        break
-                counts.append(len(built) - n0)
-            tr.close()
-            return counts, conn.msgs
+            async def go():
+                loop, conn = asyncio.get_running_loop(), Conn()
+                counts = []
+                try:
+                    for aid, f in frames:
+                        n0 = len(built)
+                        x, y, _ = f.geodetic_to_enu(LAT, LON, 0.0)
+                        for _ in range(40):
+                            tr.on_pose(conn, aid, float(x), float(y), loop, build, frame=f)
+                            await asyncio.gather(*list(tr.futs.values()))
+                            if not tr.building and all(k in tr.sent for k in tr.car):
+                                break
+                        counts.append(len(built) - n0)
+                    return counts, conn.msgs
+                finally:
+                    tr.close()
+            return asyncio.run(go())
         a, b = east(LAT, LON, -15.0), geodesy.EnuFrame(LAT, LON)
         geo, msgs = drive(vegetation.Tracker(per_pose=16, geo=True), build_geo, [(1, a), (2, b)])
         built.clear()

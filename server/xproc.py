@@ -14,6 +14,7 @@ wait longer than wait_s does the work itself.
 """
 import json
 import os
+import workcancel
 import re
 import shutil
 import sys
@@ -113,6 +114,7 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None):
     """(result, False): ready() gave it (at once or after waiting for another process); (None, True): this process
     does the work (release(lock) after the result is written); (None, False): do it without the lock (a wait past
     wait_s, or a less urgent holder). on_wait(): called once when this process starts waiting."""
+    workcancel.checkpoint()
     got = ready()
     if got is not None:
         return got, False
@@ -120,8 +122,14 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None):
     waited = False
     holder = None
     while True:
+        workcancel.checkpoint()
         if take(lock, kind):
-            got = ready()                   # (written by the process whose lock we just followed)
+            try:
+                workcancel.checkpoint()
+                got = ready()               # (written by the process whose lock we just followed)
+            except BaseException:
+                release(lock)               # cancellation/error after acquisition must not strand its claim
+                raise
             if got is not None:
                 release(lock)
                 return got, False

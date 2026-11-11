@@ -102,7 +102,8 @@ def main():
             import plancache
             netstate.init()
             plancache.start_run(str(cache))
-        workers = [pools.RespawningPool(name, count, mp_context=multiprocessing.get_context('spawn'),
+        workers = [pools.RespawningPool(name, count, cancellable=(name == 'road check'),
+                                       mp_context=multiprocessing.get_context('spawn'),
                                        initializer=blockworker.init, initargs=initargs)
                    for name, count in (('block check', 1), ('road check', 4),
                                        ('far tile check', 2), ('far building check', 1))]
@@ -115,6 +116,22 @@ def main():
                     assert workers[-1].recycle('packaged queue recovery check')
                     assert workers[1].recycle('shared multi-reader queue recovery check')
             print('Packaged worker queues: 4 pools / 8 workers, 3 rounds and recycle passed', flush=True)
+            import time
+            import workcancel
+            request = workcancel.Request()
+            respawns = workers[1].respawns
+            with workcancel.scope(request):
+                pending = workers[1].submit_cancellable(time.sleep, .5)
+            request.cancel()
+            try:
+                pending.result(timeout=30)
+            except (workcancel.WorkCancelled, concurrent.futures.CancelledError):
+                pass
+            else:
+                raise RuntimeError('Owned worker job ignored cancellation')
+            assert workers[1].submit(abs, -42).result(timeout=30) == 42
+            assert workers[1].respawns == respawns
+            print('Packaged cancellation flag / worker reuse passed; no process restarted', flush=True)
             if world:
                 world_jobs(workers, root)
         finally:

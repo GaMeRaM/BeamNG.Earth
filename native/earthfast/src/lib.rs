@@ -6185,7 +6185,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(osmtagshards::otg_decode, m)?)?;
     // 210: osmtagshards (otg_decode: a tile of the weekly OSM road tag shards, tools/build_osm_tag_shards.py,
     // server/osmtagshards.py; that branch's 207)
-    m.add("VERSION", 212)?;
+    m.add("VERSION", 213)?;
 
     Ok(())
 }

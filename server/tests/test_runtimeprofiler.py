@@ -13,6 +13,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import runtimeprofiler as profiler
 import pools
+import workcancel
 
 
 @profiler.step("test stage")
@@ -29,6 +30,41 @@ def threaded_work():
 
 
 class ProfilerTest(unittest.TestCase):
+    def test_cancellable_spawn_job_preserves_profiler_and_pool(self):
+        import multiprocessing
+        self.c.configure(True)
+        pool = pools.RespawningPool('profile cancel', 1, cancellable=True,
+                                    mp_context=multiprocessing.get_context('spawn'))
+        request = workcancel.Request()
+        try:
+            with workcancel.scope(request):
+                future = pool.submit_cancellable(time.sleep, .5)
+            end = time.monotonic() + 5
+            while not future.running() and time.monotonic() < end:
+                time.sleep(.001)
+            self.assertTrue(future.running())
+            request.cancel()
+            with self.assertRaises(workcancel.WorkCancelled):
+                future.result(timeout=10)
+            self.assertEqual(pool.submit(abs, -42).result(timeout=10), 42)
+            self.assertEqual(pool.respawns, 0)
+            state = self.finished(2)
+            cancelled = [j for j in state['recent'] if j['name'] == 'sleep']
+            self.assertTrue(cancelled)
+            self.assertEqual(cancelled[0]['outcome'], 'cancelled')
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
+
+    def test_cooperative_cancel_is_not_a_failed_build(self):
+        self.c.configure(True)
+        def obsolete():
+            raise workcancel.WorkCancelled()
+        with profiler.ThreadPoolExecutor(1) as pool:
+            with self.assertRaises(workcancel.WorkCancelled):
+                pool.submit(obsolete).result(timeout=5)
+        state = self.finished(1)
+        self.assertEqual(state['recent'][0]['outcome'], 'cancelled')
+
     def setUp(self):
         self.c = profiler.Collector()
         self.patch = patch.object(profiler, "collector", self.c)
