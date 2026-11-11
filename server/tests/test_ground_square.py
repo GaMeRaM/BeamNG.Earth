@@ -46,7 +46,7 @@ def child(env_square):
     env.pop("BNGE_GROUND_SQUARE", None)
     if env_square is not None:
         env["BNGE_GROUND_SQUARE"] = env_square
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
         f.write(CHILD)
     try:
         got = subprocess.run([sys.executable, f.name, SERVER], env=env, capture_output=True, text=True, timeout=300)
