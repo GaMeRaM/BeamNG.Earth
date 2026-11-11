@@ -627,7 +627,14 @@ def _underpass_masks(rails, line, half, margin):
         tangent = np.gradient(xy, axis=0)
         cross = np.abs(tangent[:, 0] * direction[1] - tangent[:, 1] * direction[0])
         cross /= np.maximum(np.linalg.norm(tangent, axis=1) * np.linalg.norm(direction), 1e-9)
-        distance, _ = _underpass_distance(xy, line)
+        # Only the distance is needed here, not the arc fraction. Reuse the
+        # native polyline query instead of projecting each segment in Python.
+        if np.all(np.linalg.norm(np.diff(line, axis=0), axis=1) >= 1e-6):
+            import fast
+            distance = fast._ef.polyline_dist(np.ascontiguousarray(line, np.float64),
+                                              np.ascontiguousarray(xy, np.float64))
+        else:       # preserve the projection's treatment of degenerate segments
+            distance, _ = _underpass_distance(xy, line)
         covered = (distance <= pad) & (cross > UNDERPASS_MIN_SIN)
         candidates.append(covered)
         spans = covered[:-1] | covered[1:]

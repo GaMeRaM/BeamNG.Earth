@@ -3588,6 +3588,8 @@ class _Planner:
                                                  c.get("bridge_ids", [None] * nb), c.get("bridge_levels", [1.0] * nb),
                                                  c.get("bridge_half", [4.0] * nb))]
         through = [line for line, _h, cl in c["ground"] if cl in ("motorway", "trunk", "primary")]
+        through_lo = np.array([line.min(0) for line in through]).reshape(-1, 2)
+        through_hi = np.array([line.max(0) for line in through]).reshape(-1, 2)
         for ln, br, cls, fid, lv, half in items:
             if _cw.family(cls) is None or len(ln) < 2:
                 continue
@@ -3597,7 +3599,13 @@ class _Planner:
             if cls == 'service':
                 if br or roadsmod._length(ln) > 1000.:
                     continue
-                if not any(min(_seg_dist(line, ln[0]), _seg_dist(line, ln[-1])) <= _cw.COUPLE_M for line in through):
+                # Most roads in this cell are nowhere near either end. The
+                # bounds only reject impossible joins; exact distance decides.
+                ends = ln[[0, -1]]
+                near = (((through_lo[:, None, :] <= ends + _cw.COUPLE_M) &
+                         (through_hi[:, None, :] >= ends - _cw.COUPLE_M)).all(2)).any(1)
+                if not any(min(_seg_dist(through[j], ln[0]), _seg_dist(through[j], ln[-1])) <= _cw.COUPLE_M
+                           for j in np.flatnonzero(near)):
                     continue
             key = ("b" if br else "g", round(float(ln[0, 0]), 1), round(float(ln[0, 1]), 1),
                    round(float(ln[-1, 0]), 1), round(float(ln[-1, 1]), 1))
