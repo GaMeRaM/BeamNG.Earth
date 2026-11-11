@@ -97,6 +97,7 @@ jobs:
           "$f" --server --help > help.txt
           head -3 help.txt
           "$f" --world-cache --help > world-cache-help.txt
+          "$f" --run-addon tools/check_worker_pools.py
       - name: Package source and BeamMP mod
         run: python tools/package.py --out dist --beammp
       - uses: actions/upload-artifact@v4
