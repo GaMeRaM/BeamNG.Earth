@@ -119,7 +119,7 @@ jobs:
           if-no-files-found: error
 
       - name: Real generation through packaged worker queues
-        if: inputs.world_check
+        if: github.event_name == 'push' || inputs.world_check
         shell: pwsh
         run: |
           $app = Get-ChildItem dist -Filter '*.exe' | Select-Object -First 1

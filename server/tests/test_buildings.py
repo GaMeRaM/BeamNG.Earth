@@ -1670,6 +1670,8 @@ class PortalSkipTest(unittest.TestCase):
 
 
 class TollBoothTest(unittest.TestCase):
+    """Mapped low islands with booths should use the stock toll-booth model."""
+
     def test_islands_accept_road_elevation(self):
         parts = mock.Mock()
         parts.booths.return_value = [(rect(0, 0, 2, 2), (0.0, 4.0))]
@@ -1678,9 +1680,6 @@ class TollBoothTest(unittest.TestCase):
         xyz = np.column_stack((xy, [100., 120.]))
         self.assertEqual(bld._toll_islands(None, [], parts, [xyz], 0, 0),
                          bld._toll_islands(None, [], parts, [xy], 0, 0))
-
-    """A toll plaza's islands (low mapped "buildings") with booths on them are West Coast USA's toll booth (the user's
-    report at the Golden Gate, 2026-10-21: bare boxes on slabs)."""
 
     @staticmethod
     def box(cx, cy, length, width, angle_deg):
