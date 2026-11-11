@@ -38,6 +38,10 @@ ACUTE_T_M = 9.0                 # carriageways' corner (radius / tan(theta / 2) 
 ACUTE_R_MIN = 0.8               # and the corner gets no curb extension
 BRANCH_M = 10.0                 # m of a branch used for its direction
 CROSSWALK = {"m": "crossing_white", "tl": 4.8, "p": 3, "w": 3.0}
+NOSE_DEG = 60.0                 # a corner sharper than this: its slab runs on past where the sidewalks' outer edges
+NOSE_GAP_M = 4.0                # meet until they are this far apart ...
+NOSE_MAX_M = 12.0               # ... at most this far past that point
+CW_CELL_M = 25.0                # m: the grid of crosswalk middles find() checks a new crosswalk against
 CW_GAP = 0.5                    # m between a corner's tangent point and its crosswalk
 NODE_TOL = 0.5                  # m: centreline vertices this close are one node
 MERGE_M = 3.0                   # m: junction nodes this close are one junction
@@ -349,6 +353,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             key = (round(float(p[0]) / NODE_TOL), round(float(p[1]) / NODE_TOL))
             nodes.setdefault(key, []).append((ri, vi))
     corners, cuts, crosswalks, ramps, line_cuts, stops = [], {}, [], {}, {}, []
+    # (the crosswalks made so far by grid cell of their middle: "one crosswalk where two would touch" looked at every
+    # earlier one, quadratic, 7.4 s of 10 over a 2 km photo square's 1,001 corners; two can be within 2 m only if their
+    # middles are within both half lengths + 2 m, so the cells round that reach hold every one that could)
+    cw_grid, cw_half = {}, [0.0]
     # junction nodes (two roads or more), merged into one junction when within MERGE_M: a complex
     # junction is several nodes a few metres apart joined by tiny connectors (2026-10-11, a five-way
     # cobbled junction at Fells Point lost most of its corners to the short-branch check)
@@ -574,6 +582,19 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 outer = [(*(Pj + uj * cj - nj * (wj + wkj)), zcj), (*O, zo), (*(Pi + ui * ci + ni * (wi + wki)), zci)]
                 if footway is not None and not _corner_is_simple(curb2, nrm, outer):
                     continue
+                if theta < NOSE_DEG and footway is None and not pavement:
+                    # a sharp corner's nose (the user, 2026-11-11: "Also check sharper corners"): past O the two
+                    # sidewalks' outer edges part, the island between them left at the ground's height and their back
+                    # faces showing as dark bands along the wedge; real noses are raised. The slab goes on past O
+                    # along both edges until they are NOSE_GAP_M apart (at most NOSE_MAX_M), where nothing drives
+                    sn = min(NOSE_MAX_M, NOSE_GAP_M / (2.0 * math.sin(math.radians(theta) / 2.0)))
+                    # (past the corner's own cut points: at a sharp angle the outer edges meet about at the nose's tip,
+                    # before the cuts; the far edge must lie beyond both)
+                    if float((O - Pj) @ uj) + sn > cj + 0.5 and float((O - Pi) @ ui) + sn > ci + 0.5:
+                        na, nb = O + uj * sn, O + ui * sn
+                        if _on_carriageway(np.vstack([na, nb, (na + nb) / 2, (O + na) / 2, (O + nb) / 2]), roads,
+                                           (X, 60.0 + sn)) is None:
+                            outer = [outer[0], (*na, zcj), (*nb, zci), outer[2]]
                 Cc = _line_x(Pi + ni * di, ui, Pj - nj * dj, uj)
                 fill = (np.vstack([[*Cc, zo], np.column_stack((arc2, z[len(pre):len(pre) + k]))])
                         if Cc is not None else None)            # (an np.r_ per arc point: ~1/6 of find())
@@ -636,10 +657,18 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 if _on_carriageway(ends, others, (X, 60.0)) is not None or any(
                         _crosses(a, b, roads[k2][2][:, :2]) for k2 in near_c(c, ri)):
                     continue                    # it would cross or end on another road
+                hl = 0.5 * float(np.hypot(*(a - b)))
+                cw_reach = hl + cw_half[0] + 2.0
+                gi, gj = int(math.floor(c[0] / CW_CELL_M)), int(math.floor(c[1] / CW_CELL_M))
+                k = int(math.ceil(cw_reach / CW_CELL_M))
+                near_q = [q for di in range(-k, k + 1) for dj in range(-k, k + 1)
+                          for q in cw_grid.get((gi + di, gj + dj), ())]
                 if any(min(_seg_dist(np.array([a, b, c]), np.array([q["a"][:2], q["b"][:2]]))) < 2.0
-                       for q in crosswalks):
+                       for q in near_q):
                     continue                    # one crosswalk where two would touch
                 crosswalks.append({"a": np.r_[a, z], "b": np.r_[b, z], "w": CROSSWALK["w"]})
+                cw_grid.setdefault((gi, gj), []).append(crosswalks[-1])
+                cw_half[0] = max(cw_half[0], hl)
                 # the stop line: across the half of the road whose traffic comes into the junction
                 # (right-hand traffic heading along -u drives on u's left), 1 m before the crosswalk
                 ts = t + CROSSWALK["w"] / 2 + STOP_GAP + STOP_LINE["w"] / 2

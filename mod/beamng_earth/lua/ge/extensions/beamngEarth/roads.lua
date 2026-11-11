@@ -40,6 +40,7 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',  -- buildings (server/buildings.py)
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/dirtroad.materials.json',   -- dirt / gravel strips (roads.DIRT_LOOK)
+  '/levels/beamng_earth/art/shapes/beamngEarth/roadwear.materials.json',   -- road wear and spots (server roadwear.py)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json',
@@ -128,7 +129,11 @@ local collisionDirty = false
 local lastReloadAt = -math.huge   -- now() of the last be:reloadCollision (ours or another's): M.ahead
 local reloads = 0                 -- be:reloadCollision runs so far (ours or another's): M.reloads
 local sinceUrgent = math.huge     -- frames since the last urgent walk import (M.urgentWalk)
-local deletesDirty = false  -- only far colliders deleted since the last rebuild (RELOAD_DELETES_S)
+local deletesDirty = false  -- only far colliders deleted (and far ghosts dropped) since the last rebuild (RELOAD_DELETES_S)
+local dirtyAt = {}          -- far spots where another module changed colliders (markCollisionDirty with a position):
+                            -- square "gx_gy" (TILE_M, so far churn stays bounded) -> { solid once reloads reaches,
+                            -- square centre x, y } (the centre, not the last spot: collideNear's TILE_M * 0.71
+                            -- half-diagonal then covers the whole square, wherever in it the spots fell)
 
 -- Every road object lives in one SimGroup. A Lua reload (Lua:requestReload) rebuilds the VM without
 -- unloading the extensions, so nothing deletes the old objects: 2026-10-11, after a few reloads, 3,558
@@ -301,6 +306,10 @@ end
 
 local function now() return os.clock() * 1000 end
 
+-- a tile's track mesh is cut into "rail", "rail2", "rail3" (server railways.split_mesh: 16-bit indices); with a lean
+-- "railcol" (and its "railcol2", "railcol3") they only render
+local function isRailDrawn(what) return what == 'rail' or what == 'rail2' or what == 'rail3' end
+
 -- Main-thread cost of each kind of unit (n, total ms, worst ms) since the level loaded: road chunks, deletes, each
 -- mesh kind of a road tile (road, walk, bld, bldcol, deck ...), far building tiles, collision reloads. status().units
 local unitStats = {}
@@ -340,7 +349,7 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.signs then deleteQ[#deleteQ + 1] = t.signs end
@@ -469,6 +478,18 @@ end
 -- Other vehicles' collision foci (collisionfoci.lua, through core.lua): their tiles' colliders are made too.
 function M.setFoci(f) foci = f or {} end
 
+-- A colliding object of tile t was made or swapped in: the prompt rebuild flag (collisionDirty) only when the tile
+-- can matter to a collision island now (M.collideNear: the player's COLLIDE_M reach and the foci, a tile of margin).
+-- Far road geotiles churn (the server rebuilds them; parked at 0 mph for an hour at dev.212, 1,489 rebuilt tiles,
+-- most 7-15 km out, kept something dirty in every RELOAD_EVERY_S window: a 70-640 ms `slow unit reloadCollision`
+-- every 6.1 s with nothing near the car changed). Their dirt waits on the tile instead (t.colDirty: solid once
+-- `reloads` reaches it) and is promoted when the player comes near (updateCollideRange, the COLLIDE_CHECK_S poll);
+-- any rebuild before that makes the collider solid anyway, be:reloadCollision being global.
+local function markTileCollider(t)
+  if not t or M.collideNear(t, M.TILE_M) then collisionDirty = true
+  else t.colDirty = reloads + 1 end
+end
+
 -- Every COLLIDE_CHECK_S: parked colliders whose tile came near queued; far tiles' colliders dropped.
 local function updateCollideRange()
   if sinceCollideCheck() < M.COLLIDE_CHECK_S * 1000 then return end
@@ -489,7 +510,15 @@ local function updateCollideRange()
     end
     parked = keep
   end
+  for sq, d in pairs(dirtyAt) do      -- other modules' deferred spots (markCollisionDirty with a position)
+    if reloads >= d[1] then dirtyAt[sq] = nil
+    elseif M.collideNear({ cx = d[2], cy = d[3] }, M.TILE_M) then dirtyAt[sq] = nil; collisionDirty = true end
+  end
   for key, t in pairs(tiles) do
+    if t.colDirty then      -- deferred collider dirt (markTileCollider): solid after any rebuild, promoted near
+      if reloads >= t.colDirty then t.colDirty = nil
+      elseif M.collideNear(t, M.TILE_M) then t.colDirty = nil; collisionDirty = true end
+    end
     if t.cq and not M.collideNear(t, M.UNCOLLIDE_M) then
       for what, q in pairs(t.cq) do
         if t[what] then deleteQ[#deleteQ + 1] = t[what]; t[what] = nil end
@@ -547,7 +576,7 @@ local function spawnCustom(key, shape, pos, rot, col)
   local id = createWalk(walk, collide)
   t.custom = t.custom or {}
   t.custom[#t.custom + 1] = id
-  if collide then collisionDirty = true end
+  if collide then markTileCollider(t) end
   return id
 end
 
@@ -578,7 +607,7 @@ M.geoStats = { tiles = 0, kept = 0, replaced = 0, skins = 0, skinSwaps = 0, exac
 local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
-M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol' }
+M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
@@ -746,7 +775,7 @@ local function queueGeoParts(key, t, data)
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and what == 'rail') }
+        renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -970,7 +999,7 @@ function M.onExact(msg, currentAnchor)
         local lean = t.parts.bldcol ~= nil
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
           renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
-            or (t.parts.railcol ~= nil and what == 'rail') }
+            or (t.parts.railcol ~= nil and isRailDrawn(what)) }
         walkQ[#walkQ + 1] = q
       end
     end
@@ -1114,8 +1143,8 @@ function M.onTile(msg, currentAnchor, a)
   end
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail',
-      'railcol', 'barrier', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
+  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
+      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1211,12 +1240,13 @@ function M.onTile(msg, currentAnchor, a)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do
+  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3',
+      'buscol' }) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
         renderOnly = (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
-          or (leanRail and what == 'rail') }
+          or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then tiles[key].colWant[what] = true end
       if q.renderOnly or M.collideNear(tiles[key]) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -1610,8 +1640,20 @@ function M.onDrop(msg)
   sinceChange = stopwatch.new()
 end
 
--- A gas station's colliding props were made (gasstations.lua): rebuilt with the roads' next collision rebuild.
-function M.markCollisionDirty() collisionDirty = true end
+-- Another module made, moved or removed colliding objects for the roads (gas stations' props, pump jacks, wind
+-- turbines: core.lua wires their onCollide here): rebuilt with the roads' next collision rebuild. With the spot's
+-- world (x, y) the prompt flag follows markTileCollider's rule: far from every island the dirt waits (dirtyAt) and
+-- is promoted by updateCollideRange's poll when the player comes near, any rebuild in between having made the
+-- objects solid. Without a position: prompt, as before (rebases, level end, third-party callers).
+function M.markCollisionDirty(x, y)
+  if type(x) ~= 'number' or type(y) ~= 'number' then collisionDirty = true; return end
+  if M.collideNear({ cx = x, cy = y }, M.TILE_M) then collisionDirty = true; return end
+  local gx, gy = math.floor(x / M.TILE_M), math.floor(y / M.TILE_M)
+  local sq = gx .. '_' .. gy
+  local d = dirtyAt[sq]
+  if d then d[1] = reloads + 1
+  else dirtyAt[sq] = { reloads + 1, (gx + 0.5) * M.TILE_M, (gy + 0.5) * M.TILE_M } end
+end
 
 -- Origin rebase (core.lua finishRebase): the shown tiles move into the new frame (p_new = R*p + t: their TSStatics
 -- turned by R, as farfield.transform) and stay as "ghosts" until the new anchor's tiles over them are made
@@ -1630,7 +1672,7 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'railcol',
+local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol',
   'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
 
 function M.transform(xf, geodesy)
@@ -1753,7 +1795,11 @@ local function releaseGhosts(player)
         and M.boxGap(p.x, p.y, t.cx, t.cy, M.TILE_M / 2) > M.GHOST_FAR_M
       if all or far or (t.cx and (t.signOnly and covered0(signsDone, t.cx, t.cy) or (not t.signOnly and covered(done, t.cx, t.cy, busyKeys)))) then
         dropTile(key)
-        if not t.signOnly then collisionDirty = true end
+        -- a ghost dropped far from every island: its stale collision harms nobody out there, so it rides the lazy
+        -- RELOAD_DELETES_S rebuild (its colliders' deletes classify themselves the same way, the deleteQ above)
+        if not t.signOnly then
+          if M.collideNear(t, M.TILE_M) then collisionDirty = true else deletesDirty = true end
+        end
       else left = true end
     end
   end
@@ -1872,7 +1918,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local ok, id = pcall(createWalk, walk,
-        (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or not isRoad)
+        (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad)
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if ok and q.skin and t.skin then             -- a new skin's part: the old one's goes (all, with the last)
         t.skin.pending = t.skin.pending - 1
@@ -1887,7 +1933,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
         if isRoad then t[q.what] = id else
-          t[q.what] = id; collisionDirty = true; newColliders[#newColliders + 1] = { id, q }
+          t[q.what] = id; markTileCollider(t); newColliders[#newColliders + 1] = { id, q }
           t.colAt = t.colAt or {}; t.colAt[q.what] = now()
         end
       else lastError = tostring(id) end
@@ -2263,7 +2309,7 @@ function M.reset()
   objSlot, slotLive, slotDropped = {}, {}, {}
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
   far, farQ = {}, {}
-  collisionDirty, deletesDirty = false, false
+  collisionDirty, deletesDirty, dirtyAt = false, false, {}
 end
 
 -- On / off (the settings page, through core.setRoadsEnabled, which asks the server for the tiles

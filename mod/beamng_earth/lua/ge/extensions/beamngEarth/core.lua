@@ -1164,6 +1164,13 @@ local function onMessage(msg)
       M.townSigns = v ~= false
       net.send({ type = 'town_signs', on = M.townSigns })
     end
+    -- the road surface's wear (settings roadDetail: the quality presets'; server roadwear.py)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('roadDetail')
+      M.roadWear = type(v) == 'string' and v or M.roadWear
+      if M.roadWear then net.send({ type = 'road_wear', value = M.roadWear }) end
+    end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
     M.sendGraphics()
@@ -3169,6 +3176,15 @@ function M.appPath(what, pick, path)
   return true
 end
 
+-- A destination picked on the world map (its "Teleport here?" box, a search result): the server fetches its elevation
+-- tiles and map cells in the background before the teleport is confirmed (earthd preload_place; the fastest world
+-- generators load the destination ahead, the user 2026-11-11: "sub second world gen, even with clear cashe").
+function M.preloadPlace(lat, lon)
+  if not net.isConnected() or type(lat) ~= 'number' or type(lon) ~= 'number' then return false end
+  net.send({ type = 'preload_place', lat = lat, lon = lon })
+  return true
+end
+
 -- The world map's search box: addresses and places from the server (geocode.py); the answer is geocode_result.
 function M.requestGeocode(id, q, lat, lon, full)
   if not net.isConnected() then return false end
@@ -3354,7 +3370,7 @@ end
 function M.setRoadsEnabled(on)
   if roads.setEnabled(on) then net.send({ type = 'roads_reset' }) end
 end
--- The settings page's graphics the server serves (settings.serverGraphics: { lodScale, treeScale, buildingScale,
+-- The settings page's graphics the server serves (settings.serverGraphics: { lodScale, lodPx, treeScale, buildingScale,
 -- photoPx, viewM }), after every hello and when one changes (sent only when it differs from the last one sent: applyAll
 -- runs every knob at a level's start). Whether it went out.
 M.graphicsSent = nil          -- (a field: core.lua is near Lua's 200-local limit)
@@ -3362,11 +3378,11 @@ function M.sendGraphics()
   local settings = rawget(_G, 'beamngEarth_settings')
   local g = settings and settings.serverGraphics and settings.serverGraphics()
   if type(g) ~= 'table' or not net.isConnected() or not st.sessionId then return false end
-  local sig = string.format('%s/%s/%s/%s/%s', tostring(g.lodScale), tostring(g.treeScale), tostring(g.buildingScale),
-    tostring(g.photoPx), tostring(g.viewM))
+  local sig = string.format('%s/%s/%s/%s/%s/%s', tostring(g.lodScale), tostring(g.treeScale), tostring(g.buildingScale),
+    tostring(g.photoPx), tostring(g.viewM), tostring(g.lodPx))
   if sig == M.graphicsSent then return false end
   net.send({ type = 'graphics', lodScale = g.lodScale, treeScale = g.treeScale, buildingScale = g.buildingScale,
-    photoPx = g.photoPx, viewM = g.viewM })
+    photoPx = g.photoPx, viewM = g.viewM, lodPx = g.lodPx })
   M.graphicsSent = sig
   return true
 end
@@ -3402,6 +3418,14 @@ function M.setGermanJunctionSigns(on)
   net.send({ type = 'german_junctions', on = on })
 end
 
+-- The road surface's wear (settings roadDetail: 'off' / 'basic' / 'full'): the server builds the road tiles again with
+-- or without it (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setRoadWear(v)
+  if type(v) ~= 'string' or M.roadWear == v then return end
+  M.roadWear = v
+  if net.isConnected() then net.send({ type = 'road_wear', value = v }) end
+end
+
 -- The town signs on / off (settings townSigns): the server builds the road and sign tiles again with or without them
 -- (the tiles already shown keep what they were sent until the roads are reloaded).
 function M.setTownSigns(on)
@@ -3420,6 +3444,7 @@ M.onClientStartMission = onClientStartMission
 M.onClientPreStartMission = onClientPreStartMission
 M.onNavgraphReloaded = function() navgraph.onReloaded() end
 M.onVehicleMapmgrUpdate = function(id) gps.onVehicleMapmgrUpdate(id) end
+M.onAiRouteDone = function(id) gps.onAiRouteDone(id) end
 M.onVehicleSwitched = function(oldId, newId, player)
   if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end
 end

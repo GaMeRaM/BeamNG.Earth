@@ -1,5 +1,6 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
+mod devctx;
 mod devraster;
 mod roofs;
 mod roofphoto;
@@ -62,12 +63,27 @@ mod perfclean;
 mod mdhtml;
 mod roadlanes;
 mod waytags;
+mod pmtiles;
 mod underdeck;
+mod deckground;
 mod railseam;
 mod classgrid;
 mod frontage;
+mod furnstations;
 mod bdtopo;
 mod nycmassing;
+mod rooftop;
+mod specs;
+mod gsrows;
+mod places;
+mod planends;
+mod wallsindex;
+mod mappedlamps;
+mod vegclumps;
+mod roadwear;
+mod roadtone;
+mod railbeds;
+mod osmtagshards;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -181,18 +197,20 @@ fn points_inside<'py>(py: Python<'py>, poly: PyReadonlyArray2<'py, f64>, pts: Py
 #[pyfunction]
 fn polyline_dist<'py>(py: Python<'py>, line: PyReadonlyArray2<'py, f64>, pts: PyReadonlyArray2<'py, f64>)
                       -> Bound<'py, PyArray1<f64>> {
-    let l = line.as_array();
-    let q = pts.as_array();
+    polyline_dist_core(line.as_array(), pts.as_array()).into_pyarray(py)
+}
+
+/// polyline_dist on views (roads' spec kernels call it in Rust).
+pub(crate) fn polyline_dist_core(l: numpy::ndarray::ArrayView2<f64>, q: numpy::ndarray::ArrayView2<f64>) -> Vec<f64> {
     let k = l.nrows();
-    let v: Vec<f64> = q.rows().into_iter().map(|r| {
+    q.rows().into_iter().map(|r| {
         let mut best = f64::INFINITY;
         for i in 0..k.saturating_sub(1) {
             let d = seg_dist(l[[i, 0]], l[[i, 1]], l[[i + 1, 0]], l[[i + 1, 1]], r[0], r[1]);
             if d < best { best = d; }
         }
         best
-    }).collect();
-    v.into_pyarray(py)
+    }).collect()
 }
 
 /// furniture._clear: is (px, py) farther than its segment's half width + margin from every segment not owned by
@@ -219,8 +237,12 @@ fn clear_of(segs: PyReadonlyArray2<f64>, half: PyReadonlyArray1<f64>, owner: PyR
 #[pyfunction]
 fn dual_side(a: PyReadonlyArray2<f64>, b: PyReadonlyArray2<f64>, gap_min: f64, gap_max: f64, cos_par: f64)
              -> (f64, f64) {
-    let a = a.as_array();
-    let b = b.as_array();
+    dual_side_core(a.as_array(), b.as_array(), gap_min, gap_max, cos_par)
+}
+
+/// dual_side on views (roads' spec kernels call it in Rust).
+pub(crate) fn dual_side_core(a: numpy::ndarray::ArrayView2<f64>, b: numpy::ndarray::ArrayView2<f64>, gap_min: f64,
+                             gap_max: f64, cos_par: f64) -> (f64, f64) {
     let ka = a.nrows();
     let kb = b.nrows();
     if ka < 2 || kb < 2 {
@@ -401,13 +423,17 @@ fn segment_crossings_g(
     ground: PyReadonlyArray2<f64>,
     ground_starts: PyReadonlyArray1<i64>,
 ) -> Vec<(usize, usize, f64, f64, f64)> {
-    let pa = parts.as_array();
-    let ps = part_starts.as_array();
-    let ga = ground.as_array();
-    let gs = ground_starts.as_array();
+    let (pa, ps, ga, gs) = (parts.as_array(), part_starts.as_array(), ground.as_array(), ground_starts.as_array());
+    py.detach(|| segment_crossings_core(pa, ps, ga, gs))
+}
+
+/// segment_crossings_g on views (gradesep's underpasses call it in Rust).
+pub(crate) fn segment_crossings_core(pa: numpy::ndarray::ArrayView2<f64>, ps: numpy::ndarray::ArrayView1<i64>,
+                                     ga: numpy::ndarray::ArrayView2<f64>, gs: numpy::ndarray::ArrayView1<i64>)
+                                     -> Vec<(usize, usize, f64, f64, f64)> {
     let np_ = ps.len().saturating_sub(1);
     let ng = gs.len().saturating_sub(1);
-    py.detach(|| {
+    {
         let bbox = |a: &numpy::ndarray::ArrayView2<f64>, i0: usize, i1: usize| {
             let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
             for k in i0..i1 {
@@ -451,7 +477,7 @@ fn segment_crossings_g(
             }
         }
         out
-    })
+    }
 }
 
 /// (line index, arc m along ma, sin of the angle) where each of the polylines ga (gs (L + 1,): where each begins,
@@ -729,54 +755,92 @@ pub(crate) fn ends_near_core(p: &[[f64; 2]], t: &[[f64; 2]], tx: f64, ty: f64) -
 }
 
 /// roads._deck_crossings: (i, j, arc on i, arc on j) where polylines i < j cross away from their end points.
-/// pts (n, 2) all lines one after another, starts (L + 1,) where each begins (the last: n).
+/// pts (n, 2) all lines one after another, starts (L + 1,) where each begins (the last: n). The pairs whose boxes
+/// meet by a sweep along x (each line's boxes against all others' was the pool's square: BridgeProfiles._resolve asks
+/// it again as each chain's pool grows, ~1.4 % of a cold Manhattan build, 2026-11-10), and of such a pair only the
+/// segments within DECK_X_PAD_M of the other line's box; the same tests and the same order of hits, without the GIL.
 #[pyfunction]
-fn deck_crossings(pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i64>) -> Vec<(usize, usize, f64, f64)> {
-    let p = pts.as_array();
+fn deck_crossings(py: Python<'_>, pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i64>)
+                  -> Vec<(usize, usize, f64, f64)> {
+    let pa = pts.as_array();
     let st = starts.as_array();
     let nl = st.len().saturating_sub(1);
     let rng: Vec<(usize, usize)> = (0..nl).map(|i| (st[i] as usize, st[i + 1] as usize)).collect();
+    let p: Vec<[f64; 2]> = (0..pa.nrows()).map(|k| [pa[[k, 0]], pa[[k, 1]]]).collect();
+    release(py, p.len() * 4, move || deck_crossings_core(&p, &rng))
+}
+
+/// m a segment may lie off the other line's box and still be tried (far more than any rounding of the crossing test:
+/// a segment that far off cannot meet the line inside both segments).
+const DECK_X_PAD_M: f64 = 1.0;
+
+fn deck_crossings_core(p: &[[f64; 2]], rng: &[(usize, usize)]) -> Vec<(usize, usize, f64, f64)> {
+    let nl = rng.len();
     let mut boxes = Vec::with_capacity(nl);
     let mut arcs: Vec<Vec<f64>> = Vec::with_capacity(nl);
-    for &(a, b) in &rng {
+    for &(a, b) in rng {
         let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
         let mut arc = Vec::with_capacity(b - a);
         let mut acc = 0.0;
         for k in a..b {
             for c in 0..2 {
-                lo[c] = lo[c].min(p[[k, c]]);
-                hi[c] = hi[c].max(p[[k, c]]);
+                lo[c] = lo[c].min(p[k][c]);
+                hi[c] = hi[c].max(p[k][c]);
             }
             if k > a {
-                acc += (p[[k, 0]] - p[[k - 1, 0]]).hypot(p[[k, 1]] - p[[k - 1, 1]]);
+                acc += (p[k][0] - p[k - 1][0]).hypot(p[k][1] - p[k - 1][1]);
             }
             arc.push(acc);
         }
         boxes.push((lo, hi));
         arcs.push(arc);
     }
-    let mut out = Vec::new();
-    for i in 0..nl {
-        let (ai, bi) = rng[i];
-        if bi - ai < 2 {
-            continue;
-        }
-        for j in (i + 1)..nl {
-            let (aj, bj) = rng[j];
-            if bj - aj < 2 {
-                continue;
+    // (the lines with 2 points or more, by their boxes' west edge: each one's candidates are the lines starting west
+    // of its east edge after it in that order; a NaN box meets nothing, as the comparisons below)
+    let mut order: Vec<usize> = (0..nl).filter(|&i| rng[i].1 - rng[i].0 >= 2 && !boxes[i].0[0].is_nan()
+                                               && !boxes[i].1[0].is_nan()).collect();
+    order.sort_by(|&a, &b| boxes[a].0[0].total_cmp(&boxes[b].0[0]).then(a.cmp(&b)));
+    let mut cand: Vec<Vec<usize>> = vec![Vec::new(); nl];
+    for (oi, &i) in order.iter().enumerate() {
+        let (alo, ahi) = boxes[i];
+        for &j in &order[oi + 1..] {
+            let (blo, bhi) = boxes[j];
+            if blo[0] > ahi[0] {
+                break;
             }
-            let ((alo, ahi), (blo, bhi)) = (boxes[i], boxes[j]);
             if ahi[0] < blo[0] || bhi[0] < alo[0] || ahi[1] < blo[1] || bhi[1] < alo[1] {
                 continue;
             }
+            if i < j { cand[i].push(j); } else { cand[j].push(i); }
+        }
+    }
+    let seg_near = |a: usize, b: usize, lo: [f64; 2], hi: [f64; 2]| -> Vec<usize> {
+        (0..(b - a - 1)).filter(|&q| {
+            let (x0, y0, x1, y1) = (p[a + q][0], p[a + q][1], p[a + q + 1][0], p[a + q + 1][1]);
+            !(x0.max(x1) < lo[0] - DECK_X_PAD_M || x0.min(x1) > hi[0] + DECK_X_PAD_M
+              || y0.max(y1) < lo[1] - DECK_X_PAD_M || y0.min(y1) > hi[1] + DECK_X_PAD_M)
+        }).collect()
+    };
+    let mut out = Vec::new();
+    for i in 0..nl {
+        if cand[i].is_empty() {
+            continue;
+        }
+        cand[i].sort_unstable();
+        let (ai, bi) = rng[i];
+        for &j in &cand[i] {
+            let (aj, bj) = rng[j];
             let (si_end, sj_end) = (arcs[i][bi - ai - 1], arcs[j][bj - aj - 1]);
-            for q in 0..(bj - aj - 1) {
-                let (ax, ay) = (p[[aj + q, 0]], p[[aj + q, 1]]);
-                let (d0, d1) = (p[[aj + q + 1, 0]] - ax, p[[aj + q + 1, 1]] - ay);
-                for k in 0..(bi - ai - 1) {
-                    let (px, py) = (p[[ai + k, 0]], p[[ai + k, 1]]);
-                    let (r0, r1) = (p[[ai + k + 1, 0]] - px, p[[ai + k + 1, 1]] - py);
+            let ks = seg_near(ai, bi, boxes[j].0, boxes[j].1);
+            if ks.is_empty() {
+                continue;
+            }
+            for q in seg_near(aj, bj, boxes[i].0, boxes[i].1) {
+                let (ax, ay) = (p[aj + q][0], p[aj + q][1]);
+                let (d0, d1) = (p[aj + q + 1][0] - ax, p[aj + q + 1][1] - ay);
+                for &k in &ks {
+                    let (px, py) = (p[ai + k][0], p[ai + k][1]);
+                    let (r0, r1) = (p[ai + k + 1][0] - px, p[ai + k + 1][1] - py);
                     let den = r0 * d1 - r1 * d0;
                     if den.abs() <= 1e-12 {
                         continue;
@@ -853,35 +917,121 @@ fn inside_view(p: &numpy::ndarray::ArrayView2<f64>, x: f64, y: f64) -> bool {
     c
 }
 
+/// geodesy.EnuFrame.geodetic_to_enu's maths for one point (lat, lon degrees, h m): WGS84 to ECEF, then into the frame
+/// (origin (3,) ECEF, rot (3, 3) rows E, N, U). The one copy every entry below uses (their numbers the same).
+#[inline]
+fn g2e_one(lat: f64, lon: f64, hv: f64, o: &[f64; 3], r: &[[f64; 3]; 3]) -> (f64, f64, f64) {
+    const A: f64 = 6378137.0;
+    const F: f64 = 1.0 / 298.257223563;
+    const E2: f64 = F * (2.0 - F);
+    let (phi, lam) = (lat.to_radians(), lon.to_radians());
+    let (sl, cl) = (phi.sin(), phi.cos());
+    let nr = A / (1.0 - E2 * sl * sl).sqrt();
+    let rr = (nr + hv) * cl;
+    let x = rr * lam.cos() - o[0];
+    let y = rr * lam.sin() - o[1];
+    let z = (nr * (1.0 - E2) + hv) * sl - o[2];
+    (r[0][0] * x + r[0][1] * y + r[0][2] * z, r[1][0] * x + r[1][1] * y + r[1][2] * z,
+     r[2][0] * x + r[2][1] * y + r[2][2] * z)
+}
+
+/// geodesy.EnuFrame.enu_to_geodetic's maths for one point: ENU (e, n, u) -> ECEF through the frame -> (lat, lon, h)
+/// by Heikkinen's closed form (the polar axis included).
+#[inline]
+fn e2g_one(ev: f64, nv: f64, uv: f64, o: &[f64; 3], r: &[[f64; 3]; 3]) -> (f64, f64, f64) {
+    const A: f64 = 6378137.0;
+    const F: f64 = 1.0 / 298.257223563;
+    const B: f64 = A * (1.0 - F);
+    const E2: f64 = F * (2.0 - F);
+    const EP2: f64 = E2 / (1.0 - E2);
+    let x = o[0] + r[0][0] * ev + r[1][0] * nv + r[2][0] * uv;
+    let y = o[1] + r[0][1] * ev + r[1][1] * nv + r[2][1] * uv;
+    let z = o[2] + r[0][2] * ev + r[1][2] * nv + r[2][2] * uv;
+    let p2 = x * x + y * y;
+    let p = p2.sqrt();
+    let z2 = z * z;
+    let (la, h);
+    if p < 1e-6 {
+        la = if z >= 0.0 { 90.0 } else { -90.0 };
+        h = z.abs() - B;
+    } else {
+        let f_ = 54.0 * B * B * z2;
+        let g = p2 + (1.0 - E2) * z2 - E2 * (A * A - B * B);
+        let c = E2 * E2 * f_ * p2 / (g * g * g);
+        let s = (1.0 + c + (c * c + 2.0 * c).sqrt()).cbrt();
+        let k = s + 1.0 + 1.0 / s;
+        let pp = f_ / (3.0 * k * k * g * g);
+        let q = (1.0 + 2.0 * E2 * E2 * pp).sqrt();
+        let r0 = -pp * E2 * p / (1.0 + q)
+            + (0.5 * A * A * (1.0 + 1.0 / q) - pp * (1.0 - E2) * z2 / (q * (1.0 + q)) - 0.5 * pp * p2).max(0.0).sqrt();
+        let t = (p - E2 * r0) * (p - E2 * r0);
+        let uu = (t + z2).sqrt();
+        let vv = (t + (1.0 - E2) * z2).sqrt();
+        let z0 = B * B * z / (A * vv);
+        h = uu * (1.0 - B * B / (A * vv));
+        la = (z + EP2 * z0).atan2(p).to_degrees();
+    }
+    (la, y.atan2(x).to_degrees(), h)
+}
+
+fn frame_of(origin: &PyReadonlyArray1<'_, f64>, rot: &PyReadonlyArray2<'_, f64>) -> PyResult<([f64; 3], [[f64; 3]; 3])> {
+    let (o, r) = (origin.as_array(), rot.as_array());
+    if o.len() < 3 || r.nrows() < 3 || r.ncols() < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("a frame: origin (3,), rot (3, 3)"));
+    }
+    Ok(([o[0], o[1], o[2]], [[r[[0, 0]], r[[0, 1]], r[[0, 2]]], [r[[1, 0]], r[[1, 1]], r[[1, 2]]],
+                             [r[[2, 0]], r[[2, 1]], r[[2, 2]]]]))
+}
+
+type Three<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
+
+/// (x, y, z) of every point i by one(a[i], b[i], c(i)), the GIL let go for long lists.
+fn three<'py, C, O>(py: Python<'py>, a: numpy::ndarray::ArrayView1<f64>, b: numpy::ndarray::ArrayView1<f64>, c: C,
+                    cost: usize, one: O) -> Three<'py>
+where
+    C: Fn(usize) -> f64 + Sync,
+    O: Fn(f64, f64, f64) -> (f64, f64, f64) + Sync,
+{
+    let n = a.len();
+    let (x, y, z) = release(py, n * cost, || {
+        let (mut x, mut y, mut z) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
+        for i in 0..n {
+            let v = one(a[i], b[i], c(i));
+            x.push(v.0);
+            y.push(v.1);
+            z.push(v.2);
+        }
+        (x, y, z)
+    });
+    (x.into_pyarray(py), y.into_pyarray(py), z.into_pyarray(py))
+}
+
 /// geodesy.EnuFrame.geodetic_to_enu for 1-D lat, lon, h (degrees, metres): WGS84 to ECEF, then into the frame
 /// (origin (3,) ECEF, rot (3, 3) rows E, N, U). -> (e, n, u).
 #[pyfunction]
 fn geodetic_to_enu<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>,
                         h: PyReadonlyArray1<'py, f64>, origin: PyReadonlyArray1<'py, f64>,
-                        rot: PyReadonlyArray2<'py, f64>)
-                        -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
-    const A: f64 = 6378137.0;
-    const F: f64 = 1.0 / 298.257223563;
-    const E2: f64 = F * (2.0 - F);
-    let (la, lo, hh, o, r) = (lat.as_array(), lon.as_array(), h.as_array(), origin.as_array(), rot.as_array());
-    let n = la.len();
-    let (e, nn, u) = release(py, n * 40, || {
-    let (mut e, mut nn, mut u) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
-    for i in 0..n {
-        let (phi, lam, hv) = (la[i].to_radians(), lo[i].to_radians(), hh[i]);
-        let (sl, cl) = (phi.sin(), phi.cos());
-        let nr = A / (1.0 - E2 * sl * sl).sqrt();
-        let rr = (nr + hv) * cl;
-        let x = rr * lam.cos() - o[0];
-        let y = rr * lam.sin() - o[1];
-        let z = (nr * (1.0 - E2) + hv) * sl - o[2];
-        e.push(r[[0, 0]] * x + r[[0, 1]] * y + r[[0, 2]] * z);
-        nn.push(r[[1, 0]] * x + r[[1, 1]] * y + r[[1, 2]] * z);
-        u.push(r[[2, 0]] * x + r[[2, 1]] * y + r[[2, 2]] * z);
+                        rot: PyReadonlyArray2<'py, f64>) -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (la, lo, hh) = (lat.as_array(), lon.as_array(), h.as_array());
+    if lo.len() != la.len() || hh.len() != la.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geodetic_to_enu: arrays of different lengths"));
     }
-    (e, nn, u)
-    });
-    (e.into_pyarray(py), nn.into_pyarray(py), u.into_pyarray(py))
+    Ok(three(py, la, lo, |i| hh[i], 40, |a, b, c| g2e_one(a, b, c, &o, &r)))
+}
+
+/// geodetic_to_enu with one height for every point (geodesy._rust3's common call: the same numbers, no array of
+/// heights made and broadcast for it).
+#[pyfunction]
+fn geodetic_to_enu_c<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>, h: f64,
+                          origin: PyReadonlyArray1<'py, f64>, rot: PyReadonlyArray2<'py, f64>)
+                          -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (la, lo) = (lat.as_array(), lon.as_array());
+    if lo.len() != la.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geodetic_to_enu_c: arrays of different lengths"));
+    }
+    Ok(three(py, la, lo, |_| h, 40, |a, b, c| g2e_one(a, b, c, &o, &r)))
 }
 
 /// geodesy.EnuFrame.enu_to_geodetic for point lists: ENU (e, n, u) -> ECEF through the frame (origin, rot rows =
@@ -890,53 +1040,128 @@ fn geodetic_to_enu<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: P
 #[pyfunction]
 fn enu_to_geodetic<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: PyReadonlyArray1<'py, f64>,
                         u: PyReadonlyArray1<'py, f64>, origin: PyReadonlyArray1<'py, f64>,
-                        rot: PyReadonlyArray2<'py, f64>)
-                        -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
+                        rot: PyReadonlyArray2<'py, f64>) -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (ea, na, ua) = (e.as_array(), n.as_array(), u.as_array());
+    if na.len() != ea.len() || ua.len() != ea.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("enu_to_geodetic: arrays of different lengths"));
+    }
+    Ok(three(py, ea, na, |i| ua[i], 60, |a, b, c| e2g_one(a, b, c, &o, &r)))
+}
+
+/// enu_to_geodetic with one up value for every point (geodesy._rust3's common call).
+#[pyfunction]
+fn enu_to_geodetic_c<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: PyReadonlyArray1<'py, f64>, u: f64,
+                          origin: PyReadonlyArray1<'py, f64>, rot: PyReadonlyArray2<'py, f64>)
+                          -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (ea, na) = (e.as_array(), n.as_array());
+    if na.len() != ea.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("enu_to_geodetic_c: arrays of different lengths"));
+    }
+    Ok(three(py, ea, na, |_| u, 60, |a, b, c| e2g_one(a, b, c, &o, &r)))
+}
+
+/// mapgeom.Features.xy_in's first half: the WGS84 ECEF (n, 3) of lon/lat points (ll (n, 2), h = 0), kept per layer;
+/// ecef_to_frame turns it into any frame's (e, n) with the numbers geodetic_to_enu gives (its very operations: the
+/// origin subtracted from the same products). A cell's roads layer is read in each of its neighbours' frames
+/// (gradesep: nine), each time with its trigonometry again.
+#[pyfunction]
+fn lonlat_to_ecef<'py>(py: Python<'py>, ll: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
     const A: f64 = 6378137.0;
     const F: f64 = 1.0 / 298.257223563;
-    const B: f64 = A * (1.0 - F);
     const E2: f64 = F * (2.0 - F);
-    const EP2: f64 = E2 / (1.0 - E2);
-    let (ea, na, ua, o, r) = (e.as_array(), n.as_array(), u.as_array(), origin.as_array(), rot.as_array());
-    let m = ea.len();
-    let (lat, lon, hgt) = release(py, m * 60, || {
-    let (mut lat, mut lon, mut hgt) = (Vec::with_capacity(m), Vec::with_capacity(m), Vec::with_capacity(m));
-    for i in 0..m {
-        let (ev, nv, uv) = (ea[i], na[i], ua[i]);
-        let x = o[0] + r[[0, 0]] * ev + r[[1, 0]] * nv + r[[2, 0]] * uv;
-        let y = o[1] + r[[0, 1]] * ev + r[[1, 1]] * nv + r[[2, 1]] * uv;
-        let z = o[2] + r[[0, 2]] * ev + r[[1, 2]] * nv + r[[2, 2]] * uv;
-        let p2 = x * x + y * y;
-        let p = p2.sqrt();
-        let z2 = z * z;
-        let (la, h);
-        if p < 1e-6 {
-            la = if z >= 0.0 { 90.0 } else { -90.0 };
-            h = z.abs() - B;
-        } else {
-            let f_ = 54.0 * B * B * z2;
-            let g = p2 + (1.0 - E2) * z2 - E2 * (A * A - B * B);
-            let c = E2 * E2 * f_ * p2 / (g * g * g);
-            let s = (1.0 + c + (c * c + 2.0 * c).sqrt()).cbrt();
-            let k = s + 1.0 + 1.0 / s;
-            let pp = f_ / (3.0 * k * k * g * g);
-            let q = (1.0 + 2.0 * E2 * E2 * pp).sqrt();
-            let r0 = -pp * E2 * p / (1.0 + q)
-                + (0.5 * A * A * (1.0 + 1.0 / q) - pp * (1.0 - E2) * z2 / (q * (1.0 + q)) - 0.5 * pp * p2).max(0.0).sqrt();
-            let t = (p - E2 * r0) * (p - E2 * r0);
-            let uu = (t + z2).sqrt();
-            let vv = (t + (1.0 - E2) * z2).sqrt();
-            let z0 = B * B * z / (A * vv);
-            h = uu * (1.0 - B * B / (A * vv));
-            la = (z + EP2 * z0).atan2(p).to_degrees();
-        }
-        lat.push(la);
-        lon.push(y.atan2(x).to_degrees());
-        hgt.push(h);
+    let p = ll.as_array();
+    let n = p.nrows();
+    if n > 0 && p.ncols() < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err("lonlat_to_ecef: (n, 2) lon/lat"));
     }
-    (lat, lon, hgt)
+    let out = release(py, n * 40, || {
+        let mut out = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            // (g2e_one's first half with h = 0)
+            let hv = 0.0f64;
+            let (phi, lam) = (p[[i, 1]].to_radians(), p[[i, 0]].to_radians());
+            let (sl, cl) = (phi.sin(), phi.cos());
+            let nr = A / (1.0 - E2 * sl * sl).sqrt();
+            let rr = (nr + hv) * cl;
+            out.push(rr * lam.cos());
+            out.push(rr * lam.sin());
+            out.push((nr * (1.0 - E2) + hv) * sl);
+        }
+        out
     });
-    (lat.into_pyarray(py), lon.into_pyarray(py), hgt.into_pyarray(py))
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 3), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+/// (n, 2) east / north in the frame (origin, rot) of ECEF points (lonlat_to_ecef's): geodetic_to_enu's last step.
+#[pyfunction]
+fn ecef_to_frame<'py>(py: Python<'py>, xyz: PyReadonlyArray2<'py, f64>, origin: PyReadonlyArray1<'py, f64>,
+                      rot: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let p = xyz.as_array();
+    let n = p.nrows();
+    if n > 0 && p.ncols() < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("ecef_to_frame: (n, 3) ECEF"));
+    }
+    let out = release(py, n * 6, || {
+        let mut out = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let x = p[[i, 0]] - o[0];
+            let y = p[[i, 1]] - o[1];
+            let z = p[[i, 2]] - o[2];
+            out.push(r[0][0] * x + r[0][1] * y + r[0][2] * z);
+            out.push(r[1][0] * x + r[1][1] * y + r[1][2] * z);
+        }
+        out
+    });
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 2), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+/// (n, 4) segments x0 y0 x1 y1 (segs, in the frame (o1, r1)) in the frame (o2, r2) at the ground: each point through
+/// enu_to_geodetic (up 0) and back by geodetic_to_enu (height 0) with those kernels' very operations, one pass, no
+/// GIL (roadwidth.RoadWidths._near_walls: a cell's walls in a neighbour's frame, two conversion calls and their
+/// arrays per set of cells; ~1.2 % of a cold Manhattan road tile build, 2026-11-10).
+#[pyfunction]
+fn reframe_segs<'py>(py: Python<'py>, segs: PyReadonlyArray2<'py, f64>, o1: PyReadonlyArray1<'py, f64>,
+                     r1: PyReadonlyArray2<'py, f64>, o2: PyReadonlyArray1<'py, f64>, r2: PyReadonlyArray2<'py, f64>)
+                     -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (oa, ra) = frame_of(&o1, &r1)?;
+    let (ob, rb) = frame_of(&o2, &r2)?;
+    let s = segs.as_array();
+    let n = s.nrows();
+    if n > 0 && s.ncols() != 4 {
+        return Err(pyo3::exceptions::PyValueError::new_err("reframe_segs: (n, 4) segments"));
+    }
+    let flat: Vec<f64> = s.iter().copied().collect();
+    let out = release(py, n * 200, move || {
+        let conv = |x: f64, y: f64| {
+            let (la, lo, _) = e2g_one(x, y, 0.0, &oa, &ra);
+            let (e, nn, _) = g2e_one(la, lo, 0.0, &ob, &rb);
+            (e, nn)
+        };
+        let mut out = Vec::with_capacity(n * 4);
+        // (a ring's walls follow each other: a segment's start is the one before's end, the same bits, converted once)
+        let mut prev: Option<([u64; 2], (f64, f64))> = None;
+        for s in flat.chunks_exact(4) {
+            let k0 = [s[0].to_bits(), s[1].to_bits()];
+            let a = match prev {
+                Some((k, v)) if k == k0 => v,
+                _ => conv(s[0], s[1]),
+            };
+            let b = conv(s[2], s[3]);
+            prev = Some(([s[2].to_bits(), s[3].to_bits()], b));
+            out.extend_from_slice(&[a.0, a.1, b.0, b.1]);
+        }
+        out
+    });
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 4), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
 }
 
 /// bc7.encode: BC7 mode-6 blocks (16 bytes each, row-major) of an (h, w, 3|4) uint8 image, edges padded by
@@ -1446,7 +1671,7 @@ const RANK_BUILT: i64 = 100;
 /// grade ranks within this of the higher road's take the same side ease (a service road or driveway beside a
 /// residential street); a bigger class gap (a residential approach to a primary) keeps the old blend, whose side
 /// ease cut that approach to a 67 % step
-const RANK_SIDE_MAX_DIFF: i64 = 4;
+const RANK_SIDE_MAX_DIFF: i64 = 6;
 /// the hard hold of a road's own carriageway applies to primary and below; a motorway or trunk keeps the old blend
 /// (its split parts' seams are their own road, not a subordinate one, and the seam regression test needs the old
 /// smoothness there)
@@ -3187,13 +3412,20 @@ fn py_floordiv(x: f64, y: f64) -> f64 {
 /// quads, in the Python's order and float arithmetic (math.hypot: py_hypot, round(): half to even, _hash01: blake2b of
 /// the repr). Returns (positions: 12 per quad, uvs: 8 per quad, material per quad: 0 the facade, 1 the shopfront,
 /// 2 the window white). c: the constants (see buildings._walls). door_edge / front: -1 for none. vary / win_cells:
-/// the night windows' cells (wall_cells).
+/// the night windows' cells (wall_cells). shop_edges: the walls (ring edges) a shop's ground floor faces a street on,
+/// the others drawn as its upper floors (empty: every wall, as before 191; [-1]: none, a courtyard's). shop_band
+/// (v0, v1, unit m): the shop floor from rows v0..v1 of its own sheet, a whole repeat per unit m (an office tower's
+/// lobby, 197); None: the shop sheet's band shop_k.
 #[pyfunction]
+#[pyo3(signature = (ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop, door_edge, door_pos,
+                    roof_flat, seed, windows_false, front, lite, c, vary, win_cells, shop_edges=Vec::new(),
+                    shop_band=None))]
 #[allow(clippy::too_many_arguments)]
 fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_eave: f64, wall: bool, plain: bool,
                   band_k: i64, bpt: i64, good: Vec<i64>, floors: i64, floor_h: f64, shop: bool, door_edge: i64,
                   door_pos: f64, roof_flat: bool, seed: f64, windows_false: bool, front: i64, lite: bool, c: Vec<f64>,
-                  vary: Vec<(u8, i64, i64, i64)>, win_cells: Vec<(f64, f64)>)
+                  vary: Vec<(u8, i64, i64, i64)>, win_cells: Vec<(f64, f64)>, shop_edges: Vec<i64>,
+                  shop_band: Option<(f64, f64, f64)>)
                   -> PyResult<(Vec<f64>, Vec<f64>, Vec<u8>)> {
     if c.len() != 18 {
         return Err(pyo3::exceptions::PyValueError::new_err("building_walls: 18 constants"));
@@ -3331,11 +3563,16 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
                 cur_floor.set(f);
                 let zb = if f == floors - 1 { z_eave } else { base + (f + 1) as f64 * floor_h };
                 let (m, bk, uu);
-                if f == 0 && shop {
+                if f == 0 && shop && (shop_edges.is_empty() || shop_edges.contains(&(i as i64))) {
                     m = 1u8;
                     bk = shop_k;
-                    let nbs = rnd(l / (tile_px / shop_bpt as f64)).max(1);
-                    uu = if l > 2.0 { nbs as f64 / shop_bpt as f64 } else { 0.02 * l };
+                    if let Some((_, _, unit)) = shop_band {     // (its own sheet: whole repeats of unit m)
+                        let nbs = rnd(l / unit).max(1);
+                        uu = if l > 2.0 { nbs as f64 } else { 0.02 * l };
+                    } else {
+                        let nbs = rnd(l / (tile_px / shop_bpt as f64)).max(1);
+                        uu = if l > 2.0 { nbs as f64 / shop_bpt as f64 } else { 0.02 * l };
+                    }
                 } else {
                     m = 0u8;
                     bk = band_k;
@@ -3364,7 +3601,10 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
                         continue;
                     }
                 }
-                let (v0, v1) = band_v(bk);
+                let (v0, v1) = match shop_band {
+                    Some((sv0, sv1, _)) if m == 1 => (sv0, sv1),
+                    _ => band_v(bk),
+                };
                 let has_door = f == 0 && roof_flat && door_edge >= 0 && door_edge == i as i64;
                 if has_door && door_gap < door_pos && door_pos < l - door_gap {
                     let (mut s0, mut s1) = (door_pos - door_gap, door_pos + door_gap);
@@ -4985,11 +5225,15 @@ fn sharp_cuts<'py>(py: Python<'py>, g: PyReadonlyArray1<'py, f64>, z: PyReadonly
 #[pyfunction]
 fn tight_bends<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, half_span: f64, min_turn_deg: f64)
                     -> Bound<'py, PyArray1<bool>> {
-    let p = xy.as_array();
+    tight_bends_core(xy.as_array(), half_span, min_turn_deg).into_pyarray(py)
+}
+
+/// tight_bends on a view (roads' spec kernels call it in Rust).
+pub(crate) fn tight_bends_core(p: numpy::ndarray::ArrayView2<f64>, half_span: f64, min_turn_deg: f64) -> Vec<bool> {
     let k = p.nrows();
     let mut out = vec![false; k];
     if k < 3 {
-        return out.into_pyarray(py);
+        return out;
     }
     let mut s = vec![0.0f64; k];
     for i in 1..k {
@@ -5011,7 +5255,7 @@ fn tight_bends<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, half_span: 
         let (vx, vy) = dir(s[i] + half_span);
         out[i] = ux * vx + uy * vy <= cos_min;
     }
-    out.into_pyarray(py)
+    out
 }
 
 
@@ -5051,13 +5295,31 @@ fn fold_clearance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, rows: nu
 /// juniper, desert_shrub, desert_rock, oak_west, tropical); wc: WorldCover's (shrub, bare, grass, built) classes.
 /// Palms are most town trees only where they are in life: South Florida, the Rio Grande Valley, coastal Southern
 /// California, the tropics; a few along the rest of the Gulf Coast (GitHub #110: Houston and Austin were mostly palms,
-/// in life live oaks and loblolly pines). The Southeast's conifers are pines.
+/// in life live oaks and loblolly pines). The Southeast's conifers are pines. med (per item) / g_med: the Mediterranean
+/// basin's Cs climates (zone ZONE_MED, vegetation.mediterranean): most broadleaves and conifers there are its own (holm
+/// and cork oaks, olives, maritime pines, cypresses: Italy's stock trees), MED_SHARE of them (more in town).
+/// zone (per item, vegetation.regional): ZONE_MED; ZONE_RIPARIAN, temperate Europe's river banks: RIPARIAN_SHARE of the
+/// broadleaves are poplars (black and hybrid poplars of the Loire, the Po, the Danube; ext[2]); ZONE_HOT_DESERT, North
+/// America's hot deserts (Koppen BWh: the Mojave, Sonoran, Chihuahuan): CREOSOTE_SHARE of the desert shrubs are
+/// creosote bushes (ext[3]). Australia (its box): AUS_SHARE of the trees are eucalypts (ext[1]; in town fewer).
+/// ext: (g_med, g_euc, g_poplar, g_creosote), 255 none.
 #[pyfunction]
+#[pyo3(signature = (group, height, lat, lon, lcls, u, ids, wc, zone=None, ext=[255, 255, 255, 255]))]
 #[allow(clippy::too_many_arguments)]
 fn regional_groups<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, u8>, height: PyReadonlyArray1<'py, f64>,
                         lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>,
-                        lcls: PyReadonlyArray1<'py, u8>, u: PyReadonlyArray1<'py, f64>, ids: [u8; 11], wc: [u8; 4])
+                        lcls: PyReadonlyArray1<'py, u8>, u: PyReadonlyArray1<'py, f64>, ids: [u8; 11], wc: [u8; 4],
+                        zone: Option<PyReadonlyArray1<'py, u8>>, ext: [u8; 4])
                         -> Bound<'py, PyArray1<u8>> {
+    const MED_SHARE: (f64, f64) = (0.75, 0.9);      // (open country, in town)
+    const AUS_SHARE: (f64, f64) = (0.85, 0.6);
+    const RIPARIAN_SHARE: f64 = 0.4;
+    const CREOSOTE_SHARE: f64 = 0.7;
+    const ZONE_MED: u8 = 1;
+    const ZONE_RIPARIAN: u8 = 2;
+    const ZONE_HOT_DESERT: u8 = 3;
+    let [g_med, g_euc, g_poplar, g_creosote] = ext;
+    let zone = zone.map(|m| m.as_array().to_vec());
     let (group, height, lat, lon, lcls, u) = (group.as_array(), height.as_array(), lat.as_array(), lon.as_array(),
                                                lcls.as_array(), u.as_array());
     let [g_dec, g_con, g_shrub, g_rock, g_pine_w, g_palm, g_juniper, g_dshrub, g_drock, g_oak_w, g_trop] = ids;
@@ -5106,8 +5368,24 @@ fn regional_groups<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, u8>, heigh
         if tree && ui < palm_p {
             g = g_palm;
         }
+        let australia = la > -44.0 && la < -10.0 && lo > 112.0 && lo < 154.0;
+        if australia && g_euc != 255 && (g == g_dec || g == g_con)
+            && ui < if built { AUS_SHARE.1 } else { AUS_SHARE.0 } {
+            g = g_euc;
+        }
         if tropics && g == g_dec && h >= 12.0 {
             g = g_trop;
+        }
+        let z = zone.as_ref().and_then(|m| m.get(i).copied()).unwrap_or(0);
+        if z == ZONE_MED && g_med != 255 && (g == g_dec || g == g_con)
+            && ui < if built { MED_SHARE.1 } else { MED_SHARE.0 } {
+            g = g_med;
+        }
+        if z == ZONE_RIPARIAN && g_poplar != 255 && g == g_dec && ui < RIPARIAN_SHARE {
+            g = g_poplar;
+        }
+        if z == ZONE_HOT_DESERT && g_creosote != 255 && g == g_dshrub && ui < CREOSOTE_SHARE {
+            g = g_creosote;
         }
         out[i] = g;
     }
@@ -5572,6 +5850,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirsigns::dirsign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_set_fonts, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_face, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_town_face, m)?)?;
     m.add_function(wrap_pyfunction!(island_ring_rays, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
@@ -5619,7 +5898,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groundpaint::value_noises, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::pad_cover, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::paint_pads, m)?)?;
-    m.add_function(wrap_pyfunction!(devraster::fill_bits, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::cloud_layer, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::shell_lonlat, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::night_lights, m)?)?;
@@ -5637,6 +5915,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(point_inside, m)?)?;
     m.add_function(wrap_pyfunction!(geodetic_to_enu, m)?)?;
     m.add_function(wrap_pyfunction!(enu_to_geodetic, m)?)?;
+    m.add_function(wrap_pyfunction!(geodetic_to_enu_c, m)?)?;
+    m.add_function(wrap_pyfunction!(enu_to_geodetic_c, m)?)?;
+    m.add_function(wrap_pyfunction!(lonlat_to_ecef, m)?)?;
+    m.add_function(wrap_pyfunction!(ecef_to_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(reframe_segs, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode, m)?)?;
     m.add_function(wrap_pyfunction!(inside_blockers, m)?)?;
     m.add_function(wrap_pyfunction!(densify, m)?)?;
@@ -5751,6 +6034,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(farglobal::far_normal_err, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_clip_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::geo_owns, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::clip_tris_convex, m)?)?;
@@ -5797,6 +6081,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
     m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::heightfield_roof, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::slope_wall_floors, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::triangulate_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::skeleton_roof, m)?)?;
     m.add_class::<frontage::FrontageCoverage>()?;
@@ -5819,8 +6104,88 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nycmassing::nyc_massing_match, m)?)?;
     // 186: nycmassing::nyc_massing_match (New York's measured massing, server/nycmassing.py: the 2014 3-D Building
     // Model's records joined to the map's footprints)
-    // 188: upstream 186 plus fork short-junction taper and repeated Russian one-way signs.
-    m.add("VERSION", 188)?;
+    m.add_function(wrap_pyfunction!(rooftop::roof_kit, m)?)?;
+    // 187: rooftop::roof_kit (buildings._clutter: penthouses, stair / lift bulkheads and rooftop units on flat roofs)
+    m.add_function(wrap_pyfunction!(devctx::dev_building_bits, m)?)?;
+    m.add_function(wrap_pyfunction!(devctx::dev_land_bits, m)?)?;
+    m.add_function(wrap_pyfunction!(devctx::dev_pois, m)?)?;
+    m.add_class::<devctx::DevContext>()?;
+    m.add_function(wrap_pyfunction!(furnstations::furniture_stations, m)?)?;
+    // 188: devctx (development.py's Context whole: dev_building_bits / dev_land_bits / dev_pois, the labels of a
+    // Features in one call; DevContext, the tile's raster and its batched samples); furnstations::furniture_stations
+    // (furniture._stations: a sidewalk run's stations with their k arc lengths, one call per run)
+    m.add_class::<specs::RoadRules>()?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_layer_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_to_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_back, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_underpasses, m)?)?;
+    // 189: specs::RoadRules (roads.road_specs / bridge_specs / tunnel_specs / _structure_width / dual_carriageways a
+    // layer at a time; carriageway, ring_width, dual_cap, switchbacks, _ramp_junction) and gsrows (gradesep._layer_rows,
+    // _to_frame, _rows / _owners, _underpasses and _spans' back mapping)
+    m.add_function(wrap_pyfunction!(deckground::deck_ground_probe, m)?)?;
+    m.add_function(wrap_pyfunction!(deckground::deck_ground_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(deckground::deck_ground_apply, m)?)?;
+    // 190: deckground (grading.DECK_GROUND_*: a bridge the elevation holds under a mapped deck taken out of the ground,
+    // GitHub #1098)
+    // 191: building_walls' shop_edges (a shop's ground floor on its street walls only)
+    // 193: regional_groups' med / g_med (the Mediterranean basin's trees)
+    m.add_function(wrap_pyfunction!(planends::plan_ends_near, m)?)?;
+    m.add_function(wrap_pyfunction!(planends::plan_bridges_joined, m)?)?;
+    m.add_function(wrap_pyfunction!(planends::plan_bridge_chain, m)?)?;
+    m.add_function(wrap_pyfunction!(wallsindex::walls_index, m)?)?;
+    // 194: planends (grading's bridge-end queries a cell's plan ends at a time: _ends_near, bridge_chain, the joined
+    // ends of bridge_lifts / bridge_chain_ends_free); geodetic_to_enu_c / enu_to_geodetic_c (one height for all: the
+    // conversions without a broadcast array); lonlat_to_ecef / ecef_to_frame (a layer's ECEF kept, Features.xy_in in
+    // another frame by the rotation alone); wallsindex (roadwidth.Walls' bucket index)
+    // 197: building_walls' shop_band (an office tower's lobby sheet)
+    m.add_function(wrap_pyfunction!(mappedlamps::lamp_road_yaw, m)?)?;
+    m.add_function(wrap_pyfunction!(mappedlamps::points_along, m)?)?;
+    // 199: mappedlamps (the mapped street lamps' arms toward their road, the mapped points along each road; 198 is
+    // another branch's)
+    // 198: reframe_segs (roadwidth's walls in another cell's frame in one pass)
+    m.add_function(wrap_pyfunction!(vegclumps::veg_clumps, m)?)?;
+    m.add_function(wrap_pyfunction!(vegclumps::field_lattice, m)?)?;
+    m.add_function(wrap_pyfunction!(vegclumps::edge_axis, m)?)?;
+    // 201: vegclumps (vegetation: the stock clump trees in a forest's far rings, GitHub #1074; field_lattice: the
+    // orchards', vineyards' and hay bales' rows; edge_axis: the way a field's rows run); regional_groups' zone / ext
+    // (Australia's eucalypts, temperate Europe's riverside poplars, North America's creosote bushes)
+    // 200: places (solar farms, container stacks, trailer parks: area_grid; port cranes: edge_spots; marina boats:
+    // berths; mapped street furniture off the carriageways: street_points)
+    m.add_function(wrap_pyfunction!(places::area_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(places::edge_spots, m)?)?;
+    m.add_function(wrap_pyfunction!(places::berths, m)?)?;
+    m.add_function(wrap_pyfunction!(places::street_points, m)?)?;
+    m.add_function(wrap_pyfunction!(places::outline_panels, m)?)?;
+
+    m.add_function(wrap_pyfunction!(places::roof_corners, m)?)?;
+    m.add_function(wrap_pyfunction!(places::grid_marks, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::wear_plan, m)?)?;
+    // 202: roadwear (wear_plan: tyre polish, concrete joints, cracks, patches, manholes, oil spots along a tile's roads)
+    m.add_function(wrap_pyfunction!(roadtone::paint_lines_toned, m)?)?;
+    // 203: roadtone (paint_lines_toned: the roads painted into the photo in its own pavement's tone)
+    m.add_function(wrap_pyfunction!(roadtone::paint_cover_toned, m)?)?;
+    // 204: paint_cover_toned (lots and pads in the photo's own tone)
+    // 204: dirsigns_face::dirsign_town_face (a station's name board: name and subtitle on one face, the bus and
+    // railway stations' signs; PR #1106 / #1023, their 188)
+    // 205: the night's 204s at once (roadtone::paint_cover_toned and dirsigns_face::dirsign_town_face, two branches)
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_tile_id, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_header, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_find, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_layer, m)?)?;
+    // 206: pmtiles (Overture's own PMTiles archives: header, directories, MVT decode, a cell's layer whole from its
+    // tiles, server/pmtiles.py; 205 left to another branch)
+    // 207: farglobal::far_normal_err and far_global_mesh's 11th value err_n (the far terrain's pixel-error LOD, the
+    // lodPx setting; another branch's 206)
+    // 208: roofs::slope_wall_floors (the walls above a heightfield roof's eave in floor bands of the window sheet)
+    m.add_function(wrap_pyfunction!(railbeds::rail_bed_smooth, m)?)?;
+    m.add_function(wrap_pyfunction!(railbeds::rail_join_beds, m)?)?;
+    // 209: railbeds (railprofile.smooth / join_beds: a node window's ground beds smoothed and its switches joined, in
+    // one call each; that branch's 206)
+    m.add_function(wrap_pyfunction!(osmtagshards::otg_decode, m)?)?;
+    // 210: osmtagshards (otg_decode: a tile of the weekly OSM road tag shards, tools/build_osm_tag_shards.py,
+    // server/osmtagshards.py; that branch's 207)
+    m.add("VERSION", 212)?;
 
     Ok(())
 }

@@ -208,6 +208,12 @@ POLICIES = {
                      offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com",
                  "overturemapswestus2.blob.core.windows.net")},
+    # Overture's own vector tiles (pmtiles.py): its tile CDN and the bucket behind it under its two names, range reads
+    # of a release's immutable archives (a cell's tile and its directories), each mirror with its own limits
+    **{h: HostPolicy(rate=40.0, burst=80.0, max_conc=8, daily_budget=None, allow_prefetch=True,
+                     offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
+       for h in ("tiles.overturemaps.org", "overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com",
+                 "overturemaps-extras-us-west-2.s3.amazonaws.com")},
     **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,
                      offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
        for h in ("esa-worldcover.s3.eu-central-1.amazonaws.com",
@@ -280,6 +286,15 @@ POLICIES = {
     "data.3dbag.nl": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=6000,
                                 allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0,
                                 max_attempts=3, base_delay=2.0, optional=True),
+    # Hong Kong's road heights (roadz.py "hk", BNE_ROADZ_HK): the CSDI Portal's ArcGIS services (the Transport
+    # Department's road centrelines, the CEDD LiDAR sheet index) a few requests per map-data cell, and the LiDAR sheets
+    # themselves (zips of 5-6 MB, kept in a size-capped folder; ~0.8 MB/s a connection, 2026-11-10); optional
+    "portal.csdi.gov.hk": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=6000,
+                                     allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0,
+                                     max_attempts=3, base_delay=2.0, optional=True),
+    "bulkdata.csdi.gov.hk": HostPolicy(rate=1.0, burst=4.0, max_conc=4, daily_budget=1000, daily_hard=2000,
+                                       allow_prefetch=True, offline_ok=True, miss_ttl=None, binary=True, timeout=120.0,
+                                       max_attempts=3, base_delay=2.0, optional=True),
     # never at runtime (OSM Overpass, OSMF vector tiles, Protomaps builds): §3.3
     "overpass-api.de": HostPolicy(denied=True, daily_hard=0),
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
@@ -346,6 +361,11 @@ ROLES = {
         "roads, buildings, water and land use; places not visited before may come without them",
     "overturemapswestus2.blob.core.windows.net":
         "roads, buildings, water and land use (second source); only matters while the first is down too",
+    "tiles.overturemaps.org": "roads, buildings, water and land use, fast; the other map sources stand in",
+    "overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com":
+        "roads, buildings, water and land use, fast (second source); the other map sources stand in",
+    "overturemaps-extras-us-west-2.s3.amazonaws.com":
+        "roads, buildings, water and land use, fast (third source); the other map sources stand in",
     "esa-worldcover.s3.eu-central-1.amazonaws.com":
         "land cover (ground materials, rocks, town streets); places not visited before get a plain ground meanwhile",
     "dataforgood-fb-data.s3.amazonaws.com": "the trees; places not visited before have none meanwhile",
@@ -355,6 +375,9 @@ ROLES = {
     "s3-us-west-2.amazonaws.com": "US lidar for bridge deck heights; estimated meanwhile",
     "nvdbapiles.atlas.vegvesen.no": "Norway's measured road, bridge and tunnel heights; estimated meanwhile",
     "data.3dbag.nl": "the Netherlands' measured roof shapes and heights (3DBAG); predicted meanwhile",
+    "portal.csdi.gov.hk": "Hong Kong's road lines and LiDAR index for measured road heights; estimated meanwhile",
+    "bulkdata.csdi.gov.hk": "Hong Kong's LiDAR for measured road and bridge heights and the terrain; estimated "
+                            "meanwhile",
     "tecnagamer.github.io": "railway details, US railroad crossing equipment, lane markings and New York's "
                             "building setbacks; estimated meanwhile",
     "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",

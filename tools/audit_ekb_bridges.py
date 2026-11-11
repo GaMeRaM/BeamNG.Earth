@@ -107,7 +107,7 @@ def audit(name, cache):
                 sp = specs[i]
                 if sp is None:
                     continue
-                for j, line in enumerate(roads._raw_ground_parts(f, i)):
+                for j, line in enumerate(roads.ground_parts(f, i)):
                     e, n, _ = frame.geodetic_to_enu(np.asarray(line)[:, 1], np.asarray(line)[:, 0], 0.)
                     ground[str(fid), j] = (sp, np.c_[e, n])
         for fid, spec, xy, z, _ in decks:

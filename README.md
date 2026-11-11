@@ -32,24 +32,39 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Opt-in (`BNE_PHOTO_SURFACE=1`): an untagged track, service or unclassified road is asphalt, grass or gravel by the
   colour of the regional photo under it (a lane as green as its verges is a grass lane, a pale neutral one gravel).
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
-  lots) with 3D grass and bushes.
+  lots) with 3D grass and bushes. Squares and pedestrian areas are painted into the ground with their own textures by
+  their mapped surface and paving tags (grey stone slabs, red herringbone brick, cobbles; in the US red brick only
+  where the aerial photo shows it), and cobbled streets show real setts. These stock textures are converted from the
+  player's own game files when the server starts.
+- Roads, parking lots and gas station forecourts are painted in the aerial photo's own pavement colour (old asphalt,
+  concrete and patches keep their shade; parked cars and old markings are left out), and the asphalt of rounded street
+  corners is painted to the curb.
 - Trees and forests from a canopy height model, regional species (conifers, broadleaf, palms, desert
-  shrubs), autumn colours in season.
+  shrubs, Mediterranean oaks and pines, Australia's eucalypts, riverside poplars in Europe, creosote bushes in North
+  America's hot deserts), autumn colours in season. Far forests are drawn as the stock maps' tree clumps (fewer
+  objects, lighter on the frame time); the lower tree settings bring the clumps nearer.
+- Orchards and vineyards in rows along their fields, and round bales on a share of the fields after the harvest
+  (straw on farmland, wrapped silage on meadows, in their season for each hemisphere).
 - Forest and river sounds: the stock maps' wind in the trees (louder and fuller in dense, tall forest) and background
   sound, the set by climate (Köppen-Geiger zones: temperate, oceanic, Mediterranean, desert, tropical), running water along
   rivers and streams, waves along coasts and large lakes, the stock tunnel, under-bridge and parking garage echo, refinery
   machinery and power plants, and rain you can hear.
 - Pump jacks at oil wells (OpenStreetMap), animated, with their sounds.
 - Wind turbines at their mapped OpenStreetMap positions worldwide, with animated blades and distant streaming.
-- High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations.
+- High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations
+  (on wooden poles where the line's voltage is low or its mapped supports are poles).
 - The satellite map on cars' own navigation screens.
 - Night lighting: lit windows and street lamps after dusk, out to as far as buildings are drawn (about 3 miles),
   spaced as real street lamps are (North American design standards there, OpenStreetMap's mapped lamps elsewhere),
-  and lit highways in towns and their ramps.
+  and lit highways in towns and their ramps. Street lamps mapped in OpenStreetMap stand where they are mapped, as the
+  post their mount names (high masts, straight masts, double arms), their arms toward the road
+  (`BNE_MAPPED_LAMPS=off` leaves them out).
 - Buildings from Overture / OpenStreetMap with regional styles (US siding and brick, Alpine chalets, Nordic
   wood, Mediterranean stucco, East Asian and Latin American looks), real heights, roofs, windows, shopfronts,
-  porches, churches with steeples, glass towers. Buildings show out to about 3 miles: simpler versions past 1 mile,
-  and a light skyline beyond that; bridges show out to about 3 miles too.
+  porches, churches with steeples, glass towers. Roof shapes mapped on building parts are kept and sloped along their
+  mapped direction (tower crowns, One World Trade Center's tapering corners), also on the far skyline. Buildings show
+  out to about 3 miles: simpler versions past 1 mile, and a light skyline beyond that; bridges show out to about 3
+  miles too.
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
   traffic islands, roundabouts (a granite truck apron and a planted, raised island, curbs round the ring into the entries,
   give-way lines at every entry, splitter islands where the map has a refuge), rural motorways with shoulders and toll booths; the ground graded under them, with
@@ -66,6 +81,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   one place (a barrier kit per approach, a rubber deck between the rails), crushed-stone ballast on tracks in use,
   parallel tracks sharing one bed, and buildings, lamps and poles kept off the railway's bed. Opt-in (`BNE_CATENARY=1`): electrified lines
   (OpenStreetMap `electrified`) get catenary masts, cantilevers and contact wire, concrete or steel by country.
+  A track's bed comes from one profile per line, the same in every tile and grading cell (no steps at tile seams),
+  smoothed along the line with its bends rounded; switches and crossovers meet the lines they join; a road crossing a
+  track at grade lies flush with it. Railway stations are built from the map: platforms at the country's height
+  beside the rail head, roofs on columns, benches, bins and lamps, footbridges, walkable underpasses, boarded track
+  crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
+  switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics
+  collider at the rails for riding them (`BNE_RAIL_COLLIDE=on`) and rail tunnels as tubes (`BNE_RAIL_TUNNELS=on`).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
 - Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole
@@ -156,17 +178,32 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   joined to the map's outlines, where the map itself does not say (Aix-en-Provence's old town: 4 000 of 4 800
   buildings measured, tiled pitched roofs instead of predicted flat blocks). Downloaded per map cell in the background
   beside the map data, about 0.1-0.6 MB once; `BNE_BDTOPO=off` turns it off.
+- Measured massing in New York City: the setbacks, wedding-cake towers and crowns of the city's 3-D Building Model
+  (NYC Open Data, 2014) as building parts on the map's outlines, downloaded per map cell from BeamNG.Earth's data site
+  (`BNE_NYC_MASSING=off` turns it off). Rooftop water tanks on the city's mid-rise roofs use the stock water-tower model.
+- Rooftops everywhere: a mechanical penthouse on towers, a stair / lift bulkhead on mid-rise blocks, and rooftop
+  air-conditioning units spread by roof size on shops, offices and warehouses, each kept inside the roof's outline.
+- Measured roofs from national LoD2 building models: each building's roof shape (flat, gabled, hipped, half-hipped,
+  mansard, pyramidal, ...), height and roof rise fill what the map does not say, in Germany (the states' models) and,
+  once their data is published, Switzerland and Liechtenstein (swissBUILDINGS3D), Estonia and Vienna. Where a model
+  has no roof type, the shape is read from its roof faces when the data is built. A small file per ~25 km, fetched
+  once per area; `BNE_LOD2_ROOFS=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
 - Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
   corner at every vertex. With it on, each bend of a drivable road is an arc tangent to both pieces (a motorway's
   gentle, a lane's tight; a bend of short pieces becomes one round curve, moving the line by under 0.75 m). The road's
   ends, junctions, roundabouts and the map's own vertices that are not bends stay where they are.
-- Fast teleports: right after a teleport, while you wait, the world server may borrow some of the game's
+- Fast teleports: picking a destination on the world map (its "Teleport here?" box or a search result) starts
+  downloading the place's terrain and map data before you confirm. Right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
   2 to 4 road pieces at once, by your computer's CPU threads and memory. While you drive and the world falls
   behind, it borrows a quarter of the game's cores until it has caught up (`BNGE_CATCHUP_LEND=0` turns that off,
   `0.5` borrows half).
+- New places' roads, buildings and places come from Overture's own map tiles: one small download per area instead
+  of reading the large map data files, a few seconds sooner on a first visit (the same data; road lines within about
+  a quarter of a metre of the files'). Water, land use and the other map layers still come from the files, and the
+  files stand in whenever the tiles do not answer (`BNGE_MAP_SOURCE=parquet` uses the files for everything, as before).
 - Places you've been load much faster the next time: what was built around you (roads, buildings, the levelled
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
   `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
@@ -258,6 +295,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     fps against 94), and stays off below 30 fps.
   - **Terrain detail** (Low to Extreme): how far out each finer level of the distant land reaches (Extreme builds
     about twice as many distant ground pieces).
+  - **Terrain pixel error** (0 = off, the default; 0.5 to 8 px; advanced): picks the distant ground's detail by what
+    your screen shows: the largest jump in pixels allowed when a piece switches detail (your resolution and field
+    of view count), so flat land stays coarser and mountains finer.
   - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the
     ground around you; from the next level load.
   - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).
@@ -272,6 +312,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     Off-screen motion updates less often. See [the implementation guide](docs/DISTANT_TRAFFIC.md) for bounds.
   - **Grass and shrubs**, **Grass draw distance**, **Rocks**, **Street lamp lights**, **View distance** (the real
     horizon or a fixed distance).
+  - **Road surface detail** (Off / Basic / Full; Off on Low, Basic on Medium, Full above): wear on the paved roads
+    from the game's own road decals, drawn with the road itself (no extra objects). Basic: tyre polish in the lanes'
+    wheel paths on busier roads, a concrete road's slab and lane joints (OpenStreetMap surface=concrete) and a grassy
+    asphalt edge on rural roads through grass, crops or woods (the land cover beside them). Full
+    also sealed and alligator cracks, crack lines, repair patches, potholes on poor roads (OpenStreetMap smoothness
+    where mapped), manhole covers on town streets, oil spots in parking lots and, in the autumn, fallen leaves
+    along the edges where trees stand beside the road.
   - What loads around you reaches the same distance in every direction (a circle; before it was a square, whose
     corners reached about 40 % farther).
 - Uses your graphics card for some of the world server's work (colour matching of the photos, compressing the distant
