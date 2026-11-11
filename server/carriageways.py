@@ -178,15 +178,19 @@ def branch_ties(xys, brs, tol=COUPLE_M):
     joint of an overpass road's parts, or alongside the road it joins, at the road's node or a little short of it: no
     other chain end meets it there, so the road is no branch point to `chains` and the slip road would be left at its
     own ground). Held to that sample's height; its chain is solved with the one it meets. Pure."""
-    boxes = [(q.min(0) - tol, q.max(0) + tol) for q in xys]
+    lows = np.array([q.min(0) - tol for q in xys]).reshape(-1, 2)
+    highs = np.array([q.max(0) + tol for q in xys]).reshape(-1, 2)
+    interior = np.array([len(q) >= 3 for q in xys])
     out = []
     for na, xy in enumerate(xys):
         for ia in (0, len(xy) - 1):
             p = xy[ia]
             best = None
-            for nb, q in enumerate(xys):
-                if nb == na or len(q) < 3 or (p < boxes[nb][0]).any() or (p > boxes[nb][1]).any():
+            candidates = np.flatnonzero(interior & ((p >= lows) & (p <= highs)).all(1))
+            for nb in candidates:
+                if nb == na:
                     continue
+                q = xys[nb]
                 if float(np.min(np.hypot(*(q[[0, -1]] - p).T))) <= tol:
                     continue                    # (an end meeting an end: a branch point, coupled as such)
                 d = np.hypot(*(q[1:-1] - p).T)

@@ -80,6 +80,18 @@ class BranchTieTest(unittest.TestCase):
     def test_end_far_off_is_not(self):
         self.assertEqual(self.ties((76.0, 6.0)), [])
 
+    def test_tie_includes_exact_clearance_boundary(self):
+        self.assertEqual(len(self.ties((40.0, cw.COUPLE_M))), 1)
+        self.assertEqual(self.ties((40.0, np.nextafter(cw.COUPLE_M, np.inf))), [])
+
+    def test_equidistant_roads_keep_input_order_among_distant_roads(self):
+        link = self.link((40.0, 0.0))
+        roads = [self.road + [0., 10000.], self.road + [0., 2.],
+                 self.road + [0., -2.], link]
+        ties = cw.branch_ties(roads, [np.zeros(len(q), bool) for q in roads])
+        self.assertIn((3, 2, 1, 10), ties)
+        self.assertNotIn((3, 2, 2, 10), ties)
+
     def test_end_under_a_deck_is_not(self):
         self.assertEqual(self.ties((100.0, 2.0)), [])
 

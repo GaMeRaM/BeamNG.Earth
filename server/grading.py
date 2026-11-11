@@ -3894,21 +3894,26 @@ class _Planner:
         ends = []
         for n, (xy, s, pi, br, raw) in enumerate(samples):
             ends += [(n, 0, xy[0]), (n, len(xy) - 1, xy[-1])]
+        end_xy = np.array([e[2] for e in ends])
+        end_chain = np.array([e[0] for e in ends])
         for a in range(len(ends)):
-            for b in range(a + 1, len(ends)):
-                na, ia, pa = ends[a]
+            na, ia, pa = ends[a]
+            delta = end_xy[a + 1:] - pa
+            near = np.flatnonzero((end_chain[a + 1:] != na) &
+                                  (np.hypot(delta[:, 0], delta[:, 1]) <= _cw.COUPLE_M))
+            for b in near + a + 1:
                 nb, ib, pb = ends[b]
-                if na != nb and np.hypot(*(pa - pb)) <= _cw.COUPLE_M:
-                    couplings.append((na, ia, nb, ib, "eq", 0.0))
+                couplings.append((na, ia, nb, ib, "eq", 0.0))
         # (an end meeting the inside of another chain: a slip road at its overpass road's node, solved with it)
         joined = _cw.branch_ties([x[0] for x in samples], [x[3] for x in samples])
         couplings += [(na, ia, nb, jb, "eq", 0.0) for na, ia, nb, jb in joined]
         cross = []
-        boxes = [(x[0].min(0), x[0].max(0)) for x in samples]
+        box_lo = np.array([x[0].min(0) for x in samples])
+        box_hi = np.array([x[0].max(0) for x in samples])
         for na in range(len(chains)):
-            for nb in range(na + 1, len(chains)):
-                if (boxes[na][1] < boxes[nb][0]).any() or (boxes[nb][1] < boxes[na][0]).any():
-                    continue
+            near = np.flatnonzero(((box_hi[na] >= box_lo[na + 1:]) &
+                                   (box_hi[na + 1:] >= box_lo[na])).all(1))
+            for nb in near + na + 1:
                 hits = roadsmod._crossings_by([p_[1] for p_ in chains[na][0]], [p_[1] for p_ in chains[nb][0]])
                 for ib, lst in enumerate(hits):
                     pb = chains[nb][0][ib]
