@@ -9,12 +9,18 @@ on:
         description: Rebuild native kernels (disable only for Python-only hotfixes using the checked-in module)
         type: boolean
         default: true
+      worker_check_run:
+        description: Test worker queues of an existing build run only (empty builds the app)
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   windows:
+    if: github.event.inputs.worker_check_run == ''
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -107,3 +113,23 @@ jobs:
             dist/*.exe
             dist/*.zip
           if-no-files-found: error
+
+  worker-check:
+    if: github.event.inputs.worker_check_run != ''
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: BeamNG-Earth-Windows
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.worker_check_run }}
+      - name: Test frozen worker startup and queue recovery
+        shell: pwsh
+        run: |
+          $app = Get-ChildItem dist -Filter '*.exe' | Select-Object -First 1
+          if (-not $app) { throw 'No packaged app' }
+          & $app.FullName --run-addon tools/check_worker_pools.py
+          if ($LASTEXITCODE -ne 0) { throw "Worker check failed: $LASTEXITCODE" }
