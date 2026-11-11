@@ -42,6 +42,42 @@ class StagingTest(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):     # a missing temporary file is still an error
                 staging.replace(tmp, target)
 
+    def test_game_mask_retry_publishes_new_content_atomically(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "mask.png"
+            tmp = Path(root) / "mask.tmp"
+            path.write_bytes(b"old")
+            tmp.write_bytes(b"new")
+            real = os.replace
+            calls = []
+
+            def held(src, dst):
+                calls.append(src)
+                self.assertEqual(path.read_bytes(), b"old")
+                if len(calls) < 3:
+                    raise PermissionError(13, "Access denied")
+                real(src, dst)
+
+            with mock.patch.object(staging.os, "replace", side_effect=held), \
+                    mock.patch.object(staging, "REPLACE_WAITS", (0., 0.)):
+                staging.replace(str(tmp), str(path))
+            self.assertEqual(path.read_bytes(), b"new")
+            self.assertFalse(tmp.exists())
+
+    def test_permanently_held_game_mask_is_not_silently_kept(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as root:
+            path, tmp = Path(root) / "mask.png", Path(root) / "mask.tmp"
+            path.write_bytes(b"old")
+            tmp.write_bytes(b"new")
+            with mock.patch.object(staging.os, "replace", side_effect=PermissionError(13, "held")), \
+                    mock.patch.object(staging, "REPLACE_WAITS", (0.,)):
+                with self.assertRaises(PermissionError):
+                    staging.replace(str(tmp), str(path))
+            self.assertEqual(path.read_bytes(), b"old")
+            self.assertEqual(tmp.read_bytes(), b"new")
+
     def test_elsewhere_beside_the_file(self):
         self.assertEqual(staging.tmp_for("/home/x/.cache/beamng-earth/dem/1/2.webp"),
                          "/home/x/.cache/beamng-earth/dem/1/2.webp.tmp")

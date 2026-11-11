@@ -313,7 +313,12 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
         out = _cut_worn_at_motorways(out, wear_of, motorway_crossings(frame, cells, box, reach))
     out = _drop_stubs(out)
     out = level_bridges(frame, cells, out, near)
-    out = _span_underpasses(out, road_underpasses(frame, cells, box, reach) if underpasses is None else underpasses)
+    tunnels = road_underpasses(frame, cells, box, reach) if underpasses is None else underpasses
+    # Parallel tracks over the same road can lack bridge flags (Kosmonavtov,
+    # Yekaterinburg). A crossing already established by a mapped rail bridge
+    # must stay open under its neighbouring tracks too, not fill with ballast.
+    tunnels = list(tunnels) + coarse_underpasses(frame, cells, box, out, reach)
+    out = _span_underpasses(out, tunnels)
     return _clip(out, near) if clip else out
 
 
@@ -570,8 +575,10 @@ def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
         if len(line) < 2:
             continue
         sl = _arc(line)
-        for b in bridges:
-            for sc in _seg_hits(line, b):
+        # The lattice asks this for every node window. Batch bridge crossings in
+        # the existing native kernel instead of a Python segment-pair loop.
+        for b, hits in zip(bridges, roads._crossings_by([line], bridges)):
+            for _part, sc, _point in hits:
                 if not coarse and not flat_rail_crossing(frame, b, line, sc):
                     continue
                 a0, a1 = max(0.0, sc - COARSE_PIECE_M), min(float(sl[-1]), sc + COARSE_PIECE_M)
@@ -2316,7 +2323,10 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                     _tram_deck(mesh, p, uu, t, v, concrete)
                 else:
                     _deck(mesh, p, uu, t, v, ballast_w, concrete)
-                pr = _sited(_piers(s, xy, u, top, zg, i, j), crossers, ground)
+                # At-grade filtering is for ballast, not bridge supports: a
+                # road beneath a deck need not cross any ground track here.
+                pier_crossers = [(ln, hw, None) for ln, hw in all_cr + list(tunnels)]
+                pr = _sited(_piers(s, xy, u, top, zg, i, j), pier_crossers, ground)
                 if pr is not None:
                     pier_w = min(PIER_W, 2 * TRAM_DECK_HALF_M) if cls == "tram" else PIER_W
                     small.append((pr, PIER_T / 2, pier_w / 2, concrete))

@@ -641,8 +641,10 @@ class RailwayTest(unittest.TestCase):
         """A rail bridge over a road in a 5 m dip: no pier in the road's lanes, every pier's foot under the ground at
         all its corners (one stood in the lanes, one hung in the air, 2026-10-25)."""
         f = features([[(-300.0, 100.0), (60.0, 100.0)], [(60.0, 100.0), (190.0, 100.0)],
-                      [(190.0, 100.0), (500.0, 100.0)], [(125.0, -100.0), (125.0, 300.0)]],
-                     ["standard_gauge"] * 3 + ["secondary"], subtypes=["rail"] * 3 + ["road"], flags=[(1, "is_bridge")])
+                      [(190.0, 100.0), (500.0, 100.0)], [(125.0, -100.0), (125.0, 300.0)],
+                      [(-300., 220.), (-100., 220.)]],
+                     ["standard_gauge"] * 3 + ["secondary", "standard_gauge"],
+                     subtypes=["rail"] * 3 + ["road", "rail"], flags=[(1, "is_bridge")])
 
         def dip(xy):                # the ground falling 5 m to the road over 40 m either side of it
             return 10.0 - 5.0 * np.clip(1.0 - np.abs(xy[:, 0] - 125.0) / 40.0, 0.0, 1.0)
@@ -973,6 +975,50 @@ class CoarseUnderpassTest(unittest.TestCase):
         rail = np.array([[40.0, -20.0], [40.0, 20.0]])
         self.assertEqual([round(v, 6) for v in railways._seg_hits(road, rail)], [40.0])
         self.assertEqual(railways._seg_hits(road, rail + [0.0, 50.0]), [])
+
+    def test_batched_crossings_preserve_underpass_pieces(self):
+        from unittest import mock
+        ways = [(np.array([[-50., 0.], [0., 0.], [50., 0.]]), 4.),
+                (np.array([[-50., 30.], [50., 30.]]), 6.)]
+        rails = [("a", "standard_gauge", "bridge", np.array([[0., -50.], [0., 50.]])),
+                 ("b", "standard_gauge", "bridge", np.array([[20., -50.], [20., 50.]])),
+                 ("far", "standard_gauge", "bridge", np.array([[500., -50.], [500., 50.]]))]
+
+        def old(lines, bridges):
+            return [[(0, arc, None) for arc in railways._seg_hits(lines[0], b)] for b in bridges]
+
+        with mock.patch.object(railways, "_coarse_here", return_value=True), \
+                mock.patch.object(railways, "crossings", return_value=ways):
+            with mock.patch.object(roads, "_crossings_by", side_effect=old):
+                expected = railways.coarse_underpasses(FRAME, [], (-60, -60, 60, 60), rails)
+            got = railways.coarse_underpasses(FRAME, [], (-60, -60, 60, 60), rails)
+        self.assertEqual(len(got), len(expected))
+        for (xy, half), (want, hw) in zip(got, expected):
+            self.assertEqual(half, hw)
+            np.testing.assert_allclose(xy, want, atol=1e-12)
+
+    def test_unflagged_parallel_tracks_keep_the_mapped_underpass_open(self):
+        from unittest import mock
+        f = features([[(-90., 20.), (90., 20.)], [(-90., 0.), (90., 0.)],
+                      [(0., -100.), (0., 100.)]],
+                     ["standard_gauge", "standard_gauge", "primary"],
+                     subtypes=["rail", "rail", "road"], flags=[(0, "is_bridge")])
+        with mock.patch.object(railways, "COARSE_AT", lambda *_: True), \
+                mock.patch.object(railways, "LEVEL_BRIDGES_ON", False):
+            got = railways.parts(FRAME, [f], (-100., -100., 100., 100.))
+        crossing = [(fid, kind) for fid, _cls, kind, xy in got
+                    if railways.crosses(xy, np.array([[0., -100.], [0., 100.]]))]
+        self.assertEqual({fid for fid, _kind in crossing}, {str(f.ids[0]), str(f.ids[1])})
+        self.assertTrue(all(kind == "bridge" for _fid, kind in crossing))
+
+    def test_a_level_crossing_without_bridge_evidence_stays_on_ground(self):
+        from unittest import mock
+        f = features([[(-90., 0.), (90., 0.)], [(0., -100.), (0., 100.)]],
+                     ["standard_gauge", "primary"], subtypes=["rail", "road"])
+        with mock.patch.object(railways, "COARSE_AT", lambda *_: True):
+            got = railways.parts(FRAME, [f], (-100., -100., 100., 100.))
+        self.assertTrue(got)
+        self.assertTrue(all(kind == "ground" for _fid, _cls, kind, _xy in got))
 
     def test_only_on_coarse_elevation(self):
         import geodesy

@@ -90,8 +90,18 @@ def warm(path):
 def replace(tmp, path):
     """os.replace(tmp, path), making path's folder again if it was deleted under us (the game or the player
     clearing its temp folder) instead of failing every write after it. On Windows a file going into the game's folder
-    is read once at once (warm)."""
-    _replace(tmp, path)
+    is read once at once (warm). A temporarily held destination is retried for REPLACE_WAITS; permanent
+    permission errors still propagate, without discarding the new temporary file."""
+    # The engine (or a scanner) can briefly hold a terrain mask being replaced.
+    # Keep atomic publication: never delete the destination to force the rename.
+    for wait in REPLACE_WAITS + (None,):
+        try:
+            _replace(tmp, path)
+            break
+        except PermissionError:
+            if wait is None:
+                raise
+            time.sleep(wait)
     if WARM_READ and staging_dir(path) is not None:
         warm(path)
 
@@ -163,20 +173,17 @@ def replace_cached(tmp, path):
     (PermissionError, WinError 5: GitHub #67, the DEM tile cache on a cloud PC failed terrain requests): retried
     REPLACE_WAITS; still held but there, that copy is kept and tmp removed. True when tmp went in, False when the
     copy already there was kept."""
-    for wait in REPLACE_WAITS + (None,):
+    try:
+        replace(tmp, path)
+        return True
+    except PermissionError:
+        if not os.path.exists(path):
+            raise
         try:
-            replace(tmp, path)
-            return True
-        except PermissionError:
-            if wait is None:
-                if not os.path.exists(path):
-                    raise
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-                return False
-            time.sleep(wait)
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
 
 
 INLINE_MAX = 1 << 20        # bytes: a session file this small or smaller goes inside its message (inline_json)
