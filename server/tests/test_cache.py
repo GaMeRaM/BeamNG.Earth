@@ -126,15 +126,18 @@ class LruTest(Base):
             gate.wait(10)
             return Du(20e9, 19.5e9, 0.5e9)
         c.disk_usage = slow
+        worker = threading.Thread(target=c._disk_check, args=(time.monotonic(),))
+        worker.start()
+        self.addCleanup(worker.join, 2)
+        self.addCleanup(gate.set)
         t0 = time.perf_counter()
-        self.assertEqual(c.disk_short(), 0)             # (nothing known yet: 0, at once)
-        self.assertEqual(c.disk_short(), 0)             # (one question in flight, not two)
+        with unittest.mock.patch.object(threading.Thread, "start", side_effect=AssertionError("status started a thread")):
+            self.assertEqual(c.disk_short(), 0)
+            self.assertEqual(c.disk_short(), 0)
         self.assertLess(time.perf_counter() - t0, 1.0)
         gate.set()
-        for _ in range(100):
-            if c.disk_short() == int(1.5e9):
-                break
-            time.sleep(0.02)
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
         self.assertEqual(c.disk_short(), int(1.5e9))
         self.assertEqual(len(asked), 1)
 

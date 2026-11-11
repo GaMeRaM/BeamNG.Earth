@@ -82,7 +82,6 @@ TICK_S = 30.0               # the background thread's check interval
 # space filled players' disks: the first week's telemetry had ~19k "No space left on device" errors (OSError 28),
 # most at the far tiles): 5 % of the disk, at least DISK_RESERVE_MIN and at most DISK_RESERVE_MAX
 DISK_RESERVE_SHARE = 0.05
-DISK_CHECK_S = 10.0         # s between disk_short's questions to the disk (a busy hard disk answers in seconds)
 DISK_RESERVE_MIN = 2 * 1e9
 DISK_RESERVE_MAX = 10 * 1e9
 DISK_MARGIN = 1e9           # ... and a disk short of it is cut back this much further (not a file at a time)
@@ -601,16 +600,15 @@ class Cache(NoCache):
     # --- the background thread -------------------------------------------------------------------
     def disk_short(self, wait=False):
         """Bytes the cache's disk is short of its free-space reserve (DISK_RESERVE_*), 0 when it has it (or when the
-        disk cannot be asked). The disk is asked at most every DISK_CHECK_S, on a thread of its own; the answer is the
-        last one it gave (0 before the first): asked on every pose (refresh_status -> net_note), a busy hard disk took
+        disk cannot be asked). The existing cache worker refreshes it at startup and on its ticks. A normal call
+        only reads the last answer (0 before the first). Asked on every pose (refresh_status -> net_note), a busy disk took
         2.6-9.9 s to answer on Windows and stalled the event loop 19 times in 23 minutes (GitHub #1054). wait: ask
         now and wait for the answer (eviction's own check, off the loop)."""
-        now = time.monotonic()
         if wait:
-            self._disk_check(now)
-        elif now - self._disk_at >= DISK_CHECK_S and not self._disk_busy:
-            self._disk_busy = True
-            threading.Thread(target=self._disk_check, args=(now,), name="cache disk check", daemon=True).start()
+            self._disk_check(time.monotonic())
+        # tick() on the existing cache worker refreshes this value. Even
+        # Thread.start() waits for scheduling on Windows, so a status read must
+        # neither create a thread nor ask the disk.
         return self._disk_short
 
     def _disk_check(self, now):
@@ -673,6 +671,7 @@ class Cache(NoCache):
         return n
 
     def _run(self):
+        self._disk_check(time.monotonic())
         try:
             self.scan()
         except Exception:
