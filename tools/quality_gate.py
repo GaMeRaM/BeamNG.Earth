@@ -38,6 +38,9 @@ MODULES = (
     "test_germany", "test_lane_rules", "test_regionaldata",
     "test_bdtopo",
 
+    "test_revisit_side", "test_revisitpack", "test_workcancel", "test_reach", "test_abandon",
+    "test_grade_binned", "test_farpvs", "test_ground_standin", "test_ground_square",
+    "test_far_first", "test_halo_reads", "test_enginepatch", "test_prov_refresh",
 )
 
 

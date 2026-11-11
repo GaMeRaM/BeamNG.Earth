@@ -378,7 +378,7 @@ def _seed(it):
 
 
 def _centre(it):
-    return bs.centroid(it["xy"])
+    return bs.item_centroid(it)
 
 
 def find(items):
@@ -414,36 +414,24 @@ def _near_path(xy, path, d):
 
 def _ring_overlap(a, b):
     """Do the polygons a and b overlap (a vertex of one inside the other, or the nearest points under 0)?"""
-    if any(bs.contains(b, p) for p in bs._open(a)[::max(1, len(bs._open(a)) // 12)]):
+    oa, ob = bs._open(a), bs._open(b)
+    if bs.contains_any(b, oa[::max(1, len(oa) // 12)]):
         return True
-    return any(bs.contains(a, p) for p in bs._open(b)[::max(1, len(bs._open(b)) // 12)])
-
-
-def _segments_cross(a0, a1, b0, b1):
-    """(t along a, u along b) where the segments cross, or None."""
-    r, s = a1 - a0, b1 - b0
-    den = r[0] * s[1] - r[1] * s[0]
-    if abs(den) < 1e-9:
-        return None
-    q = b0 - a0
-    t = (q[0] * s[1] - q[1] * s[0]) / den
-    u = (q[0] * r[1] - q[1] * r[0]) / den
-    return (t, u) if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0 else None
+    return bs.contains_any(a, ob[::max(1, len(ob) // 12)])
 
 
 def _crossings(path, tracks):
-    """[(track index, arc length m along path)] where the path crosses a track, in order."""
-    out = []
-    s0 = 0.0
-    for a, b in zip(path[:-1], path[1:]):
-        seglen = float(np.hypot(*(b - a)))
-        for k, (_tid, xy) in enumerate(tracks):
-            for c, d in zip(xy[:-1], xy[1:]):
-                hit = _segments_cross(a, b, c, d)
-                if hit is not None:
-                    out.append((k, s0 + hit[0] * seglen))
-        s0 += seglen
-    return sorted(out, key=lambda e: e[1])
+    """[(track index, arc length m along path)] where the path crosses a track (each pair of segments crossing within
+    both, t and u in [0, 1], not near parallel: |cross| >= 1e-9), in order of arc (earthfast.station_crossings: the
+    Python loop's numbers, ~1 CPU-s of a Dijon group's layout)."""
+    import fast
+    fast.require(bs.GEOM_NATIVE, "station geometry")
+    if not tracks:
+        return []
+    rows = [np.asarray(xy, np.float64).reshape(-1, 2) for _tid, xy in tracks]
+    off = np.zeros(len(rows) + 1, np.int64)
+    off[1:] = np.cumsum([len(r) for r in rows])
+    return fast._ef.station_crossings(np.asarray(path, np.float64).reshape(-1, 2), np.concatenate(rows), off)
 
 
 def _links(items, tracks, platforms, hub):
@@ -705,8 +693,8 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
         if float(np.hypot(*(c - st.hub))) > REACH_M:
             continue
         xy = np.asarray(it["xy"], np.float64)
-        local = [t for t in all_tracks if bs.dist_to_path(t[1], c) < 90.0 or min(bs.dist_to_path(t[1], p) for p in xy) < 60.0]
-        if not local or min(bs.dist_to_path(t[1], p) for t in local for p in xy) > PLATFORM_TRACK_M:
+        local = [t for t in all_tracks if bs.dist_to_path(t[1], c) < 90.0 or bs.min_dist_to_path(t[1], xy) < 60.0]
+        if not local or min(bs.min_dist_to_path(t[1], xy) for t in local) > PLATFORM_TRACK_M:
             continue
         if it["kind"] == "polygon":
             ring = _ccw(it["xy"])
@@ -732,12 +720,12 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
     # the hall(s), and the roofs over the platforms
     st.buildings = [(it["id"], bs._open(it["xy"]), float(it.get("height") or 0.0)) for it in near
                     if it["layer"] == "buildings" and it["cls"] in BUILDING_CLASSES and it["kind"] == "polygon"
-                    and float(np.hypot(*(_centre(it) - st.hub))) < BUILDING_NEAR_M and bs.area(it["xy"]) > 60.0]
+                    and float(np.hypot(*(_centre(it) - st.hub))) < BUILDING_NEAR_M and bs.item_area(it) > 60.0]
     for it in sorted((i for i in near if i["layer"] == "buildings" and i["cls"] in ROOF_CLASSES and i["kind"] == "polygon"),
                      key=lambda i: i["id"]):
         ring = bs._open(it["xy"])
         for pl in plats:
-            if _ring_overlap(ring, pl.ring) or min(bs.dist_to_path(pl.ring, p, closed=True) for p in ring) < ROOF_NEAR_M:
+            if _ring_overlap(ring, pl.ring) or bs.min_dist_to_path(pl.ring, ring, closed=True) < ROOF_NEAR_M:
                 pl.roofs.append(it["id"])
                 if not any(r[0] == it["id"] for r in st.roofs):
                     st.roofs.append((it["id"], ring))
@@ -850,8 +838,9 @@ def _group(md, frame, group):
     lons = np.array([g[0] for g in group])
     lats = np.array([g[1] for g in group])
     cells = mapcells.cells_for_points(lats, lons, pad_lat=GROUP_PAD_DEG[1], pad_lon=GROUP_PAD_DEG[0], max_cells=64)
-    layers = {name: [md.cell(k, layers=(name,), kind="demand").layers.get(name) for k in cells]
-              for name in ("infrastructure", "buildings", "roads")}
+    names = ("infrastructure", "buildings", "roads")
+    cds = mapcells.load_cells(md, cells, names)
+    layers = {name: [cd.layers.get(name) for cd in cds] for name in names}
     e, n, _ = frame.geodetic_to_enu(lats, lons, np.zeros(len(lats)))
     centre = (float(np.mean(e)), float(np.mean(n)))
     items = bs.items_from_layers(frame, layers, centre, REACH_M + 90.0)
@@ -881,9 +870,8 @@ def stations_near(md, frame, box, shared=False):
         la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
         import mapcells
         keys = mapcells.cells_for_points(la, lo, pad_lat=PAD_DEG, pad_lon=PAD_DEG, max_cells=64)
-        seeds = sorted({(round(a, 5), round(b, 5)) for k in keys
-                        for a, b in _seed_points(md.cell(k, layers=("infrastructure",), kind="demand")
-                                                 .layers.get("infrastructure"))})
+        seeds = sorted({(round(a, 5), round(b, 5)) for cd in mapcells.load_cells(md, keys, ("infrastructure",))
+                        for a, b in _seed_points(cd.layers.get("infrastructure"))})
         if not seeds:
             return []
         groups = []

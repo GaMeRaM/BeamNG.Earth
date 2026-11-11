@@ -537,6 +537,7 @@ end
 
 -- collide: true ('Visible Mesh Final'), a collision type name, or false / nil (render only)
 local function createWalk(walk, collide)
+  require('beamngEarth/texdbg').log('shape', walk.shape)
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, walk.shape)
   -- 'Visible Mesh Final' (the engine's own suggestion: 'Performance: Mesh is using visible collision ... switch the
@@ -1962,6 +1963,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     local t0 = now()
     noteNewColliders()
     be:reloadCollision()
+    require('beamngEarth/perfsummary').note('collision')
     lastReloadAt, reloads = now(), reloads + 1
     collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
     local ms = now() - t0
@@ -2220,11 +2222,16 @@ function M.requestCollision() collisionDirty = true end
 -- the frame after it (terrainpatch.groundReady).
 function M.reloads() return reloads end
 
+-- The road chunks and sidewalk / road meshes waiting, without status()'s walk over every tile (core's hitch lines and
+-- the loading line).
+function M.queued() return #createQ + #walkQ end
+
 function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ > 0 or collisionDirty end
 
 
 -- Somebody else just ran be:reloadCollision() (the terrain commit): the sidewalks made so far collide.
 function M.collisionRebuilt()
+  require('beamngEarth/perfsummary').note('collision')     -- (a slow frame's context in the anonymous summary)
   -- that rebuild already made them solid: one held now leaves the physics at the next one
   local removed = noteNewColliders()
   lastReloadAt, reloads = now(), reloads + 1

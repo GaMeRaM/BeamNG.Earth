@@ -19,7 +19,7 @@ terminal when started from a file manager (else it logs to ~/.cache/beamng-earth
 
     launcher.py                  everything
     launcher.py --no-game        only the server (start the game yourself)
-    launcher.py --no-gcpatch     the game without the grass patch
+    launcher.py --no-gcpatch     the game without the engine patches (tools/gcpatch, enginepatch.py)
     launcher.py --proton / --native   Linux: which build of the game to start (default: found)
     launcher.py --gpu off        hybrid graphics: never steer the game's GPU (auto does, discrete forces it)
     launcher.py --clear-cache    delete the map download cache first (instant; the files go in the background)
@@ -284,6 +284,20 @@ def telemetry_on():
     return os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
 
 
+def ground_square_setting(user_dir):
+    """The terrain block's square the player's settings page chose (cpupin.player_settings' ground_square: "2" for
+    the lighter ground of the Low and Medium presets), or None (1 m, the server's default). Read at every server start:
+    a change on the page holds from the next one (the block size is fixed for a server's run)."""
+    try:
+        here = os.path.join(ROOT, "server")
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import cpupin
+        return cpupin.player_settings(user_dir).get("ground_square")
+    except Exception:           # (an unreadable file: the default)
+        return None
+
+
 def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
@@ -301,6 +315,10 @@ def start_server(user_dir, extra, log_path, game_running=None):
         pass
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
         env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
+    if not env.get("BNGE_GROUND_SQUARE"):   # the settings page's ground grid (the Low / Medium presets: 2 m, GitHub #943)
+        sq = ground_square_setting(user_dir)
+        if sq:
+            env["BNGE_GROUND_SQUARE"] = sq
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
     # alone, not the game, e.g. a heap profiler)
     for kv in os.environ.get("BNGE_SERVER_ENV", "").split():
@@ -1660,7 +1678,8 @@ def main():
         return
     ap = argparse.ArgumentParser(description="Start the BeamNG.Earth world server and BeamNG.drive.")
     ap.add_argument("--no-game", action="store_true", help="only the server (start the game yourself)")
-    ap.add_argument("--no-gcpatch", action="store_true", help="Linux: start the game without the grass patch")
+    ap.add_argument("--no-gcpatch", action="store_true",
+                    help="the game without the engine patches (Linux: the preload library; Windows: enginepatch.py)")
     ap.add_argument("--keep-mod", action="store_true", help="leave the game's copy of the mod as it is")
     ap.add_argument("--no-beammp", action="store_true",
                     help="do not start BeamMP (multiplayer) with the game (bmplaunch.py)")
@@ -2006,6 +2025,15 @@ def run(args):
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args)
+        if IS_WIN and not args.no_gcpatch:
+            # the Windows game's engine patches, written into its memory once it runs (enginepatch.py: dtsmooth; off
+            # until checked on a Windows PC: BNGEARTH_DTSMOOTH_WIN=1)
+            try:
+                import enginepatch
+                threading.Thread(target=enginepatch.attach, args=(user_dir,), kwargs={"log": say},
+                                 name="enginepatch", daemon=True).start()
+            except Exception as e:      # (never in the way of the game)
+                say(f"(engine patches: {e})")
         say()
         say("In the game: Freeroam > BeamNG.Earth.  Closing the game stops the server.")
         say()

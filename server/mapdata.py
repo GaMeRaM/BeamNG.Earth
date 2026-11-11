@@ -78,12 +78,11 @@ import xproc
 log = logging.getLogger("earthd.mapdata")
 
 # Where the Overture layers that Overture's own vector tiles hold whole (pmtiles.LAYERS: roads, buildings, places...)
-# come from: "pmtiles" (a fresh cell is one ~0.1-1 MB range read, ~0.1-0.5 s, instead of DuckDB over its parquet row
-# groups, 3-25 s) or "parquet" (the default again, as before; also every layer's fallback when the tiles fail). With
-# the tiles the game froze for good (TextureCooker deadlock, "Texture[] started importing") on 7 of ~17 cold teleports,
-# none in 24 without them (bisected 2026-11-11: bc502490); same attributes, so likely the timing (everything arriving
-# at once with the first block); off until that is understood.
-MAP_SOURCE = (os.environ.get("BNGE_MAP_SOURCE") or "parquet").strip().lower()
+# come from: "pmtiles" (the default: a fresh cell is one ~0.1-1 MB range read, ~0.1-0.5 s, instead of DuckDB over its
+# parquet row groups, 3-25 s) or "parquet" (as before; also every layer's fallback when the tiles fail). (Off for a
+# few hours on 2026-11-11: with the tiles the game froze on cold teleports; the cause was the station boards' PNGs the
+# engine cooked while the place loaded, which the tiles' early stations exposed: DDS now, imagery.write_picture_dds.)
+MAP_SOURCE = (os.environ.get("BNGE_MAP_SOURCE") or "pmtiles").strip().lower()
 LAYER_THREADS = 12             # layers built at once, every cell and caller of the process (mostly waiting on downloads: 4 were a fresh place's first graded block's ~25 s queue, Ipswich 2026-10-30)
 OSM_THREADS = 8                 # cells whose OpenStreetMap tags are read at once (alongside their Overture roads)
 OSM_FUEL = os.environ.get("BNGE_OSM_FUEL", "1") != "0"     # OpenStreetMap's fuel stations per cell (osmfuel.py; the
@@ -98,6 +97,10 @@ _CPUS = os.cpu_count() or 4
 WARM_THREADS = min(8, _CPUS // 2) if _CPUS > 8 else 0
 BUILDING_MAX_M2 = 2.0e6     # m2: a building footprint larger than this is a mapping error (the largest real ones are
                             # ~1 km2; an OpenStreetMap one of 15.8 km2 roofed a city in Egypt, GitHub #413)
+# The deflate level a cell's layer file is written at: np.savez_compressed's (zlib's default, 6) cost ~1.3 CPU-s of a
+# cold place's ~300 files (Lawrence KS, 2026-11-11), level 3 half of it for files ~12 % larger (13.6 MB for 12.2). The
+# same .npz (np.load reads any level), the same arrays.
+STORE_LEVEL = 3
 VERSION = 2                     # pipeline version: bump when what a cell's layers contain changes
 # per layer, on top of VERSION (a layer's own change without re-fetching the others): roads 2 adds
 # the "oneway" rule (Overture access_restrictions by heading)
@@ -331,6 +334,16 @@ def _raster_from(arrays):
     return maprasters.Raster(arrays["data"], meta["crs"], meta["x0"], meta["y0"], meta["dx"], meta["dy"],
                              meta["nodata"], list(meta["files"]))
 
+
+
+def _savez_deflated(path, arrays, level):
+    """np.savez_compressed(path, **arrays) at deflate level `level` (numpy's own writer: each array an .npy member of a
+    zip64 archive)."""
+    import zipfile
+    with zipfile.ZipFile(path, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True, compresslevel=level) as zf:
+        for key, val in arrays.items():
+            with zf.open(key + ".npy", "w", force_zip64=True) as fh:
+                np.lib.format.write_array(fh, np.asanyarray(val), allow_pickle=True)
 
 class MapData:
     """See the module docstring. fetcher: the server's netfetch.Fetcher (None: one of its own);
@@ -632,7 +645,7 @@ class MapData:
     def _store(self, path, arrays):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
-        np.savez_compressed(tmp, **arrays)
+        _savez_deflated(tmp, arrays, STORE_LEVEL)
         staging.replace_cached(tmp, path)
 
     def _build(self, key, layer, kind):
@@ -1044,12 +1057,31 @@ class MapData:
 
     def cell(self, key, layers=LAYERS, kind="demand"):
         """CellData of one cell with the given layers (fetched / built / cached as needed)."""
+        return self._cell_collect(self._cell_submit(key, layers, kind))
+
+    def cells(self, keys, layers=LAYERS, kind="demand"):
+        """[cell(key, layers, kind) for key in keys], their layers loaded side by side: the loops that asked for a
+        list of cells one after another waited for each cell's download and decode before asking for the next (a cold
+        place's railway station group, 3 layers of its cells one at a time: ~5 s of a block's last stage at Lawrence
+        KS, 2026-11-11). The same CellData in the same order; an error is raised once every cell has finished (the
+        first in keys' order)."""
+        pending = [self._cell_submit(k, layers, kind) for k in keys]
+        out, err = [], None
+        for st in pending:
+            try:
+                out.append(self._cell_collect(st))
+            except Exception as e:
+                err = err or e
+        if err is not None:
+            raise err
+        return out
+
+    def _cell_submit(self, key, layers, kind):
+        """cell()'s first half: the layers not in memory submitted (or joined); (key, cd, mem, futs, layers)."""
         key = _key(key)
         lat_c, lon_c = key.center()
         frame = geodesy.EnuFrame(lat_c, lon_c, 0.0)
         cd = CellData(key, key.bounds(), (lat_c, lon_c), frame, self.versions())
-        provs = {}
-
         mem, futs = {}, []
         with self._mem_lock:
             for layer in layers:
@@ -1078,6 +1110,12 @@ class MapData:
                         if cur is not None:
                             self._cell_stats["urgent_over"] = self._cell_stats.get("urgent_over", 0) + 1
                     futs.append((layer, fut, shared))
+        return key, cd, mem, futs, layers
+
+    def _cell_collect(self, state):
+        """cell()'s second half: the CellData once its layers are in (an error raised once all have finished)."""
+        key, cd, mem, futs, layers = state
+        provs = {}
         results = {}
         err = None
         for layer, fut, shared in futs:     # all finish before an error is raised (no stray fetches)
@@ -1221,6 +1259,15 @@ class MapData:
         for k, key, layer in todo:
             self._warm_ex.submit(run, k, key, layer)
         return len(todo)
+
+    def tiles_prefetch(self, needs, kind="prefetch"):
+        """The map tiles of the (cell, layer)s in needs not on disk yet fetched in batches (pmtiles.Reader.prefetch:
+        neighbouring tiles in one range read) before they are built cell by cell. No-op without the tiles source.
+        Returns the tiles asked for."""
+        if getattr(self, "pmtiles", None) is None:
+            return 0
+        todo = [(_key(k), ly) for k, ly in needs if MapData._pmt(self, ly) and not self.has(_key(k), ly)]
+        return self.pmtiles.prefetch(todo, kind) if todo else 0
 
     def side_prefetch(self, keys):
         """The side_sources' background reads of these cells (a road tile's own) started now, without waiting; France's

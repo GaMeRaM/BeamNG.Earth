@@ -683,6 +683,44 @@ class ExportImageryTest(unittest.TestCase):
         time.sleep(0.3)
         self.assertEqual(reads, [], "the warm thread rests")
 
+    def test_far_warm_fetches_a_far_squares_best_photos(self):
+        # a far tile larger than its level's (farpvs.UP_ON): its NAIP photos after the near list, its callback once in
+        im = self.make()
+        rgb, used = im.render(self.frame, 2000.0, 2000.0, 512.0, 512)
+        self.assertEqual(set(used), {"usgs"})               # (a render never fetches NAIP)
+        self.wait(im)
+        done = threading.Event()
+        im.far_warm("t", 2000.0, self.frame, 2000.0, 2000.0, 512.0, 512, done.set)
+        self.assertTrue(done.wait(10.0), "its callback once its photos are in")
+        self.assertTrue(all(im._warm_done(k) for k in im.lazy_keys(self.frame, 2000.0, 2000.0, 512.0, 512)))
+        rgb, used = im.render(self.frame, 2000.0, 2000.0, 512.0, 512)
+        self.assertEqual(set(used), {"naip"})               # the best photos now
+        self.assertEqual(im._far_warm, {})
+
+    def test_far_warm_keeps_half_the_budget(self):
+        im = self.make()
+        im.fetcher.budget_share = lambda url: 0.6           # (past FAR_BUDGET_SHARE today)
+        done = threading.Event()
+        im.far_warm("t", 0.0, self.frame, 0.0, 0.0, 512.0, 512, done.set)
+        for _ in range(200):
+            with im._warm_cv:
+                if not im._far_warm:
+                    break
+            time.sleep(0.02)
+        self.assertEqual(im._far_warm, {})
+        self.assertFalse([r for r in self.requests if r[0] == "naip"], "the rest of the budget for the near photos")
+        self.assertFalse(done.is_set(), "nothing fetched: nothing to render again")
+
+    def test_sharp_zoom_counts_the_lazy_sources(self):
+        im = self.make()
+        z = im.sharp_zoom(*self.frame.enu_to_geodetic(0.0, 0.0, 0.0)[:2])
+        for _ in range(100):                                # (its probes fetched meanwhile)
+            z = im.sharp_zoom(*self.frame.enu_to_geodetic(0.0, 0.0, 0.0)[:2])
+            if z == 17:
+                break
+            time.sleep(0.05)
+        self.assertEqual(z, 17)                             # NAIP's, not USGS's 16
+
     def test_lazy_then_split_tiles(self):
         im = self.make()
         # 1 m texels: z17 (0.93 m pixels here), NAIP's zoom
@@ -957,6 +995,27 @@ class DdsTest(unittest.TestCase):
         for px, want in ((512, 128 + sum(max(1, (512 >> k) // 4) ** 2 * 8 for k in range(10))),
                          (256, 128 + sum(max(1, (256 >> k) // 4) ** 2 * 8 for k in range(9)))):
             self.assertEqual(len(imagery.encode_dds(np.zeros((px, px, 3), np.uint8))), want)
+
+
+class PictureDdsTest(unittest.TestCase):
+    """A drawn sign face goes out as a DDS (never a PNG the engine's texture cooker takes at run time: it deadlocked the
+    game), its sides stretched up to powers of two."""
+
+    def test_any_size_to_a_power_of_two_dds(self):
+        import io
+        import tempfile
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 70), (10, 60, 160)).save(buf, format="PNG")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "face.color.dds")
+            n = imagery.write_picture_dds(p, buf.getvalue())
+            with open(p, "rb") as f:
+                data = f.read()
+        self.assertEqual(n, len(data))
+        w, h, mips, fourcc, _ = imagery.read_dds_info(data)
+        self.assertEqual((w, h, fourcc), (512, 128, b"DXT1"))
+        self.assertGreater(mips, 1)
 
 
 class NetworkImageryTest(unittest.TestCase):

@@ -14,6 +14,7 @@ lon, [mapcells.CellKey]), the latest list replacing the earlier one.
 """
 from runtimeprofiler import step as profile_step
 import collections
+import json
 import logging
 import os
 import queue
@@ -30,6 +31,7 @@ import furniture
 import geodesy
 import grading as gradingmod
 import heightmap
+import l0roads
 import mapdata as mapdatamod
 import mappedpoles
 import netfetch
@@ -46,6 +48,8 @@ import xproc
 log = logging.getLogger("earthd.blockworker")
 
 _s = None       # this process's state (init)
+_TRACE = os.environ.get("BNGE_FARTRACE") == "1"
+_dem_t = threading.local()
 
 
 class _State:
@@ -60,6 +64,16 @@ class _State:
         self.imagery = None         # (its settings, imagery.Imagery from the disk alone): far_tile's textures
         net = netfetch.Fetcher(offline=offline)
         self.dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=net)
+        if _TRACE:          # (BNGE_FARTRACE: the DEM's share of a far tile's time, _far_tile)
+            _orig = self.dem.tiles
+
+            def _timed(keys, progress=None, _o=_orig):
+                t0 = time.perf_counter()
+                try:
+                    return _o(keys, progress)
+                finally:
+                    _dem_t.v = getattr(_dem_t, "v", 0.0) + time.perf_counter() - t0
+            self.dem.tiles = _timed
         import railways as _railways    # (coarse elevation: rail decks raised over the roads under them)
         _railways.COARSE_AT = self.dem.coarse_at
         # (and no separation in the ground under a rail bridge: railways.flat_rail_crossing)
@@ -416,6 +430,14 @@ def _take_pads(fuel_pads):
 
 def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
           ground_at=(0.0, 0.0)):
+    """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check)."""
+    with _abandon_check(out_dir, aid):
+        return _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name, fuel_pads, provisional,
+                      ground_at)
+
+
+def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
+           ground_at=(0.0, 0.0)):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
@@ -432,6 +454,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     part_s = {"dem": 0.0, "sea": 0.0, "tunnels": 0.0}  # (the rest of "heights": the stages' log, 2026-10-30)
 
     def elev(la, lo):
+        xproc.check_cancel()        # (a chunk of the block's grid at a time: given up once a teleport leaves aid)
         t1 = time.perf_counter()
         z = _s.dem.sample(la, lo, hm_zoom)
         t2 = time.perf_counter()
@@ -465,10 +488,12 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
             z = roadsmod.block_arch_raise(tun, cell_fn, frame, la, lo, z, (cx - half, cy - half, cx + half, cy + half))
             part_s["arch"] = part_s.get("arch", 0.0) + time.perf_counter() - t1
             return z
+    l0_st = {}                  # (a provisional block's L0 roads: its painted roads' corridors flattened, l0roads.py)
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
-                              chunks=chunks, ground_at=tuple(ground_at))
+                              chunks=chunks, ground_at=tuple(ground_at),
+                              post=l0roads.post_for(frame, _s.surface, cx, cy, size, l0_st) if provisional else None)
     stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s, "anchor": anchor_s, "plan": plan_s,
-              "newShare": float(keep.get("new_share", 1.0))}
+              "newShare": float(keep.get("new_share", 1.0)), **l0_st}
     idx = None
     if _s.surface is not None:
         t1 = time.perf_counter()
@@ -477,6 +502,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         idx = surfacemod.classify(classes, keep["u"], heightmap.SQUARE, keep["lat"], keep["lon"])
         if _s.sea is not None and not provisional:  # under water: the bed (no grass growing through the surface)
             idx[_s.sea.depth(keep["lat"], keep["lon"]) > WATER_BED_M] = surfacemod.MUD
+        land = idx.copy()               # (the land cover before the paint: surface.fold_layers)
         road_feats, roads_complete = _s.surface.roads(keep["lat"], keep["lon"])
         stages["landcover"] = time.perf_counter() - t1
         t1 = time.perf_counter()
@@ -513,6 +539,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         if hasattr(_s.surface, "paint_ground_pads"):
             idx = _s.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
         stages["roadPaint"] = time.perf_counter() - t1
+        idx = surfacemod.fold_layers(idx, land, heightmap.SQUARE, stages)   # (fewer layers: a cheaper swap)
         info["layers"] = surfacemod.write_masks(idx[::-1], out_dir, name[:-4])
         info["surfaceComplete"] = complete and roads_complete
         info["roadsComplete"] = roads_complete
@@ -583,7 +610,7 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     w = navgraphmod.WINDOW_M + 200.0
     la, lo, _ = frame.enu_to_geodetic(np.array([x - w, x + w]), np.array([y - w, y + w]), 0.0)
     keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
-    feats = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in keys]
+    feats = [cd.layers.get("roads") for cd in mapcells.load_cells(_s.md, keys, ("roads",))]
 
     def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles'); past their reach
         z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom))     # (NAV_GRADED_M) only under cells planned already
@@ -827,7 +854,48 @@ def _stage_clock():
         t = time.perf_counter()
         stages[name] = stages.get(name, 0.0) + t - clock[0]
         clock[0] = t
+        if xproc._cancelled():          # (a teleport left its place: _abandon_check)
+            import pools
+            raise pools.Abandoned()
     return stages, mark
+
+
+ABANDONED_FILE = "abandoned_anchors.json"     # (earthd.Server.write_abandoned: the anchors a teleport left)
+_abandoned_seen = {}            # path -> (mtime_ns, set of anchor ids)
+
+
+def abandoned(out_dir, aid):
+    """Did a teleport leave anchor aid (the server's ABANDONED_FILE in out_dir; read again when it changes)?"""
+    p = os.path.join(out_dir, ABANDONED_FILE)
+    try:
+        m = os.stat(p).st_mtime_ns
+    except OSError:
+        return False
+    got = _abandoned_seen.get(p)
+    if got is None or got[0] != m:
+        try:
+            with open(p, encoding="utf-8") as f:
+                ids = {int(v) for v in json.load(f)}
+        except (OSError, ValueError, TypeError):
+            return False
+        got = _abandoned_seen[p] = (m, ids)
+    return aid in got[1]
+
+
+class _abandon_check:
+    """While a job of anchor aid runs: its waits for other processes' road plans (xproc.once) and its stages
+    (_stage_clock's mark) raise pools.Abandoned once a teleport leaves aid (the user, 2026-11-11: "stop generating
+    the old city"; a running graded first block and road tiles of the city left took 22-27 s more of the workers)."""
+
+    def __init__(self, out_dir, aid):
+        self.out_dir, self.aid = out_dir, aid
+
+    def __enter__(self):
+        xproc.set_cancel(lambda: abandoned(self.out_dir, self.aid))
+
+    def __exit__(self, *exc):
+        xproc.set_cancel(None)
+        return False
 
 
 class _Parts:
@@ -918,7 +986,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("warm")
     cell_keys = roadsmod.cells_of_tile(frame, tx, ty,
                                        200 if poleprofiles.kit_enabled(pole_profile) else roadsmod.OVERLAP)
-    cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in cell_keys]
+    import mapcells
+    cells = [cd.layers.get("roads") for cd in mapcells.load_cells(_s.md, cell_keys, ("roads",))]
     de_routes = ()
     if de_junctions:                # (the German junction signs' ref ranks: only near Germany)
         import designs
@@ -1565,8 +1634,7 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     tile_key = geotiles.geobox(gx, gy).key
     k = _geo_content_key(tile_key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                          pole_profile=pole_profile, models_dir=os.path.dirname(scratch), de_junctions=de_junctions, towns_on=towns_on, wear=wear)
-    path = revisit._path(_s.cache_dir, "roadsg", k)
-    if not os.path.exists(path):
+    if not revisit.has(_s.cache_dir, "roadsg", k):
         os.makedirs(scratch, exist_ok=True)
         try:
             if wait_gaps:       # (the fast mode's own road processes, the game paused: no live tile waits on them)
@@ -1587,7 +1655,7 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
                     pass
             with _geo_lock:
                 _geo_inputs.pop(tile_key, None)
-    return k if os.path.exists(path) else None
+    return k if revisit.has(_s.cache_dir, "roadsg", k) else None
 
 
 @profile_step('Road geometry')
@@ -1934,6 +2002,8 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
     rigid placement would leave off, roads.geo_exact_auto). Returns {"content": (vfs path, chunks, info,
     fuel pads) or None, "skin": (vfs path, info) or None, "exact": {what: vfs path}, "stages": {...}}."""
     watch = _stack_watch(f"road geotile {gx}_{gy}")
+    chk = _abandon_check(out_dir, aid)      # (given up once a teleport leaves aid: pools.Abandoned)
+    chk.__enter__()
     try:
         import workcancel
         workcancel.checkpoint()
@@ -1965,6 +2035,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
                        "exact_s": time.perf_counter() - t2}
         return out
     finally:
+        chk.__exit__()
         watch.cancel()
 
 
@@ -2760,7 +2831,13 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
     import geotiles
     import imagery as imagerymod
     import rockface as rockfacemod
+    if _TRACE:
+        t0, c0 = time.perf_counter(), time.process_time()
+        _dem_t.v = 0.0
     built = far_global_geometry(z, x, y, zoom, ref_zoom, layout)
+    if _TRACE:
+        log.info("fartrace worker global %s: geometry %.0f ms (cpu %.0f, dem %.0f)", (z, x, y),
+                 1000 * (time.perf_counter() - t0), 1000 * (time.process_time() - c0), 1000 * _dem_t.v)
     im = _imagery(tex)
     px = tex["px"]
     try:
@@ -2928,9 +3005,28 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
 
 
 def _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask):
+    if not _TRACE:
+        return _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
+    t0, c0 = time.perf_counter(), time.process_time()
+    _dem_t.v = 0.0
+    _geo_t.v = 0.0
+    try:
+        return _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
+    finally:
+        log.info("fartrace worker L%d %s: %.0f ms (cpu %.0f), geometry %.0f ms (dem %.0f)", tile.level, tile.key,
+                 1000 * (time.perf_counter() - t0), 1000 * (time.process_time() - c0), 1000 * _geo_t.v,
+                 1000 * _dem_t.v)
+
+
+_geo_t = threading.local()
+
+
+def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask):
     import imagery as imagerymod
     import rockface as rockfacemod
+    tg = time.perf_counter()
     built = _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout)    # (its CPU counted here)
+    _geo_t.v = time.perf_counter() - tg
     im = _imagery(tex)
     frame = geodesy.EnuFrame(lat, lon)
     x0, y0, _, _ = tile.bbox

@@ -34,15 +34,31 @@ import numpy as np
 import staging
 from PIL import Image
 
-SIZE = 1024
-SQUARE = 1.0                        # m; exactly representable, so the lattice is exact
+
+
+def ground_square(environ=None):
+    """The session's block square (m between samples): BNGE_GROUND_SQUARE, 1 (the default: the stock maps' resolution)
+    or 2 (the lighter ground of the Low and Medium quality presets, GitHub #943: the same kilometre in 512² samples, a
+    quarter of the .ter to parse at each swap; the launcher sets it from the settings page's groundGrid). Read once, at
+    import: every block-size rule below and in the modules using them follows it."""
+    v = (os.environ if environ is None else environ).get("BNGE_GROUND_SQUARE", "").strip()
+    try:
+        sq = float(v) if v else 1.0
+    except ValueError:
+        sq = 1.0
+    return sq if sq in GROUND_SQUARES else 1.0
+
+
+GROUND_SQUARES = (1.0, 2.0)
+SQUARE = ground_square()            # m; exactly representable, so the lattice is exact
+SIZE = int(1024 / SQUARE)           # samples per edge of the 1 km block (1024 at 1 m, 512 at 2 m)
 FAR_SQUARE = 2.0                    # m: the far field's near tiles' lattice (every second block sample)
 HALF = SIZE * SQUARE / 2            # block position = centre - HALF
 VALID = (SIZE - 1) * SQUARE         # 1023 m: collidable extent from the SW corner (P1)
 GRID_BY_M = {1024.0: 128.0, 2048.0: 256.0}  # the centre grid (m) by the block's width (m)
 GRID = GRID_BY_M[SIZE * SQUARE]     # block centres are multiples of this
 CHUNK_ROWS = 256                    # bounds the geodesy temporaries
-CHUNK = 128                         # samples: ChunkCache's chunk, 128 m (the block's follow grid)
+CHUNK = int(128 / SQUARE)           # samples: ChunkCache's chunk, 128 m (the block's follow grid)
 CHUNK_CACHE = 512                   # chunks kept per frame (128 KB each: 64 MB, 8 blocks)
 CHUNK_GEO_CACHE = 128               # ... and their lat / lon this many (256 KB each: 32 MB, 2 blocks; PR #786: a moved
                                     # block's own chunks are all it reads them for, and all 512 were +128 MB a process)
@@ -390,17 +406,21 @@ def height_at(qgrid, z_base, max_height, cx, cy, x, y, square=SQUARE):
 
 @profile_step('Heightmap generation')
 def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEFAULT, size=SIZE, keep=None,
-             chunks=None):
+             chunks=None, post=None):
     """Build the size² block centred at (cx, cy) with height quantum q and write it to path.
     groundZ is the terrain height at ground_at (None if that point is outside the block). keep (a
     dict, optional) receives "lat", "lon" and "u" of the grid ([gy, gx], gy = north) and write_png's
-    "qgrid". chunks: a ChunkCache of this frame (the heights it holds are reused, the new ones added)."""
+    "qgrid". chunks: a ChunkCache of this frame (the heights it holds are reused, the new ones added).
+    post(u, keep): the grid's heights changed before they are written (a provisional block's L0 roads, l0roads.py;
+    needs keep, never with chunks: the chunks keep the heights as computed)."""
     if chunks is None:
         u = grid_u(frame, elev_fn, cx, cy, size, keep)
     else:
         u, share = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep)
         if keep is not None:
             keep["new_share"] = share       # (the share of samples computed: the rest from earlier blocks' chunks)
+    if post is not None and keep is not None:
+        u = post(u if chunks is None else u.copy(), keep)
     q, z_base, max_height, qgrid = write_png(path, u, q)
     if keep is not None:
         keep["u"] = u

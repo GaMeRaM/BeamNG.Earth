@@ -65,7 +65,8 @@ import cache as cachemod  # noqa: E402
 import cdae  # noqa: E402
 import credits as creditsmod  # noqa: E402
 import earthd  # noqa: E402
-import farfield as ff  # noqa: E402
+import farfield as ff
+import farpvs  # noqa: E402
 import heightmap  # noqa: E402
 import imagery  # noqa: E402
 import modsim  # noqa: E402
@@ -317,6 +318,7 @@ SERVER_TO_MOD = {
               # the world map's credits for its view: [[credit, w, s, e, n] or [credit]] per imagery source, and
               # the rest (weather, elevation); with imagery on only
               "imageryCredits": F(list, OPT), "otherCredits": F(str, OPT)},
+    "catchup": {"on": F(bool)},             # the catch-up boost on / off (the mod tags slow frames: perfsummary.lua)
     "status": {"text": F(str),
                "backlog": F(int),           # v1.4 M0: desired - shown far tiles of the current anchor
                "radius": F(NUM, OPT)},      # v1.4 M1h: the far-field radius (m), --horizon only
@@ -445,6 +447,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "terrain_refresh",                            # a provisional first block: --grading (map data)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
                        "update_status",                              # the player's "Update now" (test_selfupdate)
+                       "catchup",                                    # the catch-up boost: a driving player behind (test_catchup)
                        "where_result",                               # the status bar: asked by the mod while driving
                        "map_labels_result",                          # the 3D map's labels: asked in map mode
                        "places_result",                              # the modding API's places (test_places_api)
@@ -1018,7 +1021,11 @@ class ServerMessagesTest(test_server.ServerHarness):
             # M1: the texture size with FORMAT 4 (the governor kind), never with FORMAT 3
             self.assertEqual("tex" in m, self.with_imagery and self.cells == 64, m)
             if "tex" in m:
-                self.assertEqual(m["tex"], self.server.tex_size(m["level"]))
+                # (the level's size, less where the far PVS hides the tile or the screen needs less, more where it
+                # resolves more (farpvs.UP_ON): at least farpvs.TEX_PX, farpvs.UP_PX_MAX at most, a power of two)
+                full = self.server.tex_size(m["level"])
+                self.assertTrue(farpvs.TEX_PX <= m["tex"] <= max(full, farpvs.UP_PX_MAX)
+                                and m["tex"] & (m["tex"] - 1) == 0, (m, full))
                 self.assertGreaterEqual(m["level"], ff.MESH_MIN_LEVEL[64])
             self.assertEqual(m["key"], ff.tile_of(m["key"]).key)
         if kind in ("anchor_ready", "terrain_ready"):
@@ -1146,7 +1153,8 @@ class ServerMessagesTest(test_server.ServerHarness):
         until(lambda m: m["type"] == "far_done" and m["anchorId"] == b["anchorId"], 120)
         seen += c.drain(0.3)
         kinds = {m["type"] for m in seen}
-        self.assertEqual(kinds, set(SERVER_TO_MOD) - EXERCISED_ELSEWHERE,
+        # (far_retex may come here too: the far PVS sharpens a tile it hid once the anchor moves on; checked below)
+        self.assertEqual(kinds - {"far_retex"}, set(SERVER_TO_MOD) - EXERCISED_ELSEWHERE,
                          "a message type was not exercised or is not in the table")
         for m in seen:
             self.check(m)
@@ -1180,7 +1188,8 @@ class ServerMessagesTest(test_server.ServerHarness):
         with open(self.fs(m["texture"]), "rb") as f:
             data = f.read()
         w, h, mips, fourcc, sizes = imagery.read_dds_info(data)
-        self.assertEqual((w, h, fourcc), (self.server.tex_size(m["level"]),) * 2 + (b"DXT1",))
+        # (the size the message says: its level's, or the far PVS's / the screen's, farpvs.UP_ON)
+        self.assertEqual((w, h, fourcc), (m.get("tex") or self.server.tex_size(m["level"]),) * 2 + (b"DXT1",))
         self.assertEqual(mips, w.bit_length())                 # full chain down to 1 x 1
         self.assertEqual(len(data), imagery.DDS_HEADER + sum(sizes))
 

@@ -164,7 +164,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Drive anywhere: the physics ground follows the car at 100+ mph, the world origin moves with you
   (floating origin), and the world streams ahead of you; you never fall out of the world.
 - The ground around the car is a 1 km terrain block at 1 m (3 ft) resolution, the stock maps' own detail, so road
-  edges, ditches and the ground at walls follow the map closely.
+  edges, ditches and the ground at walls follow the map closely (the Low and Medium presets use a lighter 2 m grid).
 - Buildings, sidewalks, curbs and bridge decks are solid (lean collision meshes near the car keep the
   physics' collision rebuilds cheap).
 - Real bridge and tunnel heights where open data measures them: in the US, bridge decks follow the USGS 3DEP lidar
@@ -204,6 +204,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   of reading the large map data files, a few seconds sooner on a first visit (the same data; road lines within about
   a quarter of a metre of the files'). Water, land use and the other map layers still come from the files, and the
   files stand in whenever the tiles do not answer (`BNGE_MAP_SOURCE=parquet` uses the files for everything, as before).
+- A stand-in world while a new place loads: after a teleport to a place you have not visited, the car is set down on
+  a first version of the ground before the roads are fully built. Its roads are laid flat into it from the map data
+  as soon as that data is downloaded, and are built again in full detail a little later. Where the aerial photo is
+  not downloaded yet, the ground is coloured by its land cover until the photo arrives. The environment variables
+  `BNGE_L0_ROADS=0` (no flat roads in the first version), `BNGE_L0_REFRESH=0` (no rebuild when the map data
+  arrives) and `BNGE_L0_GROUND=0` (wait for the photo as before) turn the parts off.
 - Places you've been load much faster the next time: what was built around you (roads, buildings, the levelled
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
   `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
@@ -289,10 +295,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Quality presets (Low / Medium / High / Ultra / Extreme) in BeamNG.Earth's own pause-menu tab (pause menu >
   BeamNG.Earth > Graphics; every settings page is listed down the side there), each fine-tunable; the first start
   picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,
-  out to the real horizon, for the strongest PCs (it is never picked for you). The Graphics page's settings:
-  - **Even frame pacing** (on): keeps the time between frames steady so the game's speed doesn't pulse while the
-    world loads around you; costs about a seventh of the frame rate while the world loads (a city drive: 81
-    fps against 94), and stays off below 30 fps.
+  out to the real horizon, for the strongest PCs (it is never picked for you). (The "Even frame pacing" setting is gone:
+  steady game speed is the default now, from the engine patch dtsmooth, at no frame-rate cost.) The
+  Graphics page's settings:
   - **Terrain detail** (Low to Extreme): how far out each finer level of the distant land reaches (Extreme builds
     about twice as many distant ground pieces).
   - **Terrain pixel error** (0 = off, the default; 0.5 to 8 px; advanced): picks the distant ground's detail by what
@@ -300,6 +305,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     of view count), so flat land stays coarser and mountains finer.
   - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the
     ground around you; from the next level load.
+  - **Ground grid** (1 m / 2 m): how fine the ground you drive on is. 2 m (the Low and Medium presets) loads a
+    quarter of the data each time the ground moves with you: shorter hitches while driving, at the cost of softer
+    small bumps and road edges; from the next start of BeamNG.Earth.
   - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).
   - **Building draw distance**: the simple far buildings, the skyline and far bridges (Near to Max, twice Normal's 1
     and 3 miles).
@@ -368,8 +376,8 @@ connection (the map is downloaded while you play).
 2. **Run it** (with Steam running). A console window opens (like BeamMP's launcher); it copies the mod into the
    game, starts the world server and starts BeamNG.drive. Closing the game stops the server.
    - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
-     with two more opt-in patches for testing) already applied, no Steam launch
-     options needed.
+     steady game speed (dtsmooth: no catch-up burst after a hitch), texkeep opt-in for testing) already applied, no
+     Steam launch options needed.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
      protontricks' launcher).

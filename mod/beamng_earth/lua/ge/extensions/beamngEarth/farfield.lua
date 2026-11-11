@@ -436,6 +436,7 @@ local function spawn(inst)
   end
   -- TSStatic setup as in probes/p5_tsstatic.lua / util/procTrack.lua:1278-1291. collisionType 'None'
   -- keeps it out of the static collision rebuild. Created hidden (P6), placed at its true height.
+  require('beamngEarth/texdbg').log('farShape', inst.shape, inst.material)
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, inst.shape)
   o:setField('collisionType', 0, 'None')
@@ -1710,6 +1711,9 @@ function M.setFrozen(on) frozen = on and true or false; return frozen end
 function M.isFrozen() return frozen end
 function M.anchorId() return anchorId end
 function M.counters() return counters end -- read-only
+-- The import queue and whether the anchor's tile list is complete, without stats()'s walk over every tile (core's
+-- hitch lines and the status bar's loading line: a frame after a hitch should not add to it).
+function M.brief() return { queued = nQueued, done = doneReceived } end
 
 -- Every tile instance with an object (pending, live and previous anchors'; not the delete queue).
 function M.eachTile(fn)
