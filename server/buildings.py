@@ -4705,7 +4705,7 @@ def _toll_islands(frame, layers, parts_of, lines, x0, y0):
             booths.append(r[:-1].mean(0) if len(r) > 1 and np.allclose(r[0], r[-1]) else r.mean(0))
     if not booths:
         return []
-    segs = [np.concatenate([np.asarray(ln, np.float64)[:-1], np.asarray(ln, np.float64)[1:]], 1)
+    segs = [np.concatenate([np.asarray(ln, np.float64)[:-1, :2], np.asarray(ln, np.float64)[1:, :2]], 1)
             for ln in lines if len(ln) >= 2]
     if not segs:
         return []

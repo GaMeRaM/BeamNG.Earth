@@ -13,6 +13,10 @@ on:
         description: Test worker queues of an existing build run only (empty builds the app)
         type: string
         default: ''
+      world_check:
+        description: Include real cached/downloaded roads, trees and buildings in worker check
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -114,10 +118,18 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
+      - name: Real generation through packaged worker queues
+        if: inputs.world_check
+        shell: pwsh
+        run: |
+          $app = Get-ChildItem dist -Filter '*.exe' | Select-Object -First 1
+          & $app.FullName --run-addon tools/check_worker_pools.py --world --online --cache "$env:RUNNER_TEMP/bnge-worker-world-cache"
+          if ($LASTEXITCODE -ne 0) { throw "World worker check failed: $LASTEXITCODE" }
+
   worker-check:
     if: github.event.inputs.worker_check_run != ''
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -131,5 +143,9 @@ jobs:
         run: |
           $app = Get-ChildItem dist -Filter '*.exe' | Select-Object -First 1
           if (-not $app) { throw 'No packaged app' }
-          & $app.FullName --run-addon tools/check_worker_pools.py
+          if ('${{ inputs.world_check }}' -eq 'true') {
+            & $app.FullName --run-addon tools/check_worker_pools.py --world --online --cache "$env:RUNNER_TEMP/bnge-worker-world-cache"
+          } else {
+            & $app.FullName --run-addon tools/check_worker_pools.py
+          }
           if ($LASTEXITCODE -ne 0) { throw "Worker check failed: $LASTEXITCODE" }
