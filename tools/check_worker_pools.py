@@ -10,6 +10,32 @@ if not getattr(sys, 'frozen', False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 
 
+def nested():
+    # Match launcher.start_server: a second app process, with redirected streams,
+    # itself spawning the pools. Direct frozen checks miss this extra level.
+    import os
+    import subprocess
+    script = str(Path(__file__).resolve())
+    cmd = ([sys.executable, '--run-addon', script] if getattr(sys, 'frozen', False)
+           else [sys.executable, script]) + ['--child']
+    env = dict(os.environ, BNGEARTH_PARENT=str(os.getpid()))
+    with tempfile.TemporaryDirectory(prefix='bnge-nested-check-') as d:
+        log = Path(d) / 'server.log'
+        flags = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {}
+        with log.open('w', encoding='utf-8') as out:
+            p = subprocess.Popen(cmd, env=env, stdout=out, stderr=subprocess.STDOUT, **flags)
+        try:
+            code = p.wait(timeout=240)
+        except BaseException:
+            p.kill()
+            p.wait(timeout=15)
+            raise
+        print(log.read_text(encoding='utf-8', errors='replace'), flush=True)
+        if code:
+            raise SystemExit(code)
+    print('Nested launcher/server worker check passed', flush=True)
+
+
 def main():
     import blockworker
     import pools
@@ -34,4 +60,4 @@ def main():
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()
-    main()
+    main() if '--child' in sys.argv else nested()
