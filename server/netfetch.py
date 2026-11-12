@@ -90,13 +90,40 @@ OFFLINE_TEXT = "Offline - using cached data"
 TEST_MBPS = float(os.environ.get("BNGE_NET_MBPS") or 0)
 TEST_LATENCY_S = float(os.environ.get("BNGE_NET_LATENCY_MS") or 0) / 1000.0
 NETLOG = os.environ.get("BNGE_NETLOG")      # debugging: every network request, one line each, from every process
+NETLOG_STACK = os.environ.get("BNGE_NETLOG_STACK") == "1"   # ... with its caller (the server's own frames, innermost first)
+_STACK_SKIP = ("netfetch", "ioprofiler", "threading", "concurrent", "thread", "queue")
+
+
+_why = threading.local()             # .tag: the caller a pool thread fetches for (set by its submitter: imagery)
+
+
+def _caller(depth=2):
+    """"mod.func<mod.func<...@thread" of the server's frames that asked (BNGE_NETLOG_STACK; debugging only); a pool
+    thread's own frames, then its submitter's (imagery._future's tag)."""
+    import sys
+    import multiprocessing
+    out = []
+    f = sys._getframe(depth)
+    here = os.path.dirname(os.path.abspath(__file__))
+    while f is not None and len(out) < 8:
+        fn = f.f_code.co_filename
+        mod = os.path.splitext(os.path.basename(fn))[0]
+        if os.path.dirname(os.path.abspath(fn)) == here and mod not in _STACK_SKIP:
+            out.append(f"{mod}.{f.f_code.co_name}")
+        f = f.f_back
+    me = ("<".join(out) or "-") + "@" + threading.current_thread().name.replace(" ", "_")
+    ctx = getattr(_why, "ctx", None)
+    if ctx:
+        me += "#" + ctx
+    tag = getattr(_why, "tag", None)
+    return (me + "<<" + tag if tag else me + "@@" + multiprocessing.current_process().name.replace(" ", "_"))
 
 
 def _netlog(url, headers, status, body):
-    """Append "<unix time> <pid> <status> <bytes> <url> <range>" to the BNGE_NETLOG file (one write per line:
-    whole lines from every process)."""
+    """Append "<unix time> <pid> <status> <bytes> <url> <range>[ <caller>]" to the BNGE_NETLOG file (one write per
+    line: whole lines from every process)."""
     line = (f"{time.time():.3f} {os.getpid()} {status} {len(body or b'')} {url} "
-            f"{(headers or {}).get('Range', '-')}\n")
+            f"{(headers or {}).get('Range', '-')}{(' ' + _caller()) if NETLOG_STACK else ''}\n")
     try:
         fd = os.open(NETLOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
@@ -338,8 +365,16 @@ POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budg
 # IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
 # rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
 # tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
-POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=25.0, burst=50.0, max_conc=12,
-                                    daily_budget=100000)
+# 2026-11-11: the photo tiles 50/s, 24 at once: a cold French teleport's ~2,300 tiles kept the 25/s full for its whole
+# far field (the settled time was this host's, EOX finished ~30 s earlier). cartes.gouv.fr "Limites d'usage des API"
+# (read again 2026-11-11): every API has a per-IP limit "à l'exception notable de l'API « Diffusion d'images tuilées
+# WMTS »" (a limit exceeded: HTTP 429 for 5 s, retry-after; netfetch honours it and its breaker stays on). The WFS
+# ("ign_wfs" lane: roadz, bdtopo; 30/s published) keeps its own 25/s. BNGE_IGN_RATE: the photo tiles' rate (25: before).
+_IGN_RATE = float(os.environ.get("BNGE_IGN_RATE") or 50.0)
+POLICIES["data.geopf.fr#ign_wfs"] = replace(POLICIES["data.geopf.fr"], rate=25.0, burst=50.0, max_conc=12,
+                                            daily_budget=100000)
+POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=_IGN_RATE, burst=2.0 * _IGN_RATE,
+                                    max_conc=max(12, int(_IGN_RATE / 2)), daily_budget=100000)
 DEFAULT_POLICY = HostPolicy()
 
 # What each source gives the world, and what the player gets while it does not answer (the user, 2026-10-27: "in case
@@ -347,7 +382,8 @@ DEFAULT_POLICY = HostPolicy()
 # status line (Server.net_note); SOURCES.md says more about each.
 ROLES = {
     "basemap.nationalmap.gov": "US aerial photos; coarser satellite photos meanwhile",
-    _CDN_HOST: "satellite photos of the distant land (the project's own tile host); the other photo sources meanwhile",
+    _CDN_HOST: "satellite photos of the distant land, road tags and the weekly railway, lane and sign data (the "
+               "project's own tile host); the other photo sources, Pages' copy of the data meanwhile",
     "imagery.nationalmap.gov": "detailed US aerial photos (NAIP); coarser photos meanwhile",
     "apps.geo.fpac.usda.gov": "detailed US aerial photos (NAIP, second source); coarser photos meanwhile",
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",
@@ -906,8 +942,18 @@ class HttpsTransport:
                     conn.request("GET", path, headers=req_headers)
                 r = conn.getresponse()
                 ioprofiler.headers_received()
+                rh = {k.lower(): v for k, v in r.getheaders()}
+                if r.status == 200 and (headers or {}).get("Range") and \
+                        _range_ignored(headers, rh.get("content-length")):
+                    # a range asked for and the whole file coming (the CDN's osmtags archive, 2,366 MB for a 9-80 KB
+                    # range, twice on 2026-11-11, read into memory beside a teleport): not read, the connection
+                    # dropped; the caller sees a 200 with no body (a range error to it, as before, without the file)
+                    log.warning("net: %s: HTTP 200 with %s bytes for %s: not read", url, rh.get("content-length"),
+                                headers.get("Range"))
+                    conn.close()
+                    return r.status, rh, b""
                 body = r.read()
-                out = r.status, {k.lower(): v for k, v in r.getheaders()}, body
+                out = r.status, rh, body
             except (http.client.HTTPException, OSError):
                 conn.close()
                 if not reused:          # a fresh connection failed: that is the attempt's result (the
@@ -919,6 +965,24 @@ class HttpsTransport:
                 raise
             self._give(key, conn)
             return out
+
+
+RANGE_IGNORED_MIN = 16 * 1024 * 1024    # bytes: a 200 this big (and 8x the range) for a range request is not read
+
+
+def _range_ignored(headers, content_length):
+    """A request with a Range header answered 200 with a body far larger than the range (the server ignored it): True
+    when Content-Length is over RANGE_IGNORED_MIN and 8x the range asked for (a small file sent whole is read)."""
+    rng = (headers or {}).get("Range")
+    if not rng or not content_length:
+        return False
+    try:
+        n = int(content_length)
+        a, b = rng.split("=", 1)[1].split(",", 1)[0].split("-", 1)
+        want = int(b) - int(a) + 1 if a and b else 0
+    except (ValueError, IndexError):
+        return False
+    return n > RANGE_IGNORED_MIN and n > 8 * max(want, 1)
 
 
 # IPv6-only networks (GitHub #763): the public S3 hosts that answered "no route" over IPv4 this run, used through
@@ -953,7 +1017,12 @@ SLOW_MBPS = 0.4                 # MB/s a large response comes in at or slower (t
 
 # --- per-host state ----------------------------------------------------------------------------
 COUNTERS = ("requests", "bytes", "s2xx", "s3xx", "s4xx", "s404", "s429", "s5xx", "errors", "retries",
-            "trips", "deferred", "unavailable")
+            "trips", "deferred", "unavailable",
+            # our own limits (telemetry: how often the world waits on them, the user 2026-11-11: "make sure your
+            # checking our own set rate limits"): demand / urgent requests that waited WAIT_MS_MIN or more for a slot
+            # or a token, the ms they waited, those refused after max_wait, and refusals by the daily budgets
+            "waited", "wait_ms", "limit_fail", "budget")
+WAIT_MS_MIN = 5
 
 
 class Host:
@@ -1061,7 +1130,10 @@ class Fetcher:
 
     # --- hosts and policies ------------------------------------------------------------------
     def policy(self, host):
-        # (a lane, "host#name": the host's own policy, its own bucket and breaker: get's lane)
+        # (a lane, "host#name": its own policy where there is one ("data.geopf.fr#ign_wfs"), else the host's; its own
+        # bucket and breaker: get's lane)
+        if "#" in host and host in self.policies:
+            return self.policies[host]
         return self.policies.get(host.split("#", 1)[0], self.default_policy)
 
     def host(self, name):
@@ -1134,6 +1206,7 @@ class Fetcher:
         with self._lock:
             used = h.day["requests"]
         if p.daily_hard is not None and used >= p.daily_hard:
+            self._bump(h, "budget")
             raise BudgetExceeded(f"{h.name}: daily limit of {p.daily_hard} requests reached", url, h.name)
         if kind == "predownload" and p.daily_hard is not None and used >= PREDOWNLOAD_SHARE * p.daily_hard:
             raise BudgetExceeded(f"{h.name}: past {round(100 * PREDOWNLOAD_SHARE)} % of the daily limit (downloads "
@@ -1157,6 +1230,7 @@ class Fetcher:
             raise BudgetExceeded(f"{h.name}: past {round(100 * PREDOWNLOAD_SHARE)} % of the daily budget (downloads "
                                  "ahead)", url, h.name)
         if kind not in ("demand", "urgent") and used >= BUDGET_WARN * p.daily_budget:
+            self._bump(h, "budget")
             raise BudgetExceeded(f"{h.name}: past {round(100 * BUDGET_WARN)} % of the daily budget", url, h.name)
 
     def allow(self, host, kind="prefetch"):
@@ -1177,7 +1251,26 @@ class Fetcher:
 
     def _acquire(self, h, url, kind):
         """A request slot and a token for one attempt (raises Deferred / RateLimited). Returns the semaphore taken
-        (_release gives it back)."""
+        (_release gives it back). A demand / urgent request's wait for them is counted (waited, wait_ms, limit_fail)."""
+        if kind not in ("urgent", "demand"):
+            return self._acquire_now(h, url, kind)
+        t0 = self.clock()
+        netstate.wait(h.name, True)
+        try:
+            sem = self._acquire_now(h, url, kind)
+        except RateLimited:
+            self._bump(h, "limit_fail")
+            self._bump(h, "wait_ms", int((self.clock() - t0) * 1000))
+            raise
+        finally:
+            netstate.wait(h.name, False)
+        ms = int((self.clock() - t0) * 1000)
+        if ms >= WAIT_MS_MIN:
+            self._bump(h, "waited")
+            self._bump(h, "wait_ms", ms)
+        return sem
+
+    def _acquire_now(self, h, url, kind):
         p = h.policy
         if kind == "urgent":
             sem = h.urgent_sem if h.urgent_sem.acquire(blocking=False) else h.sem
@@ -1267,7 +1360,7 @@ class Fetcher:
                 try:
                     self._count(h, "requests")
                     t0 = self.clock()
-                    netstate.begin()        # (the loading line's "downloading" part, across the server's processes)
+                    netstate.begin(h.name)  # (the loading line's "downloading" part, across the server's processes)
                     body = None
                     try:
                         status, rh, body = ioprofiler.request(self.transport, url, hd, p.timeout)
@@ -1289,7 +1382,7 @@ class Fetcher:
                     if NETLOG:
                         _netlog(url, hd, status, body)
                 finally:
-                    netstate.end(len(body) if body else 0)
+                    netstate.end(len(body) if body else 0, h.name)
                     sem.release()
                 res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed)
                 probe = False               # the breaker has its verdict

@@ -75,7 +75,7 @@ jobs:
           python tools/run_tests.py test_asyncsubmit test_workcancel test_plancache test_runtimeprofiler test_staging test_logqueue test_matslots test_tilepublish test_stream_reconnect test_runtimeprofiler_server --par 2 --timeout 180 --logs build/stream-integration-tests
           python tools/run_tests.py test_ru_infrastructure test_furniture test_buildings test_roads test_blockworker test_markings test_sign_packaging test_walk_clearance test_sidewalk_collision test_islands test_roadcorners test_carriageway_cell_seams test_junction_landing test_junction_corridor test_junction_pads test_approaches test_bridge_junction_surface test_building_passages test_bridge_chain_clearance test_grading test_under_deck test_underpass_profiles test_bridge_clearance test_bake_formats test_crossings test_carriageways test_carriageway_solver test_worldbundle test_host_package test_package_stamps --par 2 --timeout 180 --logs build/road-integration-tests
       - name: Imported upstream regression checks
-        run: python tools/run_tests.py test_abandon test_reach test_revisit_side test_revisitpack test_grade_binned test_farpvs test_ground_standin test_ground_square test_far_first test_halo_reads test_enginepatch test_prov_refresh test_veg_geo_jobs --par 2 --timeout 180 --logs build/road-integration-tests
+        run: python tools/run_tests.py test_abandon test_reach test_revisit_side test_revisitpack test_grade_binned test_farpvs test_ground_standin test_ground_square test_far_first test_halo_reads test_enginepatch test_prov_refresh test_veg_geo_jobs test_netfetch test_netstate test_imagery test_osm_tag_shards test_lod2roofs test_nycmassing test_railtags test_server --par 2 --timeout 600 --logs build/road-integration-tests
       - name: Reported world geometry regressions
         run: python tools/run_tests.py test_abutment_pad test_gradesep test_bridgeattachments test_railways test_railprofile test_geotiles test_roadgeo test_fargeo test_osmfuel_tiles test_footbridges test_guardrails test_powerlines test_power_clearance test_vegetation test_building_overrides test_lamp_collision test_seacarve --par 2 --timeout 180 --logs build/road-integration-tests
       - name: Nonblocking tile publication and affinity
@@ -97,7 +97,7 @@ jobs:
       - name: Lua sign and streaming checks
         run: |
           python -m pip install lupa==2.8
-          python tools/run_lua_tests.py test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_drophold test_rebase test_simhold test_settings
+          python tools/run_lua_tests.py test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_drophold test_rebase test_simhold test_settings test_beammp test_codeswap test_loadprogress
       - name: Bootloader from source
         run: python tools/build_bootloader.py
       - name: Build the exe
