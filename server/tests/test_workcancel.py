@@ -21,7 +21,10 @@ import workcancel
 
 
 def until_cancelled(path):
-    Path(path).write_text(str(os.getpid()))
+    started = Path(path)
+    tmp = started.with_suffix('.tmp')
+    tmp.write_text(str(os.getpid()))
+    tmp.replace(started)
     end = time.monotonic() + 10
     while time.monotonic() < end:
         workcancel.checkpoint()

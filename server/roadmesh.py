@@ -611,52 +611,51 @@ def trim_overlaps(rb, context=(), shared=None):
     centre, and an AI car drove into it at 29 mph (Los Angeles, 2026-10-27). Pure."""
     if not rb:
         return rb
-    others = []                         # (owner, centre (k, 2), half width (k,), z (k,))
+    import fast
+    fast.require(235, "deck_trim_overlaps")
+    # (the cuts are native: earthfast deck_trim_overlaps, meshtrim.rs; each deck against every other deck near it was
+    # a numpy round of a few rows, hundreds a tile)
+    owners, groups, lefts, rights, zs, lens, own_in, targets = {}, {}, [], [], [], [], [], []
+    oid, gid, sh = [], [], []
     for n, ((left, right, v, m, layer, z), c) in enumerate(list(rb) + list(context)):
         if z is None:
             continue
-        others.append((c.get("fid", ("n", n)), (left + right) / 2, np.hypot(*(left - right).T) / 2,
-                       np.asarray(z, np.float64)))
+        if n < len(rb):
+            targets.append(len(oid))
+        owner = c.get("fid", ("n", n))
+        oid.append(owners.setdefault(owner, len(owners)))
+        if shared:
+            g = shared.get(owner)
+            gid.append(groups.setdefault(id(g), len(groups)))
+            sh.append(owner in shared)
+        else:
+            gid.append(-1)
+            sh.append(False)
+        lefts.append(np.asarray(left, np.float64)[:, :2])
+        rights.append(np.asarray(right, np.float64)[:, :2])
+        zs.append(np.asarray(z, np.float64).reshape(-1))
+        lens.append(len(lefts[-1]))
+    if not targets:
+        return list(rb)
+    tl_all, tr_all = fast._ef.deck_trim_overlaps(
+        np.ascontiguousarray(np.concatenate(lefts)), np.ascontiguousarray(np.concatenate(rights)),
+        np.ascontiguousarray(np.concatenate(zs)), np.r_[0, np.cumsum(lens)].astype(np.int64),
+        np.array(oid, np.int64), np.array(gid, np.int64), np.array(sh, bool), np.array(targets, np.int64),
+        np.array([TRIM_DZ[0], TRIM_DZ[1], TRIM_GAP_M, 1.0 if shared else 0.0], np.float64))
     out = []
+    at = 0
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         if z is None:
             out.append(((left, right, v, m, layer, z), c))
             continue
-        own = c.get("fid", ("n", n))
-        mid = (left + right) / 2
-        hw = np.hypot(*(left - right).T) / 2
-        u = (left - right) / np.maximum(2 * hw, 1e-9)[:, None]       # unit left
-        tl, tr = np.zeros(len(mid)), np.zeros(len(mid))
-        lo, hi = mid.min(0) - hw.max() - 30.0, mid.max(0) + hw.max() + 30.0
-        for owner, om, ohw, oz in others:
-            if owner == own or len(om) < 2:
-                continue
-            if shared and own in shared and shared.get(owner) is shared[own]:
-                continue  # the joined roads now share one surface; preserve their full carriageway widths
-            if (om.max(0) < lo).any() or (om.min(0) > hi).any():
-                continue
-            a, b = om[:-1], om[1:]
-            d = b - a
-            L2 = np.maximum((d * d).sum(1), 1e-12)
-            t = np.clip(((mid[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0.0, 1.0)
-            q = a[None] + t[..., None] * d[None]
-            dist = np.hypot(*(q - mid[:, None, :]).transpose(2, 0, 1))
-            j = np.argmin(dist, 1)
-            k = np.arange(len(mid))
-            dc, tj, qj = dist[k, j], t[k, j], q[k, j]
-            zo = oz[j] + tj * (oz[np.minimum(j + 1, len(oz) - 1)] - oz[j])
-            wo = ohw[j] + tj * (ohw[np.minimum(j + 1, len(ohw) - 1)] - ohw[j])
-            dz = np.abs(zo - z)
-            hit = (dc < hw + wo) & (dz >= TRIM_DZ[0]) & (dz < TRIM_DZ[1]) & (dc > 1e-3)
-            if not hit.any():
-                continue
-            cut = np.maximum(hw - (dc / 2 - TRIM_GAP_M), 0.0)
-            on_left = ((qj - mid) * u).sum(1) > 0
-            tl = np.where(hit & on_left, np.maximum(tl, cut), tl)
-            tr = np.where(hit & ~on_left, np.maximum(tr, cut), tr)
+        k = len(left)
+        tl, tr = tl_all[at:at + k], tr_all[at:at + k]
+        at += k
         if not (tl.any() or tr.any()):
             out.append(((left, right, v, m, layer, z), c))
             continue
+        hw = np.hypot(*(left - right).T) / 2
+        u = (left - right) / np.maximum(2 * hw, 1e-9)[:, None]       # unit left
         tl = np.minimum(tl, 0.9 * hw)           # (never past the centre line: at least a tenth of the deck stays)
         tr = np.minimum(tr, 0.9 * hw)
         out.append(((left - u * tl[:, None], right + u * tr[:, None], v, m, layer, z), c))
@@ -853,9 +852,9 @@ def road_tol(q):
     return min(FOLLOW_TOL, max(FOLLOW_TOL_MIN, 2.5 * float(q)))
 
 
-def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M):
+def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None):
     """(points (m, 3), uvs, triangles, source triangle) of the triangles T over P (n, 2) on the drawn ground (grid:
-    _height_grid), held down in the cells holding a step (FOLLOW_STEP_M): earthfast.follow_tris."""
+    _height_grid), held down in the cells holding a step (FOLLOW_STEP_M, or step_m): earthfast.follow_tris."""
     import fast
     tol = FOLLOW_TOL if tol is None else tol
     P = np.ascontiguousarray(np.asarray(P, np.float64)[:, :2])
@@ -863,15 +862,17 @@ def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M):
     T = np.ascontiguousarray(T, np.int64)
     fast.require(52, "follow_tris")
     a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0), int(j0),
-                                      float(tol), FOLLOW_STEP_M, FOLLOW_MAX_UP)
+                                      float(tol), FOLLOW_STEP_M if step_m is None else float(step_m), FOLLOW_MAX_UP)
     return np.asarray(a), np.asarray(b), np.asarray(c), np.asarray(d)
 
 
 def _shared(P, UV, T):
     """The mesh with its equal points (position and uv to 0.1 mm) made one."""
+    import fast
+    fast.require(235, "shared_points")
     key = np.round(np.c_[P, UV] * 1e4).astype(np.int64)
-    _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
-    return P[first], UV[first], inv.reshape(-1)[T]
+    first, inv = fast._ef.shared_points(np.ascontiguousarray(key))       # (np.unique(axis=0)'s, natively)
+    return P[first], UV[first], inv[T]
 
 
 def _frontage_mask(polys, box):
@@ -1210,6 +1211,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     P, UV, T, M = [], [], [], []
     TL = []                                     # per triangle: its layer's lift over the ground (None: on a deck)
     RI = []                                     # per triangle: its ribbon (-1: a filled polygon), for the fade uv
+    RW = []                                     # per triangle: a raceway's (no step cap: follow_ground, below)
     rpar = []                                   # per ribbon: _fade_uv's (feather share, tl, tu, slen, open ends)
     k0 = nverts = 0
     for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
@@ -1268,6 +1270,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         M.append(np.full(len(tri), mi))
         TL.append(np.full(len(tri), np.nan if fz is not None else LIFT[layer] + lift))
         RI.append(np.full(len(tri), ri))
+        RW.append(np.full(len(tri), str(c.get("fid", "")).startswith("osm-raceway-")))
         ends = c.get("fends") or (1, 1)
         rpar.append((fu, float(c.get("tl") or 10.0), tu, float(slen) if slen else np.nan,
                      float(bool(ends[0])), float(bool(ends[1]))))
@@ -1295,9 +1298,10 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         M.append(np.full(len(fan), mats.index(c["m"])))
         TL.append(np.full(len(fan), LIFT[layer_of(c)] + lift))
         RI.append(np.full(len(fan), -1))
+        RW.append(np.zeros(len(fan), bool))
         nverts += k
     P, T, UV, M = np.concatenate(P), np.concatenate(T), np.concatenate(UV), np.concatenate(M)
-    TL, RI = np.concatenate(TL), np.concatenate(RI)
+    TL, RI, RW = np.concatenate(TL), np.concatenate(RI), np.concatenate(RW)
     tid = np.arange(len(T))
     if clip_poly is not None:
         import fast
@@ -1313,7 +1317,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         P, T, UV, tid = _clip_tris(P, T, UV, tid, clip)
         if not len(T):
             return None
-    M, TL, RI = M[tid], TL[tid], RI[tid]
+    M, TL, RI, RW = M[tid], TL[tid], RI[tid], RW[tid]
     FX = ~np.isfinite(TL)                       # per triangle: on its own fixed heights (a deck's), not draped
     if follow:
         dr = np.isfinite(TL)
@@ -1332,10 +1336,18 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 batches = [(m & ~wear, t) for m, t in batches] + [(wear, WEAR_TOL)]
             points, uvs, tris, materials, ribbons = [P], [UV], [T[~dr]], [M[~dr]], [RI[~dr]]
             n0 = len(P)
-            for mask, tol in batches:
+            # (a raceway's surface: no step cap. Its banking (Daytona's 31 deg, 0.85 m along a 1 m square's diagonal)
+            # passes FOLLOW_STEP_M in every square, and the cap sank the asphalt to each square's lowest corner +
+            # FOLLOW_MAX_UP: a sawtooth across the banking with the ground showing through; from PR #992 by
+            # jonathonbarton)
+            if RW.any():
+                batches = [(m & ~RW, t, None) for m, t in batches] + [(m & RW, t, float("inf")) for m, t in batches]
+            else:
+                batches = [(m, t, None) for m, t in batches]
+            for mask, tol, step in batches:
                 if not mask.any():
                     continue
-                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol)
+                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol, step_m=step)
                 lifts = TL[mask][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)
                 for kk in range(3):
@@ -1401,10 +1413,10 @@ def _quads(base, k, row_a, row_b):
 
 def _keep_up(tri, xy, base):
     """tri with the triangles facing the ribbon's way kept (a mitre folding over itself turns some over)."""
-    loc = tri - base
-    e1, e2 = xy[loc[:, 1]] - xy[loc[:, 0]], xy[loc[:, 2]] - xy[loc[:, 0]]
-    cz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
-    return tri[cz * np.sign(np.median(cz) or 1.0) > 1e-6]
+    import fast
+    fast.require(235, "keep_up_mask")
+    return tri[fast._ef.keep_up_mask(np.ascontiguousarray(tri, np.int64).reshape(-1, 3),
+                                     np.ascontiguousarray(xy, np.float64), int(base))]
 
 
 def _fade_uv(UV, vr, par):

@@ -145,9 +145,10 @@ local DEFAULT_LAT, DEFAULT_LON = 36.596718, -118.169991 -- Whitney Portal Road u
 -- does the edge guard run.
 local STUCK_S = 5
 local ERROR_HOLD_S = 10
-local ATTRIBUTION = 'Elevation: Mapterhorn (CC-BY etc., see mapterhorn.com), AWS Terrain Tiles / Mapzen'
+local ATTRIBUTION = 'Elevation: Mapterhorn (https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen'
 -- shown once satellite-textured tiles arrive (docs/V1_3_SPEC.md C; EOX's required wording)
-local IMAGERY_ATTRIBUTION = 'Imagery: USGS The National Map (public domain); EOxCloudless https://cloudless.eox.at by '
+local IMAGERY_ATTRIBUTION = 'Imagery: USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); '
+  .. 'EOxCloudless https://cloudless.eox.at by '
   .. 'EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023 / 2016 & 2017; CC BY-NC-SA 4.0 / CC BY 4.0)'
 local FULL_ATTRIBUTION = IMAGERY_ATTRIBUTION .. '\n' .. ATTRIBUTION
 
@@ -1145,6 +1146,17 @@ local function onMessage(msg)
     end
     roads.prewarm(msg.prewarm)  -- the materials of the server's shapes set up now, not at their first tile
     st.serverNote, st.serverNoteDetail = nil, nil
+    -- a computer with too little memory for the game (the server's emergency tier, budget.memory_notice): said once a
+    -- server session, as a warning toast and in the log (the lean tier's note stays in the app's window)
+    if msg.memoryTier == 'emergency' and type(msg.memoryNote) == 'string' and M._memoryNoted ~= msg.sessionId then
+      M._memoryNoted = msg.sessionId
+      log('W', 'beamngEarth', 'memory: ' .. msg.memoryNote)
+      local gh = rawget(_G, 'guihooks')
+      if gh and gh.trigger then
+        pcall(gh.trigger, 'toastrMsg', { type = 'warning', title = 'BeamNG.Earth: not enough memory', msg = msg.memoryNote,
+          config = { timeOut = 30000 } })
+      end
+    end
     -- a new server session: its own gravity message follows the first pose (none with --gravity off)
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.clearGravity then w.clearGravity() end
@@ -2865,13 +2877,23 @@ local function onUpdate(dtReal, dtSim)
   t = mark('draw', t)
   if not M._mpMarked then M._mpMarked = true; pcall(mpsession.setMark, mark, hitchClock) end
   updateBeamMP(dtReal)
-  mark('beammp', t)
+  t = mark('beammp', t)
+  -- Lua garbage collection pacing (gcpace.lua): the engine's full collections kept out of play, after the frame's own
+  -- work; hidden frames (the loading cover, paused, the 3D map) may take the unavoidable one
+  if st.inOurLevel and not M._gcBroken then
+    local m3 = rawget(_G, 'beamngEarth_map3d')
+    local hidden = M._loadCover() or st.paused or (m3 and m3.isActive and m3.isActive()) or false
+    local okG, errG = pcall(M._gcpace.update, st.clock, hidden)
+    if not okG then M._gcBroken = true; log('E', 'beamngEarth', 'gc pacing: ' .. tostring(errG)) end
+    mark('gc', t)
+  end
 end
 
 -- After physics, before rendering (main.lua:819-824): measure when a rebase's vehicle move became
 -- visible. Hook order relative to core_camera does not matter here; this only measures.
 M._devbuild = require('beamngEarth/devbuild')    -- the development build's notice (a field: the 200-local limit)
 M._pacer = require('beamngEarth/framepacer')    -- even frame pacing (fields: the main chunk's 200-local limit)
+M._gcpace = require('beamngEarth/gcpace')       -- Lua garbage collection pacing (onUpdate)
 M._paceClock = stopwatch.clock()
 local function onPreRender(dtReal, dtSim)
   -- frame pacing (framepacer.lua: only where the engine patch dtsmooth is not applied): our level, playing (not
@@ -2929,6 +2951,7 @@ local function onLevelStart()
   -- the pause-menu settings page it is a compact HUD, hidden unless the settings show it.
   ui.visible = st.inOurLevel and not settings.hudHiddenAtStart()
   groundcover.enginePatch(st.inOurLevel)
+  M._gcpace.reset()               -- (the level's load ran full collections of its own: estimate afresh)
   if not st.inOurLevel then return end
   -- the player's traffic / parked cars choice, before freeroam spawns them on a map without our roads yet
   navgraph.takeChoice(rawget(_G, 'freeroam_freeroam') and freeroam_freeroam.spawningOptionsHelper)

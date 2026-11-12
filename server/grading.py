@@ -90,6 +90,20 @@ CONT_JOIN_M = 0.5           # m: the heights two pieces of one road meet at, if 
 WELD_ON = os.environ.get("BNE_WELD_CONTINUATIONS", "on") != "off"
 WELD_TAPER_M = 20.0         # m over which two same-road pieces meet at one height (weld_continuations)
 WELD_MAX_STEP_M = 1.0       # m: a bigger step is a real junction / bad data, not a split piece
+# Roads side by side agree in height (share_corridors): a fork's branches, a slip road along its motorway or the road it
+# joins, a dual carriageway's halves, a road dipped under a deck and the ramp beside it (GitHub #1043, #1045)
+CORRIDOR_ON = os.environ.get("BNE_SHARE_CORRIDORS", "on") != "off"
+CORRIDOR_ANG_DEG = 45.0     # deg: another road this near the plan's own direction runs beside it (more: it crosses)
+CORRIDOR_BANK = 0.4         # m per m of gap between the two carriageways a height difference may take (a bank)
+CORRIDOR_GAP_M = 6.0        # m between the carriageways' edges beyond which a road is not beside
+CORRIDOR_MAX_DIFF_M = 3.0   # m: a bigger difference is two levels (or bad data), left alone
+CORRIDOR_ABUT_HOLD_M = 25.0  # m from the plan's own bridge end that holds (the deck's seam)
+CORRIDOR_MIN_RH = 2.4       # m: a carriageway at least this wide (half): no paths, no tracks
+CORRIDOR_WREQ = 10.0        # the spline's weight where a correction is asked ...
+CORRIDOR_W0 = 0.01          # ... and elsewhere (pulling back to the plan as made) ...
+CORRIDOR_LAM = 50000.0      # ... against its curvature: eased over ~(LAM / W0) ** 0.25 ~ 47 m
+CORRIDOR_THROUGH = 1000     # added to a through road's key (not a slip road): two through roads side by side
+                            # (a dual carriageway's halves on a hillside, BR-381's) each keep their own height
 EXTRAP_M = float(os.environ.get("BNE_GRADE_EXTRAP", "4"))             # m a segment's line is carried on past an end where its plan goes on (grade_points: no
                             # washboard of the vertex step on a grade)
 STEEP_RUN = 0.5
@@ -277,6 +291,14 @@ JR_BESIDE = os.environ.get("BNE_JR_BESIDE", "on") != "off"
 JR_OWN_CLASS = os.environ.get("BNE_JR_OWN_CLASS", "on") != "off"
 JR_TRUSTED = os.environ.get("BNE_JR_TRUSTED", "on") != "off"
 JR_TRUSTED_HALF_M = 4.0     # m: a deck's half width where its cell has none (the road under is read past it)
+# a raised junction is a height, not an offset (GitHub #1043, Wesley Chapel's diverging diamond: its arms climbing 8.6 m
+# from a pond to the next junction stood 18 m over the ground there, the decks 13 m over I-75 for its real 7 m): an arm
+# end higher than the junction rises only to the junction's height, and an arm is filled to the ramp's surface, less
+# where it climbs above its raised end (approach.rs junction_arm_raise, approach_add's fill_z)
+JR_FILL = os.environ.get("BNE_JR_FILL", "on") != "off"
+# an abutment whose short approach ends at a junction another deck raises is as high as that junction carries it, for
+# the dips under its deck (_end_raised: I-75 dipped 1.6 m under SR 56's decks 11-13 m over it, stub_carried_raise)
+JR_CARRY = os.environ.get("BNE_JR_CARRY", "on") != "off"
 JR_UNDER_ON_M = 1.5         # m: a crossing point this near a ground road's line is that road's (_Planner._under_trusted)
 JUNCTION_UNDER_CLASSES = {"motorway", "trunk"}     # ... over a road of these classes (a freeway overpass)
 JUNCTION_MIN_LIFT = 3.0     # m: an inferred abutment lift this big (or more) raises its junction with it ...
@@ -353,7 +375,7 @@ RACEWAY_EXTEND = 3.0
 # clearance humps even after their underpass had been graded (Otto, Wyoming).
 UNDER_CLEAR_M = roadsmod.DECK_ROAD_CLEAR + ROAD_LIFT
 UNDER_GRADE = 0.06          # the dip's ramps
-UNDER_MAX_BRIDGE_M = 120.0  # short spans/chains with two real abutments; internal map joints are not abutments
+UNDER_MAX_BRIDGE_M = 120.0  # only single short spans (both ends on the ground): a chain's inner ends are no abutments
 UNDER_MAX_DROP_M = 8.0      # never lowered more than this (bad data: rather a low bridge than a pit)
 # On lidar a road under a rail bridge is where the survey has it (a town's underpass is lower than a road bridge's 6 m:
 # Nachod's road 14 under the Kladska line, 3.5 m under the track's ground, was dug 3.8 m down and its junctions with it,
@@ -391,6 +413,7 @@ UNDER_LIDAR_ON = os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
 # over the road (about 5 m under its girders, the US interstate's 16 ft). Measured within UNDER_MEASURED_TOL_M of the
 # ends' line or over it (lower is the ground under a removed deck, not a deck).
 UNDER_MEASURED_ON = os.environ.get("BNE_UNDER_MEASURED", "on") != "off"
+UNDER_CLIMB = os.environ.get("BNE_UNDER_CLIMB", "on") != "off"  # the deck as the dips see it climbs from its ends (under_deck_reach)
 UNDER_MEASURED_HEADROOM_M = 4.5     # m: Europe's least on main roads; the game's tallest trucks are about 4 m
 UNDER_MEASURED_TOL_M = 0.5
 UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
@@ -438,7 +461,15 @@ DECK_GROUND_MASK_M = 1.5                # m round another deck's footprint its s
 DECK_GROUND_BLEND_M = 4.0               # m past the feet the lowering fades out
 DECK_GROUND_END_M = 3.0                 # m past a deck's ends (onto its approaches) the lowering fades out
 DECK_GROUND_REACH_M = 160.0             # m from a deck's centre line no sample goes (the cells read round a point)
-DECK_GROUND_KEPT = 8192                 # decks' corrections a planner keeps (_deck_patches; most are None)
+# ... but never at a deck's end on the ground (an abutment: no other deck goes on from it): there the ridge along the deck
+# is the approach's own fill, which a short overpass stands on. Lowered to the line between the sides, I-405's
+# northbound decks over a street at 34.0492 N 118.4486 W (27 m, lidar: level at 88 m) had their abutment ends read 5 m
+# low: a 21 % climb on the deck and a 5 m drop off the end of the fill into it ("ledges at the end of overpasses on the
+# 405", Discord 2026-11-06; bumpscan / deckprobe3d 2026-11-12). The lowering fades in over DECK_GROUND_ABUT_M from such
+# an end (deck_ground_abut_taper); joints between decks (a viaduct in parts) are lowered as before.
+DECK_GROUND_ABUT_M = float(os.environ.get("BNE_DECK_GROUND_ABUT", "10"))
+DECK_GROUND_JOINT_M = 3.0               # m from a deck's end to another deck's line: a joint, not an abutment
+DECK_GROUND_KEPT = 8192                # decks' corrections a planner keeps (_deck_patches; most are None)
 DECK_GROUND_PACKS_KEPT = 256            # cell sets' corrected decks kept (_deck_pack_cells)
 UNDER_DECK_MAX_M = 30.0     # m along the road a deck covers at most either side of the crossing (an oblique one)
 UNDER_DECK_PAD_M = 3.0 * SIGMA_MAJOR_M + PROFILE_STEP + UNDER_DECK_SIDE_M + UNDER_DECK_MAX_M    # m round a cell: the
@@ -458,7 +489,7 @@ UNDER_ANY_ON = os.environ.get("BNE_UNDERPASS_ANY", "on") != "off"
 # ramps for those bridges (a motorway's too); the rules above decide for every other.
 import crossings as _xs
 import carriageways as _cw
-CW_AUTO = os.environ.get("BNE_BRIDGE_NETWORK", "on") != "off"
+CW_AUTO = os.environ.get("BNE_BRIDGE_NETWORK", "off") == "on"
 CW_ON = (_xs.ON or CW_AUTO) and os.environ.get("BNE_CARRIAGEWAYS", "on") != "off"
 CW_MAX_M = 8000.0       # m: a carriageway chain is cut here (a branch point or a loose end comes long before)
 CW_HEADROOM_M = roadsmod.MIN_BRIDGE_HEADROOM_M + roadsmod.BRIDGE_HEADROOM_MARGIN_M   # m of headroom the carriageways
@@ -571,8 +602,18 @@ ABUT_FAR_M = 40.0           # ... against its grade from ABUT_NEAR_M to this far
 ABUT_STEEP = 0.15           # a fall this much steeper than that grade, near the end: the valley's side, not the road
 ABUT_MIN_M = 0.3            # m: a smaller fill at the end is left out
 ABUT_MAX_M = 8.0            # m filled at most
+# A track crossing a road at grade (or running along the street, Fells Point's Thames Street) has its bed flushed RAIL_TOP_M
+# (~0.55 m) under the road's surface (railways._flush), and the bed's plan, whose ballast top never gives way, pulled the
+# road's own ground down toward it: a 0.3-0.7 m pothole across the road at every level crossing, a 30 cm step along
+# Fells Point's streets (bumpscan, 2026-11-12: 97 crossings in Fells Point, a mean 0.19 m off the road's line). The bed's
+# plan is cut out of the road's carriageway and its own half width round it (rail_yield_pieces): the road alone grades
+# its surface there, and the track's mesh is flushed with that surface anyway (railways.tile_mesh).
+RAIL_YIELD_ON = os.environ.get("BNE_RAIL_YIELD", "on") != "off"
+RAIL_YIELD_PAD_M = 0.5      # m past the road's carriageway + the bed plan's half width (its core's round end) the bed stops
+RAIL_YIELD_SKIP = {"motorway", "trunk"}     # classes a bed never yields to
+RAIL_YIELD_STEP_M = 2.0    # m between the cut bed line's points (the cut lands within this of where it should)
 SEAMS_ON = os.environ.get("BNE_SEAMS", "on") != "off"
-SEAM_MIN_M = 0.05           # m: a carriageway road's abutment end this far off its deck's end is pulled back to it
+SEAM_MIN_M = 0.05          # m: a carriageway road's abutment end this far off its deck's end is pulled back to it
 SEAM_GRADE = 0.03           # ... eased out along the road at this grade (XS_FIXED_GRADE's: a freeway's ramp) ...
 SEAM_RUN_MIN_M = 24.0       # ... over at least this ...
 SEAM_RUN_MAX_M = 80.0       # ... and at most this
@@ -1051,13 +1092,20 @@ def profile_sigma(spec, coarse=False):
             return max(DIRT_SIGMA_COARSE_M, DIRT_SIGMA_M)
         if spec.cls in DIRT_SOFT_CLASSES:
             return DIRT_SIGMA_M          # a main dirt road stays as smooth as it was (dirt_bumps' "main" ones too)
-        return DIRT_SIGMA_MINOR_M        # a minor one keeps the ground's own bumps
+        if spec.cls in CLASS_SIGMA_M or spec.cls in ("service", "living_street"):
+            # (a graded gravel road is built to its class's alignment: smoothed as the paved road of its class. At 6 m
+            # minor dirt roads rode the elevation data's metre noise: IRI 1.5-2.3 against 0.6-1.2, Norfolk, Latvia)
+            return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M))
+        return DIRT_SIGMA_MINOR_M        # a track keeps more of the ground's own shape
     if spec.cls in MAJOR_CLASSES and not getattr(spec, "link", False):
         return max(SIGMA_M, SIGMA_MAJOR_M)
     return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M)) if not getattr(spec, "link", False) else SIGMA_M
 
 
-DIRT_ROUGH = float(os.environ.get("BNE_DIRT_BUMP", "1.0"))    # strength of a minor dirt road's damage (1: as below)
+# strength of a minor dirt road's damage (1: as below). Off by default: its 3-4 cm potholes every ~5 m across the
+# whole carriageway read as constant whoops at speed (~100 jolts per km at 45 mph, IRI 8-10 against 2-3.5 without;
+# GitHub #830, #835, #964, Discord 2026-11-06 .. 11-09 "more like a motocross track"). BNE_DIRT_BUMP=1 for the rally feel
+DIRT_ROUGH = float(os.environ.get("BNE_DIRT_BUMP", "0"))
 DIRT_MAJOR_SHARE = float(os.environ.get("BNE_DIRT_MAJOR", "0.15"))  # a MAIN dirt road is this much of it (softer)
 # which dirt roads count as "main" (the ones kept soft): the classes a country road is signed as, not just the
 # motorway ones (a mapped `secondary` gravel road is a main road where you drive it at 80 km/h)
@@ -1269,7 +1317,8 @@ BANK_SIGMA_M = 12.0         # remove discrete box-window steps in cross slope, n
 RING_LEVEL_ON = os.environ.get("BNE_RING_LEVEL", "on") != "off"
 
 
-DIRT_BANK_M = float(os.environ.get("BNE_DIRT_BANK", "0.015"))   # cross slope a worn dirt road leans to (m per m)
+DIRT_BANK_M = float(os.environ.get("BNE_DIRT_BANK", "0"))   # cross slope a worn dirt road leans to (m per m); off with
+# the damage (BNE_DIRT_BANK=0.015 as it was)
 DIRT_BANK_EDGE_M = 0.04         # maximum synthetic lift/drop of either edge, also on wide gravel roads
 DIRT_BANK_WAVES = ((27.0, 1.0), (13.0, 0.6), (7.0, 0.35))      # how often the lean changes sides (m)
 
@@ -2258,6 +2307,14 @@ class _Planner:
                                                                          decks=self._decks_near(key), rings=rings)):
                 if p is not None:
                     p.rid = road_id(fid)
+                    import lanesections
+                    fi = feats.index(fid)
+                    if fi >= 0 and lanesections.profile(feats, fi):
+                        la, lo, _ = self.frame.enu_to_geodetic(p.xy[:, 0], p.xy[:, 1], 0.)
+                        tp = roadsmod.road_tapers(feats, None, self.widths)[fi]
+                        ws = roadsmod.taper_widths(part[1].width, tp, lo, la)
+                        if ws is not None:
+                            set_widen(p, (ws - part[1].width) / 2.)
                     plans.append((fid, p))
                     pspecs.append(part[1])
                     pclip.append(cl)
@@ -2330,6 +2387,11 @@ class _Planner:
                                  int(st[4]), float(st[5]))
                 except Exception as e:      # the plans as the passes left them rather than no grading
                     log.debug("grading: grade guard of %s: %s: %s", key, type(e).__name__, e)
+            if CORRIDOR_ON and plans:
+                try:            # roads side by side at one height (before the welds and snaps that join them again)
+                    share_corridors(plans, pspecs)
+                except Exception as e:      # each on its own rather than no grading
+                    log.debug("grading: corridors of %s: %s: %s", key, type(e).__name__, e)
             if WELD_ON and plans:
                 try:            # one road planned in pieces meets itself at one height (a dip across a junction)
                     weld_continuations(plans, pspecs)
@@ -2370,6 +2432,12 @@ class _Planner:
                               for k in railways.cells_near(self.frame, own)]
                     beside = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.half)
                               for _f, q in plans[:len(pspecs)] if SEAMS_ON and TUNNEL_TAG not in _f]
+                    # (no motorway or trunk: they have no level crossings, and a track in a freeway's median whose
+                    # modelled carriageway reaches over it keeps its bed, Perth's Kwinana Freeway)
+                    cways = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.road_half)
+                             for (_f, q), sp in zip(plans[:len(pspecs)], pspecs)
+                             if TUNNEL_TAG not in _f and (getattr(sp, "cls", None) or "").removesuffix("_link")
+                             not in RAIL_YIELD_SKIP] if RAIL_YIELD_ON else []
                     for fid, xy, z in railways.grade_plans(
                             self.frame, rcells, own, self.elev,
                             load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
@@ -2381,11 +2449,12 @@ class _Planner:
                         # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band
                         # gives way to a road beside it. A track 3 m past a primary's edge, prospekt Heroiv in Nemiia, was
                         # blended with the road over the road's shoulder: a ditch at its edge; as upstream's #920)
-                        p = Plan(xy, z, railways.GRADE_HALF_M,
-                                 road_half=railways.BALLAST_TOP_M if SEAMS_ON else None)
-                        p.rid = road_id(RAIL_TAG + fid)
-                        plans.append((RAIL_TAG + fid, p))
-                        pclip.append(True)
+                        for pxy, pz in rail_yield_pieces(xy, z, cways, railways.GRADE_HALF_M):
+                            p = Plan(pxy, pz, railways.GRADE_HALF_M,
+                                     road_half=railways.BALLAST_TOP_M if SEAMS_ON else None)
+                            p.rid = road_id(RAIL_TAG + fid)
+                            plans.append((RAIL_TAG + fid, p))
+                            pclip.append(True)
                 except Exception as e:      # no rail grading rather than no grading
                     log.debug("grading: railways of %s: %s: %s", key, type(e).__name__, e)
             # every plan only within the cell's own box, so each stretch of road is planned by one cell (its dips
@@ -3043,7 +3112,8 @@ class _Planner:
                 # Baltimore's interchanges a raised street's fill reached a measured motorway deck's abutment and stood
                 # the deck 4.7 m high)
                 a = approach_add(p.xy, at_end, lift, p.half,
-                                 self._roads_beside(p.xy, e, lift) if JR_BESIDE else _others, SLOPE_RUN)
+                                 self._roads_beside(p.xy, e, lift) if JR_BESIDE else _others, SLOPE_RUN,
+                                 fill_z=p.z if JR_FILL else None)
                 if a is not None:
                     add = a if add is None else np.maximum(add, a)
             if add is not None:
@@ -3225,12 +3295,12 @@ class _Planner:
             if cands is None:
                 raise LookupError("a cell's road parts round it could not be read")
             if len(cands):
+                found = []          # (lift, stub length, its junction end, the abutment, its _end_lift)
                 for b in cands:
                     got = self._end_lift(b)
                     if got is None or len(got) != 4 or got[3] or float(got[0]) < JUNCTION_MIN_LIFT or not self._jr_at(b):
                         continue            # (an inferred lift of JUNCTION_MIN_LIFT or more over a freeway only)
                     lift = min(float(got[0]), APPROACH_MAX_LIFT)
-                    run = float(np.clip(lift * math.pi / (2 * APPROACH_GRADE), APPROACH_MIN_RUN, APPROACH_MAX_RUN))
                     for line, _half in got[2]:
                         ln = np.asarray(line, np.float64)[:, :2]
                         if len(ln) < 2:
@@ -3239,14 +3309,28 @@ class _Planner:
                         L = float(np.hypot(*np.diff(ln, axis=0).T).sum())
                         if L > JUNCTION_STUB_M or np.hypot(*(far - e[:2])) > JUNCTION_ZONE_M:
                             continue
-                        v = lift * 0.5 * (1.0 + math.cos(math.pi * min(L / run, 1.0)))
-                        if v >= APPROACH_MIN_LIFT:
-                            log.debug("grading: junction at %s: %.1f m from the abutment at %s (lift %.1f, stub %.0f m)",
-                                      np.round(np.asarray(e, np.float64)[:2], 1), v, np.round(b, 1), lift, L)
-                        if v >= APPROACH_MIN_LIFT and (res is None or v > res[0]):
-                            res = (v, [o for o in got[1] if float(roadsmod._seg_dist(np.asarray(e, np.float64)[None, :2],
-                                       np.asarray(o[0], np.float64)[:-1, :2], np.asarray(o[0], np.float64)[1:, :2]).min())
-                                       > o[1] + APPROACH_TOUCH_M])
+                        found.append((lift, L, far, b, got))
+                if found:
+                    e2 = np.asarray(e, np.float64)[:2]
+                    nf = len(found)
+                    zg = self._z_raw(np.array([f[2] for f in found] + [f[3] for f in found] + [e2], np.float64))
+                    zf, zb, ze = (zg[:nf], zg[nf:2 * nf], float(zg[-1])) if JR_FILL else \
+                        (np.zeros(nf), np.zeros(nf), 0.0)
+                    import fast
+                    best = fast._ef.junction_arm_raise(np.array([f[0] for f in found], np.float64),
+                                                       np.array([f[1] for f in found], np.float64),
+                                                       np.ascontiguousarray(zb, np.float64),
+                                                       np.ascontiguousarray(zf, np.float64), ze, float(APPROACH_GRADE),
+                                                       float(APPROACH_MIN_RUN), float(APPROACH_MAX_RUN),
+                                                       float(APPROACH_MIN_LIFT))
+                    if best is not None:
+                        v, n = best
+                        lift, L, _far, b, got = found[n]
+                        log.debug("grading: junction at %s: %.1f m from the abutment at %s (lift %.1f, stub %.0f m)",
+                                  np.round(e2, 1), v, np.round(b, 1), lift, L)
+                        res = (v, [o for o in got[1] if float(roadsmod._seg_dist(e2[None], np.asarray(o[0], np.float64)
+                                                                                 [:-1, :2], np.asarray(o[0], np.float64)
+                                                                                 [1:, :2]).min()) > o[1] + APPROACH_TOUCH_M])
         except Exception as ex:     # no junction raise rather than no grading
             log.debug("grading: junction lift at %s: %s: %s", k, type(ex).__name__, ex)
             res = None
@@ -3282,20 +3366,18 @@ class _Planner:
             if UNDER_DECK_ON:               # (every deck, for the ground under it: _under_ground)
                 over += [(line, half) for line, half in zip(c["bridges"], c.get("bridge_half", ())) if half > 0]
                 over += [(line, railwaysmod.DECK_HALF_M) for line in c.get("rail_bridges", ())]
-            for j, (line, cls) in enumerate(zip(c["bridges"], c.get("bridge_cls", [None] * len(c["bridges"])))):
+            for line, cls in zip(c["bridges"], c.get("bridge_cls", [None] * len(c["bridges"]))):
                 if cls is None:
                     continue
                 if not (UNDER_ANY_ON or cls in APPROACH_SKIP or cls.endswith("_link")):
                     continue
-                levels = c.get("bridge_levels", [1.0] * len(c["bridges"]))
-                bridges.append((line, cls in APPROACH_SKIP, False, levels[j]))
+                bridges.append((line, cls in APPROACH_SKIP, False))     # (a link's "<cls>_link": raised)
             # (a line's deck: never raised; straight between its ends whatever its length or what it joins, as
             # railways.deck_heights lays it: no single-span test)
-            bridges += [(line, True, True, 0.0) for line in c.get("rail_bridges", ())]
+            bridges += [(line, True, True) for line in c.get("rail_bridges", ())]
             gl, gi = c["ground"], c["ground_ids"]
             for n_ in np.flatnonzero(_boxes_meet(c["ground_box"], lo, hi)).tolist():
                 (line, _h, cls), (fid, j, sg, med) = gl[n_], gi[n_]
-
                 if cls in UNGRADED or len(line) < 2:
                     continue
                 got = ground.get((fid, j))      # (the longest copy of a part, as each cell has it)
@@ -3309,27 +3391,26 @@ class _Planner:
         if len(bridges) > 1:
             import fast
             fast.require(175, "lines_covered")
-            bl = [np.ascontiguousarray(np.asarray(b, f64)[:, :2]) for b, _f, _r, _lv in bridges]
+            bl = [np.ascontiguousarray(np.asarray(b, f64)[:, :2]) for b, _f, _r in bridges]
             cov = fast._ef.lines_covered(np.concatenate(bl), np.r_[0, np.cumsum([len(b) for b in bl])].astype(
-                np.int64), np.array([2 * int(f) + int(r) for _b, f, r, _lv in bridges], np.int64), UNDER_COVER_M)
+                np.int64), np.array([2 * int(f) + int(r) for _b, f, r in bridges], np.int64), UNDER_COVER_M)
             bridges = [t for t, c in zip(bridges, cov) if not c]
         uniq, seen = [], set()
-        for b, fixed, rail, level in bridges:
-            shape = np.round(np.asarray(b, f64)[:, :2], 3)
-            k2 = (min(shape.tobytes(), shape[::-1].tobytes()), fixed, rail, level)
+        for b, fixed, rail in bridges:
+            k2 = (round(float(b[0, 0]), 1), round(float(b[0, 1]), 1), round(float(b[-1, 0]), 1), len(b))
             if k2 not in seen:
                 seen.add(k2)
-                uniq.append((b, fixed, rail, level))
+                uniq.append((b, fixed, rail))
         chained = set()
         if UNDER_CHAIN_ON:
-            n0 = [len(b) for b, _f, _r, _lv in uniq]
-            uniq = _merge_underpass_chains(uniq)
-            chained = {i for i, (b, _f, _r, _lv) in enumerate(uniq) if len(b) not in n0}
+            n0 = [len(b) for b, _f, _r in uniq]
+            uniq = _merge_span_chains(uniq)
+            chained = {i for i, (b, _f, _r) in enumerate(uniq) if len(b) not in n0}
         spans, rail_span = [], []
-        ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r, _lv in uniq], f64)
-        stub = np.array([float(np.hypot(*np.diff(b[:, :2], axis=0).T).sum()) < UNDER_STUB_M for b, _f, _r, _lv in uniq])
+        ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r in uniq], f64)        # (n, 2 ends, 2)
+        stub = np.array([float(np.hypot(*np.diff(b[:, :2], axis=0).T).sum()) < UNDER_STUB_M for b, _f, _r in uniq])
         coarse = self._coarse(key)      # (there the railway rises over the road: railways.coarse_underpasses)
-        for n, (b, fixed, rail, level) in enumerate(uniq):
+        for n, (b, fixed, rail) in enumerate(uniq):
             if rail and coarse:
                 continue
             L = float(np.hypot(*np.diff(b, axis=0).T).sum())
@@ -3341,7 +3422,6 @@ class _Planner:
                 continue
             d = np.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
             d[n] = np.inf                       # (another part's end within 0.75 m of either of its ends: joined)
-            d[np.array([lv != level or r != rail for _b, _f, r, lv in uniq])] = np.inf
             if UNDER_CHAIN_ON and L >= UNDER_STUB_M:
                 d[stub] = np.inf                # (a stub at its end, too short to span a road: no inner end)
             if rail or cw_deck or not (d < 0.75).any():
@@ -3397,7 +3477,12 @@ class _Planner:
                     deck = float(np.min(cz))
                 else:
                     ze = deck_ends(bi)
-                    deck = float(np.min(ze[0] + (ze[1] - ze[0]) * corridor / L))
+                    # (or higher where it climbs from its ends as the abutments' lifts were asked: bridge_lifts; the
+                    # straight line between its ends alone dug I-75 under SR 56's decks at Wesley Chapel, GitHub #1043)
+                    import fast
+                    deck = float(fast._ef.under_deck_reach(float(ze[0]), float(ze[1]), float(L), float(corridor[0]),
+                                                           float(corridor[1]), float(roadsmod.DECK_GRADE),
+                                                           float(APPROACH_FLAT_M), bool(UNDER_CLIMB and not rail)))
                     if UNDER_MEASURED_ON and not rail:
                         # (a measured deck stands where it was measured: an arched overpass's middle over its ends'
                         # straight line, which dug I-75 1.5 m down under the 108 m deck at Findlay, Ohio, flat in the
@@ -3681,13 +3766,13 @@ class _Planner:
         if got is not None:
             return got
         if not _xs.ON:
-            # Long highway spans and bridge-bearing urban through roads need
-            # a continuous road/deck solve. Ordinary streets and short highway
-            # structures keep their existing rules.
+            # The explicitly enabled bridge network handles highway spans and
+            # bridge-bearing through roads; other roads keep upstream rules.
             active = False
             for key in [home] + list(home.neighbours()):
                 c = self._cell_enu(key, ground=False)
-                if any(((cls in APPROACH_SKIP and UNDER_MAX_BRIDGE_M < roadsmod._length(line) <= 1000.)
+                if any((((cls in APPROACH_SKIP and UNDER_MAX_BRIDGE_M < roadsmod._length(line) <= 1000.
+                         or cls == "trunk" and 60. < roadsmod._length(line) <= UNDER_MAX_BRIDGE_M))
                         or (cls in ('primary', 'unclassified') and 60. < roadsmod._length(line) <= 1000.))
                        for line, cls in zip(c['bridges'], c.get('bridge_cls', ()))):
                     active = True
@@ -4337,6 +4422,19 @@ class _Planner:
                              else SLOPE_RUN)
             if a is not None:
                 best = max(best, float(a[-1] if at_end else a[0]))
+            if JR_CARRY and JUNCTION_RAISE_ON and JR_RAISE and best < lift:
+                # (its short approach's junction raised by another deck's: as high as that carries it, the approach
+                # climbing RAMP_GRADE at most from it: ramp_envelope)
+                ln = np.asarray(line, np.float64)[:, :2]
+                L = float(np.hypot(*np.diff(ln, axis=0).T).sum())
+                if L <= JUNCTION_STUB_M:
+                    far = ln[0] if at_end else ln[-1]
+                    jl = self._junction_lift(far, np.asarray(xy, np.float64)[:2])
+                    if jl is not None:
+                        zf, zb = self._z_raw(np.array([far, np.asarray(xy, np.float64)[:2]]))
+                        import fast
+                        best = fast._ef.stub_carried_raise(best, float(lift), float(zb), float(zf), float(jl[0]), L,
+                                                           float(RAMP_GRADE))
         return best
 
     def _end_filled(self, line, at_end):
@@ -4709,9 +4807,12 @@ class _Planner:
                                                   DECK_GROUND_T0_M, DECK_GROUND_T1_M, DECK_GROUND_MASK_M)
         a = 0
         got = {}
-        for k, (line, half), on in zip(todo, lines, active):
+        for k, (line, half), on, mo in zip(todo, lines, active, mask_of):
             if on:
-                got[k] = (line, half, np.array(rows[soff[a]:soff[a + 1]], np.float64))
+                r = np.array(rows[soff[a]:soff[a + 1]], np.float64)
+                if DECK_GROUND_ABUT_M > 0 and len(r):
+                    r[:, 5] *= deck_ground_abut_taper(line, r[:, 0], [masks[j][0] for j in mo])
+                got[k] = (line, half, r)
                 a += 1
             else:
                 got[k] = None
@@ -4880,26 +4981,11 @@ class _Planner:
         return tab
 
     def _end_lift_calc(self, xy):
-        got = self._end_lift_twins(xy, self._end_lift_raw(xy))
-        ends = self.__dict__.get("_short_approach_chains", {}).get(tuple(np.round(xy, 2)))
-        if got is None or ends is None or (len(got) > 4 and got[4] is not None):
-            return got
-        # A short span split into map features is still one bridge. If one approach is held down by the street
-        # grid, raising only the opposite end turns the deck into a ramp; let the underpass take the remainder.
-        capacity = []
-        for end in ends:
-            other = self._end_lift_twins(end, self._end_lift_raw(end))
-            if other is None or (len(other) > 4 and other[4] is not None):
-                return got
-            capacity.append(_approach_capacity(end, other))
-        lift = min(float(got[0]), *capacity)
-        return None if lift < APPROACH_MIN_LIFT else (lift,) + tuple(got[1:])
-
-    def _end_lift_twins(self, xy, got):
         """_end_lift_raw with the roads beside the ramp that lead onto another abutment near it, itself raised at least
         TWIN_SHARE as much, left out of its caps: the two rise together (a divided road's two carriageways onto their
         decks, side by side 10 m apart: each capped the other's ramp to nothing, both abutments 3.3 m under the decks'
         measured ends, Springfield's Old Keene Mill Road, 2026-10-31, approachlidar.py)."""
+        got = self._end_lift_raw(xy)
         if got is None or not TWIN_ON or not got[1]:
             return got
         cand = self._ends_near([xy], TWIN_M + APPROACH_TOUCH_M, APPROACH_TOUCH_M, TWIN_M)[0]
@@ -4934,6 +5020,7 @@ class _Planner:
             if not twin:
                 keep.append((line, half))
         return (got[0], keep) + tuple(got[2:])
+
 
     def _xsolve(self, bridge):
         """crossings.ON: the bridge (line (k, 2), a single span no other bridge part joins) and the roads under it
@@ -5129,16 +5216,7 @@ class _Planner:
         hit = np.flatnonzero(d <= APPROACH_TOUCH_M)
         if not len(hit):
             return None
-        # A short final span can put an internal joint and the real abutment within the touch radius.
-        # Taking the first hit selected the joint, which cannot be raised, and left the whole bridge low.
-        bridge = None
-        for j in hit[np.argsort(d[hit], kind="stable")]:
-            candidate = hc["bridges"][hc["end_of"][int(j)]]
-            if bridge_chain_ends_free(candidate, hc["bridges"], xy):
-                bridge = candidate
-                break
-        if bridge is None:
-            return None
+        bridge = hc["bridges"][hc["end_of"][int(hit[0])]]
         sol = self._xsolve(bridge) if XS_ON else None
         # the bridge's own cells (a few, it is short): the roads crossing under it and the parts it joins
         lam, lom, _ = self.frame.enu_to_geodetic(bridge[:, 0], bridge[:, 1], 0.0)
@@ -5151,11 +5229,6 @@ class _Planner:
         ground, others, approaches = [], [], []
         chain = bridge_chain(bridge, bridges)
         spans = [bridge] + chain        # (a road under any part of the chain is spanned, not beside the ramp: #138)
-        if chain:
-            path = _simple_bridge_path(spans)
-            if path is not None and roadsmod._length(path) <= UNDER_MAX_BRIDGE_M:
-                with self.lock:
-                    self.__dict__.setdefault("_short_approach_chains", {})[tuple(np.round(xy, 2))] = path[[0, -1]]
         if sol is not None:
             # (and under the decks beside it: a dual carriageway's other deck over the same road. The street passing
             # under Wezep's other A28 deck, 10 m off, capped this one's ramp at its abutment: the deck's end 1 m under
@@ -5560,7 +5633,8 @@ class _Planner:
                     pxy, pzz = np.r_[p[None], xy[m]], np.r_[pz, z[m]]
                 if len(pxy) >= 2:
                     mp = Plan(pxy, pzz, hw)
-                    mp.rank = grade_rank(spec)
+                    mp.rank = GRADE_RANK_NONE    # (no grade rank: PR #1050's rank rule pulled the road over a
+                    # portal 1.3-1.9 m down to the floor beside the covered zone, a 2.3 m step: Norway #1137)
                     out.append((fid + TUNNEL_TAG + ("m0" if at_start else "m1"), mp))
         return out
 
@@ -6132,6 +6206,81 @@ def rail_plan(fid, xy, z):
     return p
 
 
+def deck_ground_abut_taper(line, s, others, fade=None, joint=None):
+    """(m,) factors of a deck's ground correction at its stations' arcs s (DECK_GROUND_*): 0 at an end no other deck
+    goes on from (others: their lines (k, 2+); an abutment: no line within DECK_GROUND_JOINT_M of the point
+    DECK_GROUND_JOINT_M + 2 m on past the end), rising smoothly to 1 over DECK_GROUND_ABUT_M into the deck; 1 all along
+    between two joints. (Another copy of the same deck, or a twin carriageway's beside it, does not go on.) Pure."""
+    fade = DECK_GROUND_ABUT_M if fade is None else fade
+    joint = DECK_GROUND_JOINT_M if joint is None else joint
+    s = np.asarray(s, np.float64)
+    out = np.ones(len(s))
+    line = np.asarray(line, np.float64)[:, :2]
+    seg = np.hypot(*np.diff(line, axis=0).T)
+    if fade <= 0 or len(line) < 2 or not (seg > 1e-9).any():
+        return out
+    length = float(seg.sum())
+    k0, k1 = int(np.argmax(seg > 1e-9)), len(seg) - 1 - int(np.argmax(seg[::-1] > 1e-9))
+    for end, out_dir, d in ((line[0], (line[0] - line[k0 + 1]) / seg[k0], s),
+                            (line[-1], (line[-1] - line[k1]) / seg[k1], length - s)):
+        probe = end + out_dir * (joint + 2.0)
+        free = True
+        for o in others:
+            o = np.asarray(o, np.float64)[:, :2]
+            if len(o) < 2:
+                continue
+            a0, a1 = o[:-1], o[1:]
+            ab = a1 - a0
+            t = np.clip(((probe - a0) * ab).sum(1) / np.maximum((ab ** 2).sum(1), 1e-12), 0.0, 1.0)
+            if float(np.hypot(*(a0 + t[:, None] * ab - probe).T).min()) < joint:
+                free = False
+                break
+        if free:
+            x = np.clip(d / fade, 0.0, 1.0)
+            out *= x * x * (3.0 - 2.0 * x)
+    return out
+
+
+def rail_yield_pieces(xy, z, roads_, half):
+    """[(xy (k, 2), z (k,))]: the pieces of a rail bed line (xy, bed heights z) outside every road of roads_ ([(xy, z,
+    carriageway half width)]) it meets at grade (its bed within railways.CROSSING_DZ of the road's plan): the stretches
+    on a carriageway (+ RAIL_YIELD_PAD_M) cut out and RAIL_YIELD_PAD_M + half (the bed plan's core round its cut end)
+    further along the line (RAIL_YIELD_ON). A track beside a road, or in a motorway's median, keeps its bed. The line as
+    it is ([(xy, z)]) when it meets none. Pure."""
+    import railways
+    xy = np.asarray(xy, np.float64)[:, :2]
+    z = np.asarray(z, np.float64)
+    if not RAIL_YIELD_ON or not roads_ or len(xy) < 2:
+        return [(xy, z)]
+    reach = RAIL_YIELD_PAD_M - railways.CROSSING_PAD_M
+    lo, hi = xy.min(0) - 30.0, xy.max(0) + 30.0
+    crossers = []
+    for rxy, rz, rh in roads_:
+        r = np.asarray(rxy, np.float64)[:, :2]
+        if len(r) < 2 or (r.max(0) < lo).any() or (r.min(0) > hi).any():
+            continue
+        crossers.append((r, float(rh) + reach, np.asarray(rz, np.float64)[:len(r)]))
+    if not crossers:
+        return [(xy, z)]
+    pts, s = resample(xy, RAIL_YIELD_STEP_M)
+    s0 = railways._arc(xy)
+    zz = np.interp(s, s0, z)
+    blk = railways._blocked(pts, zz, crossers)
+    if not blk.any():
+        return [(xy, z)]
+    grow = half + RAIL_YIELD_PAD_M       # (along the line past the carriageway: the cut piece's round end clears it)
+    sb = s[blk]
+    near = np.abs(s[:, None] - sb[None, :]).min(axis=1) <= grow + 1e-9
+    blk = blk | near
+    out = []
+    keep = ~blk
+    idx = np.flatnonzero(np.diff(np.concatenate([[0], keep.astype(np.int8), [0]])))
+    for a, b in zip(idx[::2], idx[1::2]):
+        if b - a >= 2:
+            out.append((pts[a:b].copy(), zz[a:b].copy()))
+    return out
+
+
 def merge_plan_set(plans):
     """A plan set's merge as _Planner._plan_set makes it, in one Rust call (planset::plan_merge, one reading of the
     plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
@@ -6308,77 +6457,6 @@ def grade_points(px, py, base, plans, lift=0.0):
                                  np.ascontiguousarray(ABD, f64))
 
 
-def _simple_bridge_path(lines):
-    """Join a non-branching bridge chain, independent of feature direction and duplicate map-cell copies."""
-    unique, seen = [], set()
-    for line in lines:
-        line = np.asarray(line, np.float64)[:, :2]
-        if len(line) < 2:
-            continue
-        key = min(np.round(line, 3).tobytes(), np.round(line[::-1], 3).tobytes())
-        if key not in seen:
-            seen.add(key)
-            unique.append(line)
-    if not unique:
-        return None
-    nodes, edges, adj = roadsmod._chain_graph(unique)
-    free = [i for i, links in enumerate(adj) if len(links) == 1]
-    if len(free) != 2 or any(len(links) > 2 for links in adj):
-        return None
-    at = min(free, key=lambda i: tuple(nodes[i]))
-    used, pieces = set(), []
-    while len(used) < len(edges):
-        choices = [(i, a, b) for i, (a, b, _s) in enumerate(edges) if i not in used and at in (a, b)]
-        if len(choices) != 1:
-            return None
-        i, a, b = choices[0]
-        part = unique[i] if at == a else unique[i][::-1]
-        if pieces and np.linalg.norm(pieces[-1][-1] - part[0]) < 1e-6:
-            part = part[1:]
-        pieces.append(part)
-        used.add(i)
-        at = b if at == a else a
-    return np.vstack(pieces)
-
-
-def _merge_underpass_chains(records):
-    """Treat short road decks split into map features as one span; keep forks, levels and railway spans separate."""
-    out = [r for r in records if r[2]]
-    for level in sorted({r[3] for r in records if not r[2]}):
-        rows = [r for r in records if not r[2] and r[3] == level]
-        _nodes, edges, _adj = roadsmod._chain_graph([r[0] for r in rows])
-        incident = {}
-        for i, (a, b, _s) in enumerate(edges):
-            incident.setdefault(a, []).append(i)
-            incident.setdefault(b, []).append(i)
-        seen = set()
-        for start in range(len(rows)):
-            if start in seen:
-                continue
-            component, todo = [], [start]
-            while todo:
-                i = todo.pop()
-                if i in seen:
-                    continue
-                seen.add(i)
-                component.append(rows[i])
-                a, b, _s = edges[i]
-                todo.extend(incident[a] + incident[b])
-            path = _simple_bridge_path([r[0] for r in component]) if len({r[1] for r in component}) == 1 else None
-            out.extend(component if path is None else [(path, component[0][1], False, level)])
-    return out
-
-
-def _approach_capacity(xy, got):
-    """The lift an end's actual approach geometry can carry, rather than the requested headroom lift."""
-    side = MEASURED_SIDE_RUN if (len(got) > 4 and got[4] is not None) or (len(got) > 6 and got[5]) else SLOPE_RUN
-    best = 0.0
-    for line, half in got[2]:
-        at_end = np.linalg.norm(line[-1] - xy) <= np.linalg.norm(line[0] - xy)
-        addition = approach_add(line, at_end, got[0], half, got[1], side)
-        if addition is not None:
-            best = max(best, float(addition[-1 if at_end else 0]))
-    return best
 def _line_boxes(lines):
     """(n, 4): each line's (k >= 1, 2+) [min e, min n, max e, max n]."""
     if not lines:
@@ -6392,8 +6470,6 @@ def _boxes_meet(boxes, lo, hi):
     """(n,) bool: boxes (n, 4) (_line_boxes) not wholly below lo (2,) nor above hi (2,) on either axis: the lines whose
     `not ((line.max(0) < lo).any() or (line.min(0) > hi).any())`."""
     return ~((boxes[:, 2] < lo[0]) | (boxes[:, 3] < lo[1]) | (boxes[:, 0] > hi[0]) | (boxes[:, 1] > hi[1]))
-
-
 
 def bridge_chain(line, all_bridges):
     """The bridge parts joined to line through their ends (within 0.75 m), line itself excluded. Pure."""
@@ -6956,6 +7032,67 @@ def ramp_envelope(plans, specs, seeds, held=(), floor=None):
             plans[i] = (plans[i][0], np_)
 
 
+def _corridor_key(p, spec, fid):
+    """share_corridors' who-holds key of a plan: -1 out of it (no road carriageway, a tunnel's own plan); a road dipped
+    under a deck holds over every other; then a through road over a slip road (Overture's link subclass, a _link
+    class), then grade_rank."""
+    if spec is None or len(p.xy) < 2 or p.road_half < CORRIDOR_MIN_RH or TUNNEL_TAG in str(fid):
+        return -1
+    if getattr(p, "rank", GRADE_RANK_NONE) == GRADE_RANK_NONE:
+        return 10 ** 6
+    link = bool(getattr(spec, "link", False)) or (spec.cls or "").endswith("_link")
+    return int(grade_rank(spec)) + (0 if link else CORRIDOR_THROUGH)
+
+
+def _wall_vertices(p):
+    """(n,) bool: a vertex of Plan p beside a cutting's wall (its cut, either side, on a segment it ends)."""
+    n = len(p.xy)
+    out = np.zeros(n, bool)
+    cut = getattr(p, "cut", None)
+    if cut is None or n < 2:
+        return out
+    c = np.asarray(cut, np.float64).reshape(-1, 6)
+    if len(c) != n - 1:
+        return out
+    seg = np.isfinite(c[:, 0]) | np.isfinite(c[:, 3])
+    out[:-1] |= seg
+    out[1:] |= seg
+    return out
+
+
+def share_corridors(plans, specs):
+    """Roads whose carriageways touch or overlap side by side agree in height there: the difference left between two is
+    what their gap holds at CORRIDOR_BANK, none where the pavements overlap. A road dipped under a deck holds and the
+    other follows (the dip carried onto the ramp beside it), a through road holds over a slip road, a higher grade_rank
+    over a lower; of two equal slip roads the lower rises, two through roads (a dual carriageway's halves, one dipped)
+    keep their own. Not beside a cutting's wall (two levels). Each plan's corrections eased along it on a smoothing
+    spline, its ends and its bridge ends held (native/earthfast corridor.rs). Two branches leaving a fork at a few degrees each
+    climbed or fell on their own while their pavements still overlapped, and the blend gave the overlap to one: a
+    0.4-0.8 m ramp across the lanes within 3 m (GitHub #1043 Wesley Chapel, #1045 Findlay's diverging diamond). plans
+    [(fid, Plan)] in place; specs: their Specs. Returns how many changed."""
+    if not plans:
+        return 0
+    import fast
+    fast.require(234, "plan_share_corridors")
+    ps = [p for _f, p in plans]
+    xy, off, z = _plan_lines(ps)
+    rh = np.array([float(p.road_half) for p in ps], np.float64)
+    key = np.array([_corridor_key(p, sp, f) for (f, p), sp in zip(plans, specs)], np.int64)
+    if (key >= 0).sum() < 2:
+        return 0
+    abut = np.array([p.abut for p in ps], bool).reshape(-1, 2)
+    wall = np.concatenate([_wall_vertices(p) for p in ps]) if ps else np.zeros(0, bool)
+    zn, changed = fast._ef.plan_share_corridors(xy, off, z, wall, rh, key, abut, float(CORRIDOR_ANG_DEG),
+                                                float(CORRIDOR_BANK), float(CORRIDOR_GAP_M),
+                                                float(CORRIDOR_MAX_DIFF_M), float(CORRIDOR_ABUT_HOLD_M),
+                                                float(CORRIDOR_WREQ), float(CORRIDOR_W0), float(CORRIDOR_LAM),
+                                                CORRIDOR_THROUGH)
+    idx = np.flatnonzero(changed).tolist()
+    for i in idx:
+        plans[i] = (plans[i][0], _replan(ps[i], ps[i].xy, zn[off[i]:off[i + 1]].copy(), cut=True))
+    return len(idx)
+
+
 def weld_continuations(plans, specs=None):
     """One road planned in pieces (an OSM way cut at its side roads) meets itself at one height at each shared end:
     the higher end's, eased over WELD_TAPER_M along the lower piece. The pieces of a primary 10-26 cm apart made a
@@ -6984,49 +7121,26 @@ TRIM_SIDE_MOUTHS_ON = os.environ.get("BNE_TRIM_SIDE_MOUTHS", "on") != "off"
 TRIM_RAMP_M = 20.0          # m from the main's painted edge a trimmed side road eases to its own profile
 
 
-def approach_add(xy, at_end, lift, half, others=(), side_run=None, grade=None):
+def approach_add(xy, at_end, lift, half, others=(), side_run=None, grade=None, fill_z=None):
     """m to add to a road plan's vertices (xy (n, 2)) rising to `lift` at its first (at_end False) or last vertex (a
     bridge's abutment), falling off along the road (arc length) on a cosine ramp whose steepest grade is APPROACH_GRADE;
     at most what keeps the fill slope (side_run x the height out, SLOPE_RUN by default) clear of the other roads
-    [(line (k, 2), half width)] beside it, with APPROACH_GAP_M to spare. None when nothing is raised. Pure."""
+    [(line (k, 2), half width)] beside it, with APPROACH_GAP_M to spare. fill_z (the plan's heights): less by what the
+    road climbs above its raised end (a ramp's surface, not an offset). None when nothing is raised. earthfast
+    approach_add (approach.rs). Pure."""
+    import fast
+    fast.require(236, "approach_add")
     side_run = SLOPE_RUN if side_run is None else side_run
-    xy = np.asarray(xy, np.float64)[:, :2]
-    if len(xy) < 2 or lift < APPROACH_MIN_LIFT:
-        return None
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
-    d = (s[-1] - s) if at_end else s
-    run = float(np.clip(lift * math.pi / (2 * (grade or APPROACH_GRADE)), APPROACH_MIN_RUN,
-                        APPROACH_MAX_RUN * (APPROACH_GRADE / grade if grade else 1.0)))
-    u = np.clip(d / run, 0.0, 1.0)
-    add = lift * 0.5 * (1.0 + np.cos(math.pi * u))
-    on = add > 1e-3
-    if not on.any():
-        return None
-    q0 = xy[on]
-    lo_q, hi_q = q0.min(0), q0.max(0)
-    for line, oh in others:
-        line = np.asarray(line, np.float64)[:, :2]
-        if len(line) < 2:
-            continue
-        reach = half + oh + APPROACH_GAP_M + side_run * lift
-        if (line.max(0) < lo_q - reach).any() or (line.min(0) > hi_q + reach).any():
-            continue                    # too far to matter
-        q = xy[on]
-        a, b = line[:-1], line[1:]
-        ab = b - a
-        L2 = np.maximum((ab * ab).sum(1), 1e-12)
-        t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
-        dist = np.hypot(*(q[:, None, :] - (a[None] + t[..., None] * ab[None])).transpose(2, 0, 1)).min(1)
-        cap = np.maximum(0.0, (dist - half - oh - APPROACH_GAP_M) / max(side_run, 1e-6))
-        add[on] = np.minimum(add[on], cap)
-    # a cap lowers the ramp before it at APPROACH_CAP_GRADE at most, instead of a step at the cap
-    for i in range(1, len(add)):
-        add[i] = min(add[i], add[i - 1] + APPROACH_CAP_GRADE * (s[i] - s[i - 1]))
-    for i in range(len(add) - 2, -1, -1):
-        add[i] = min(add[i], add[i + 1] + APPROACH_CAP_GRADE * (s[i + 1] - s[i]))
-    if add.max() < 1e-3:
-        return None
-    return add
+    xy = np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2])
+    lines = [np.asarray(line, np.float64)[:, :2] for line, _oh in others]
+    oxy = np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64)
+    ooff = np.r_[0, np.cumsum([len(ln) for ln in lines])].astype(np.int64)
+    ohalf = np.array([float(oh) for _line, oh in others], np.float64)
+    fz = np.zeros(0) if fill_z is None else np.ascontiguousarray(np.asarray(fill_z, np.float64))
+    return fast._ef.approach_add(xy, bool(at_end), float(lift), float(half), oxy, ooff, ohalf, float(side_run),
+                                 float(grade or 0.0), float(APPROACH_MIN_LIFT), float(APPROACH_GRADE),
+                                 float(APPROACH_MIN_RUN), float(APPROACH_MAX_RUN), float(APPROACH_GAP_M),
+                                 float(APPROACH_CAP_GRADE), fz)
 
 
 def _is_link(spec):

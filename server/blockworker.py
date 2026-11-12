@@ -19,6 +19,7 @@ import math
 import logging
 import os
 import queue
+import sys
 import threading
 import time
 
@@ -123,6 +124,8 @@ class _State:
         import roads as _roads
         budget.register_shed(_roads.clear_facts_memory)
         budget.register_shed(self._clear_chunks)
+        import rangeread            # (the remote files' block LRU, up to rangeread.MEM_BYTES: kept by a shed before)
+        budget.register_shed(rangeread.clear_memory)
 
     def _clear_chunks(self):
         with self.lock:
@@ -219,6 +222,95 @@ def _trace_memory(every_s=60.0, top=10):
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
 
+def held_memory(roots, min_mb=2.0, exclude=()):
+    """[(MB, name)] of the numpy arrays and bytes reachable from each (name, object) of roots, each object counted for
+    the first root that reaches it, biggest first, those of at least min_mb (BNGE_MEMATTR_S; also tests). exclude:
+    objects never walked into (the server's own: its attributes' bound methods lead back to all of it)."""
+    import gc
+    import numpy as np
+    seen, out = {id(o) for o in exclude}, []
+    skip = (str, int, float, bool, type(None))
+    for name, root in roots:
+        tot, stack = 0, [root]
+        while stack:
+            o = stack.pop()
+            if id(o) in seen:
+                continue
+            seen.add(id(o))
+            if isinstance(o, np.ndarray):
+                if o.base is None:
+                    tot += o.nbytes
+                else:
+                    stack.append(o.base)
+                continue
+            if isinstance(o, (bytes, bytearray)):
+                tot += len(o)
+                continue
+            if isinstance(o, skip) or isinstance(o, type) or callable(o) and not hasattr(o, "__dict__"):
+                continue
+            if type(o).__name__ == "module":
+                continue
+            stack.extend(gc.get_referents(o))
+        if tot >= min_mb * 2 ** 20:
+            out.append((round(tot / 2 ** 20, 1), name))
+    return sorted(out, reverse=True)
+
+
+def _mallinfo():
+    """glibc's malloc in this process (Linux; BNGE_MEMATTR_S): "malloc N MB in use, F free, M mmapped", or "": the
+    native allocations tracemalloc never sees (the Rust module's, the C libraries') against what Python holds."""
+    try:
+        import ctypes
+
+        class MI2(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_size_t) for n in ("arena", "ordblks", "smblks", "hblks", "hblkhd", "usmblks",
+                                                       "fsmblks", "uordblks", "fordblks", "keepcost")]
+        libc = ctypes.CDLL("libc.so.6")
+        libc.mallinfo2.restype = MI2
+        m = libc.mallinfo2()
+        return (f"malloc {(m.uordblks + m.hblkhd) / 2 ** 20:.0f} MB in use, {m.fordblks / 2 ** 20:.0f} free, "
+                f"{m.hblkhd / 2 ** 20:.0f} mmapped")
+    except Exception:
+        return ""
+
+
+def _memattr_loop(every_s, extra_roots=None, exclude=()):
+    """BNGE_MEMATTR_S=s (debug, no tracemalloc: cheap enough for a drive): every s this worker's memory and which of
+    its state's attributes and its modules' dicts hold the most array memory (held_memory). extra_roots: () -> [(name,
+    object)] more roots (the server's own process: its Server's attributes, earthd main_async)."""
+    def loop():
+        log = logging.getLogger("earthd.worker")
+        here = os.path.dirname(os.path.abspath(__file__))
+        while True:
+            time.sleep(every_s)
+            try:
+                import budget
+                roots = [(f"_s.{k}", v) for k, v in list(vars(_s).items())] if _s is not None else []
+                if extra_roots is not None:
+                    roots += extra_roots()
+                # (objects one level down: "server.dem._lru", not all of server.dem)
+                deep = []
+                for name, v in roots:
+                    d = getattr(v, "__dict__", None)
+                    if isinstance(d, dict) and not isinstance(v, type) and type(v).__name__ != "module":
+                        deep += [(f"{name}.{k}", x) for k, x in list(d.items())]
+                    else:
+                        deep.append((name, v))
+                roots = deep
+                for mname, mod in list(sys.modules.items()):
+                    if (getattr(mod, "__file__", "") or "").startswith(here):
+                        roots += [(f"{mname}.{k}", v) for k, v in list(vars(mod).items())
+                                  if isinstance(v, (dict, list, set, collections.OrderedDict)) and v]
+                t0 = time.perf_counter()
+                got = held_memory(roots, exclude=exclude)
+                log.info("memory pid %d: %.0f MB (%.0f private, %s); held arrays: %s (%.1f s)", os.getpid(),
+                         budget.memory_mb() or 0, budget.memory_mb(private=True) or 0, _mallinfo(),
+                         "; ".join(f"{n} {mb:.0f}" for mb, n in got[:12]), time.perf_counter() - t0)
+            except Exception as e:
+                log.info("memory attribution: %s: %s", type(e).__name__, e)
+    threading.Thread(target=loop, daemon=True, name="mem-attr").start()
+
+
 def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_level=logging.INFO, airports=False,
          sea=False, nice=0, roads_in_ground=None, gas_stations=False):
     """nice: this worker's niceness on top of the server's (earthd NICE_*): the terrain blocks' workers keep the
@@ -240,6 +332,8 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     budget.apply()              # (this process's caches: smaller on a small machine)
     if os.environ.get("BNGE_TRACEMALLOC"):      # debug: this worker's memory (earthd's trace_mem)
         _trace_memory()
+    if os.environ.get("BNGE_MEMATTR_S"):        # debug: which caches hold this worker's arrays
+        _memattr_loop(float(os.environ["BNGE_MEMATTR_S"]))
     import sampler
     sampler.maybe_start(f".{os.getpid()}")      # BNGE_SAMPLE: this worker's own sampling profile (debugging)
     xproc.PRIORITY = nice
@@ -750,7 +844,9 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
-                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(de_junctions), *de)     # (the German junction parts last)
+                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat),
+                    *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
+                    bool(de_junctions), *de)     # (the German junction parts last)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), de_junctions=bool(de_junctions), towns_on=bool(towns_on), road_wear=roadwear.tier_of(wear),
@@ -769,6 +865,16 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
 
 def _md_versions():
     return _s.md.versions() if _s.md is not None else None
+
+
+def _surf_tags(frame, x0, y0, x1, y1):
+    """() or (tag,): the photo's road surface verdicts this run uses over the box (frame's metres) and round it
+    (roadsurf.area_tags): a cached road or far tile made with other road kinds is not this one."""
+    import roadsurf
+    if not roadsurf.ON:
+        return ()
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1], np.float64), np.array([y0, y1], np.float64), np.zeros(2))
+    return roadsurf.area_tags(float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))
 
 
 def roadsmod_tile_bbox(tx, ty):
@@ -1613,17 +1719,18 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     in use, designs.cache_parts over the content's reach in its own frame)."""
     import revisit
     import threedmr
+    import geotiles
+    z, gx, gy = geotiles.parse(key)
+    tile = geotiles.geobox(gx, gy, z)
     de = ()
     if de_junctions:
         import designs
-        import geotiles
-        z, gx, gy = geotiles.parse(key)
-        tile = geotiles.geobox(gx, gy, z)
         de = designs.cache_parts(True, tile.frame, designs.tile_reach(tile.box, GEO_SKIN_MARGIN_M))
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
                        pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
-                       bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), bool(de_junctions), *de)     # (the German junction parts last)
+                       bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]),
+                       bool(de_junctions), *de)     # (the German junction parts last)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
@@ -2907,6 +3014,13 @@ def _imagery(tex):
     return ims[key]
 
 
+def roadsurf_area(lat0, lon0, lat1, lon1):
+    """earthd._roadsurf_area here: the photo's verdicts on the untagged minor roads of the cells under the box
+    (roadsurf.measure_area, from the z17 tiles on the disk). Returns the cells measured."""
+    import roadsurf
+    return len(roadsurf.measure_area(getattr(_s, "md", None), lat0, lon0, lat1, lon1))
+
+
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
                quick=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
@@ -2997,10 +3111,14 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     built in this anchor's place before (and its texture) comes from the revisit cache."""
     import revisit
     mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
+    import surface as surfacemod
+    surf = ()           # (a near far tile has the roads painted into its photo: the photo's road surfaces in its key)
+    if tile.size / max(int(tex["px"]), 1) <= surfacemod.PHOTO_ROADS_MAX_TEXEL:
+        surf = _surf_tags(geodesy.EnuFrame(lat, lon), *tile.bbox)
     k = revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
                     mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
                     bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
-                    *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()))
+                    *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()), *surf)
     got = revisit.load(_s.cache_dir, "far", k)
     quick = bool(tex.get("quick"))      # (the 3D map's quick render: never kept, its sharper one comes later)
     if got is not None:

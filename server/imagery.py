@@ -49,7 +49,7 @@ import struct
 import threading
 from collections import OrderedDict
 from runtimeprofiler import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dc_replace
 
 import numpy as np
 
@@ -142,7 +142,8 @@ class Source:
 
 SOURCES = {
     "usgs": Source("usgs", "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
-                   16, "USGS The National Map (public domain)", probe_zooms=(10, 12), min_zoom=10),
+                   16, "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain)", probe_zooms=(10, 12),
+                   min_zoom=10),
     "eox2023": Source("eox2023", "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg",
                       14, "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified "
                           "Copernicus Sentinel data 2023), CC BY-NC-SA 4.0"),
@@ -158,7 +159,7 @@ SOURCES = {
 SOURCES["naip"] = Source(
     "naip", "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer/exportImage"
             "?bbox={bbox}&bboxSR=3857&imageSR=3857&size={size},{size}&format=jpg&f=image",
-    17, "USDA NAIP via USGS The National Map (public domain)", probe_zooms=(10, 12), min_zoom=17,
+    17, "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain)", probe_zooms=(10, 12), min_zoom=17,
     export=2, lazy=True, probe_source="usgs")
 # The same NAIP from USDA's own service: newer flights (2024-25, some states 0.3 m) and 2-5x faster
 # (1.6-4 s per 1024² in-game 2026-10-13 vs ~10 s), but blank in places (Maryland, Denver: black, so
@@ -187,10 +188,33 @@ import tilepack as tilepackmod  # noqa: E402
 # WorldCover's 2021 Sentinel-2 RGBNIR composite (CC BY 4.0), tone-mapped Web-Mercator JPEG tiles to z12 in packs of 8 x 8
 # (tools/build_s2_packs.py); the far rings everywhere, ahead of USGS / EOX, whose sharper tiles keep the nearer zooms
 CDN_BASE = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").rstrip("/")
+# Its finest zoom: 12 (JPEG packs) until the switch file raises it (cdn.chain: "max_zoom" 13, the WebP packs of 2026-11-11,
+# once the whole land is built); kept in the environment so the block workers (spawned) read the same
+S2_MAX_ZOOM_ENV = "BNGE_S2_MAX_ZOOM"
+S2_ZOOMS = (12, 14)                     # (the zooms a switch may set: built ones only)
+
+
+def _s2_zoom(z):
+    try:
+        return max(S2_ZOOMS[0], min(S2_ZOOMS[1], int(z)))
+    except (TypeError, ValueError):
+        return S2_ZOOMS[0]
+
+
 SOURCES["bngs2"] = Source(
-    "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", 12,
+    "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", _s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)),
     "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)",
-    pack=3, max_view_zoom=12)
+    pack=3, max_view_zoom=_s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)))
+
+
+def set_s2_max_zoom(z):
+    """bngs2's finest zoom (its max_zoom and max_view_zoom) from now on, in this process and the ones it spawns later
+    (call before any Imagery is made: an Imagery keeps the Source it was given)."""
+    z = _s2_zoom(z)
+    os.environ[S2_MAX_ZOOM_ENV] = str(z)
+    if SOURCES["bngs2"].max_zoom != z:
+        SOURCES["bngs2"] = dc_replace(SOURCES["bngs2"], max_zoom=z, max_view_zoom=z)
+    return SOURCES["bngs2"]
 # A state's tile cache serves the far rings from this zoom on; coarser rings (texels of ~15 m and more, kilometres
 # away) take USGS / Sentinel-2 (the user, 2026-10-22: "the world gen is really slow": Columbus's far field waited
 # 4 minutes on Ohio's cache at its 6 requests/s, ~1,000 tiles for the 2-4 km tiles: z15 / z14).  z16: L2 and nearer.

@@ -1,0 +1,191 @@
+[
+  {
+    "site": "torbole_adige_tunnel",
+    "previous_score": 0.13,
+    "score": 1.15,
+    "previous_steps": 1,
+    "steps": 3
+  },
+  {
+    "site": "riva_pontera_tunnel",
+    "previous_score": 22.73,
+    "score": 21.64,
+    "previous_steps": 52,
+    "steps": 48
+  },
+  {
+    "site": "riva_gardesana",
+    "previous_score": 23.19,
+    "score": 23.26,
+    "previous_steps": 18,
+    "steps": 18
+  },
+  {
+    "site": "casagranda_bridge",
+    "previous_score": 77.05,
+    "score": 45.88,
+    "previous_steps": 154,
+    "steps": 160
+  },
+  {
+    "site": "casagranda_portal",
+    "previous_score": 81.6,
+    "score": 42.52,
+    "previous_steps": 65,
+    "steps": 53
+  },
+  {
+    "site": "a5_underpass",
+    "previous_score": 20.99,
+    "score": 8.21,
+    "previous_steps": 34,
+    "steps": 26
+  },
+  {
+    "site": "compiegne_roundabout",
+    "previous_score": 80.9,
+    "score": 80.84,
+    "previous_steps": 146,
+    "steps": 143
+  },
+  {
+    "site": "perth_mount_henry_520",
+    "previous_score": 0,
+    "score": 0,
+    "previous_steps": 0,
+    "steps": 0
+  },
+  {
+    "site": "tamar_bridge_1112",
+    "previous_score": 73.63,
+    "score": 20.71,
+    "previous_steps": 126,
+    "steps": 46
+  },
+  {
+    "site": "vienna_suedtiroler_1083",
+    "previous_score": 136.88,
+    "score": 187.04,
+    "previous_steps": 175,
+    "steps": 196
+  },
+  {
+    "site": "vienna_s1_rautenweg_1083",
+    "previous_score": 215.75,
+    "score": 210.4,
+    "previous_steps": 159,
+    "steps": 156
+  },
+  {
+    "site": "vienna_s1_breitenleer_1083",
+    "previous_score": 98.56,
+    "score": 100.91,
+    "previous_steps": 204,
+    "steps": 186
+  },
+  {
+    "site": "vienna_a23_1083",
+    "previous_score": 40.44,
+    "score": 40.42,
+    "previous_steps": 143,
+    "steps": 145
+  },
+  {
+    "site": "vienna_kennedy_1083",
+    "previous_score": 47.75,
+    "score": 46.7,
+    "previous_steps": 169,
+    "steps": 155
+  },
+  {
+    "site": "vienna_mooslacken_1083",
+    "previous_score": 8.82,
+    "score": 8.65,
+    "previous_steps": 80,
+    "steps": 79
+  },
+  {
+    "site": "paris_maillot_1083",
+    "previous_score": 507.69,
+    "score": 348.24,
+    "previous_steps": 862,
+    "steps": 718
+  },
+  {
+    "site": "paris_maillot_ax_1083",
+    "previous_score": 147.15,
+    "score": 131.17,
+    "previous_steps": 279,
+    "steps": 270
+  },
+  {
+    "site": "dc_capitol_crossing_1083",
+    "previous_score": 51.42,
+    "score": 53.17,
+    "previous_steps": 173,
+    "steps": 158
+  },
+  {
+    "site": "a61_928",
+    "previous_score": 11.41,
+    "score": 15.21,
+    "previous_steps": 20,
+    "steps": 64
+  },
+  {
+    "site": "bologna_929",
+    "previous_score": 3.32,
+    "score": 1.74,
+    "previous_steps": 8,
+    "steps": 6
+  },
+  {
+    "site": "prague_924",
+    "previous_score": 49.91,
+    "score": 56.72,
+    "previous_steps": 88,
+    "steps": 96
+  },
+  {
+    "site": "a20_921",
+    "previous_score": 10.63,
+    "score": 10.66,
+    "previous_steps": 1,
+    "steps": 1
+  },
+  {
+    "site": "castlegar_939",
+    "previous_score": 13.15,
+    "score": 33.27,
+    "previous_steps": 15,
+    "steps": 147
+  },
+  {
+    "site": "silistra_936",
+    "previous_score": 1.49,
+    "score": 1.45,
+    "previous_steps": 1,
+    "steps": 1
+  },
+  {
+    "site": "italy_967",
+    "previous_score": 5.0,
+    "score": 2.5,
+    "previous_steps": 20,
+    "steps": 19
+  },
+  {
+    "site": "m1_ireland_960",
+    "previous_score": 74.01,
+    "score": 74.61,
+    "previous_steps": 181,
+    "steps": 176
+  },
+  {
+    "site": "perth_915",
+    "previous_score": 58.89,
+    "score": 58.89,
+    "previous_steps": 190,
+    "steps": 190
+  }
+]

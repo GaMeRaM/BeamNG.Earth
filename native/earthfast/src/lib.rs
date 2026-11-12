@@ -7,6 +7,7 @@ mod roofs;
 mod roofphoto;
 mod gravity;
 mod polyproject;
+mod lanesections;
 mod s3url;
 mod countrymap;
 mod carriageway_solver;
@@ -82,6 +83,8 @@ mod gsrows;
 mod places;
 mod planends;
 mod planset;
+mod corridor;
+mod approach;
 mod junctions;
 mod wallsindex;
 mod mappedlamps;
@@ -94,6 +97,10 @@ mod gradebins;
 mod l0roads;
 mod groundphoto;
 mod layerfold;
+mod roadsurf;
+mod levelways;
+mod meshtrim;
+mod shelterfit;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -4036,6 +4043,11 @@ fn over_tunnel(py: Python<'_>, mut mask: numpy::PyReadwriteArray1<'_, bool>, e: 
             sj[j + 1] = sj[j] + l2[j].sqrt();
         }
         let total = sj[k - 1];
+        // (the points by east: each segment visits only those within its box's east range, not every point; a
+        // rounded line has 2-4x the segments, 2026-11-12. The same mask: a point is in when any segment takes it.)
+        let mut order: Vec<usize> = (0..np_).filter(|&i| ev[i].is_finite() && nv[i].is_finite()).collect();
+        order.sort_by(|&p, &q| ev[p].total_cmp(&ev[q]));
+        let sorted_e: Vec<f64> = order.iter().map(|&i| ev[i]).collect();
         for j in 0..k - 1 {
             let (a0, a1, b0, b1) = (xv[[j, 0]], xv[[j, 1]], xv[[j + 1, 0]], xv[[j + 1, 1]]);
             if a0.min(b0) - hw > x1 || a0.max(b0) + hw < x0 || a1.min(b1) - hw > y1 || a1.max(b1) + hw < y0 {
@@ -4043,8 +4055,12 @@ fn over_tunnel(py: Python<'_>, mut mask: numpy::PyReadwriteArray1<'_, bool>, e: 
             }
             let (ab0, ab1) = (b0 - a0, b1 - a1);
             let len = l2[j].sqrt();
-            for i in 0..np_ {
-                if mv[i] {
+            let (lo_e, hi_e) = (a0.min(b0) - hw, a0.max(b0) + hw);
+            let (lo_n, hi_n) = (a1.min(b1) - hw, a1.max(b1) + hw);
+            let first = sorted_e.partition_point(|&x| x < lo_e);
+            let last = sorted_e.partition_point(|&x| x <= hi_e);
+            for &i in &order[first..last] {
+                if mv[i] || nv[i] < lo_n || nv[i] > hi_n {
                     continue;
                 }
                 let t = ((ev[i] - a0) * ab0 + (nv[i] - a1) * ab1) / l2[j];
@@ -5747,6 +5763,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f32, m)?)?;
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f64, m)?)?;
     m.add_function(wrap_pyfunction!(polyproject::polyline_project, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::geodesic_lengths, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::lane_runs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
@@ -5940,6 +5958,41 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
-    m.add("VERSION", 223)?;
+    // 230: road_smooth_g2 (roadsmooth.py: the roads curvature continuous, spirals into and out of the arcs; pins)
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_g2, m)?)?;
+    // 231: roadsurf (road_photo_surface: an untagged minor road's surface from the aerial's z17 tiles on the disk,
+    // against the same photo's mapped paved / unpaved roads, server/roadsurf.py); roadtone's tone rows may carry a
+    // kind's own sample luma cap and a light-pavement (concrete) band (paint_lines_toned / paint_cover_toned)
+    m.add_function(wrap_pyfunction!(roadsurf::road_photo_surface, m)?)?;
+    // 234: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
+    // side agree in height there, a smoothing spline along each; GitHub #1043, #1045)
+    m.add_function(wrap_pyfunction!(corridor::plan_share_corridors, m)?)?;
+    // 235: roadsmooth.smooth's layer steps (road_connector_pins, road_smooth_rebuild, road_smooth_fractions: its
+    // Python round the line kernels was most of the smoothing's CPU)
+    m.add_function(wrap_pyfunction!(roadsmooth::road_connector_pins, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_rebuild, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_fractions, m)?)?;
+    // (and lanesections.split's new layer: lane_split_coords / lane_split_rules)
+    m.add_function(wrap_pyfunction!(lanesections::lane_split_coords, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::lane_split_rules, m)?)?;
+    // (and levelways.promote: level_ways_promote)
+    m.add_function(wrap_pyfunction!(levelways::level_ways_promote, m)?)?;
+    // (and roadmesh's per-ribbon rounds: deck_trim_overlaps, keep_up_mask, shared_points)
+    m.add_function(wrap_pyfunction!(meshtrim::deck_trim_overlaps, m)?)?;
+    m.add_function(wrap_pyfunction!(meshtrim::keep_up_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(meshtrim::shared_points, m)?)?;
+    // (and shelters' carriageway tests: shelter_intrusion, shelter_worst_post)
+    m.add_function(wrap_pyfunction!(shelterfit::shelter_intrusion, m)?)?;
+    m.add_function(wrap_pyfunction!(shelterfit::shelter_worst_post, m)?)?;
+    m.add_function(wrap_pyfunction!(shelterfit::lines_point_min_dist, m)?)?;
+    // (and busstations.centroid's shoelace centroid: ring_centroid)
+    m.add_function(wrap_pyfunction!(stationgeom::ring_centroid, m)?)?;
+    // 236: approach (grading.approach_add ported, with fill_z: a raised junction's arms filled to a ramp surface, not
+    // offset over their own climb; junction_arm_raise, stub_carried_raise, under_deck_reach: GitHub #1043 Wesley Chapel)
+    m.add_function(wrap_pyfunction!(approach::approach_add, m)?)?;
+    m.add_function(wrap_pyfunction!(approach::junction_arm_raise, m)?)?;
+    m.add_function(wrap_pyfunction!(approach::stub_carried_raise, m)?)?;
+    m.add_function(wrap_pyfunction!(approach::under_deck_reach, m)?)?;
+    m.add("VERSION", 237)?;
     Ok(())
 }

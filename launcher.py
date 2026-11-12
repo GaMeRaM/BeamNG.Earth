@@ -135,6 +135,29 @@ def support_notice(multiplayer=False):
     _out("  " + "=" * 78)
 
 
+def memory_notice(notice=None):
+    """A computer with too little memory for the game (8 GB, 4 GB: server/budget.py's lean tiers, memory_notice): said
+    at every start, set apart, before anything else happens. It never stops the start. True when shown."""
+    import textwrap
+    if notice is None:
+        try:
+            sys.path.insert(0, os.path.join(ROOT, "server"))
+            import budget
+            notice = budget.memory_notice()
+        except Exception:           # (never in the way of a start)
+            return False
+    if not notice:
+        return False
+    head, text = notice
+    _out("")
+    _out("  " + "=" * 78)
+    _out(f"  {head}:")
+    for line in textwrap.wrap(text, 76):
+        _out(f"  {line}")
+    _out("  " + "=" * 78)
+    return True
+
+
 def problem(msg, hint=None):
     """Something that stops the start: set apart, with what to do about it."""
     import textwrap
@@ -1161,6 +1184,18 @@ MODS_OFF_LINES = ("Mods will be disabled after updating",       # (the first sta
 GAME_LOG_WATCH_S = 600       # s after the game's start the log is watched
 
 
+def clear_level_flag(user_dir):
+    """The engine patches' level flag (temp/beamngearth_gcpatch_on, groundcover.lua) removed before a fresh game start:
+    a game that crashed or was killed on the BeamNG.Earth map leaves it behind, and the patches would then run in the
+    menus and on other maps until the mod next loads and unloads our level."""
+    if not user_dir:
+        return
+    try:
+        os.remove(os.path.join(user_dir, "temp", "beamngearth_gcpatch_on"))
+    except OSError:
+        pass
+
+
 def watch_game_log(user_dir, since):
     """In the background: the game's log (written anew at each start) read for the mods-off line."""
     path = os.path.join(user_dir, "beamng.log")
@@ -1897,6 +1932,7 @@ def run(args):
     support_notice()
     if update_at_start(args):           # the new copy runs now (in its own window)
         return
+    memory_notice()                     # (8 GB or less: what to expect; never stops the start)
     wine = under_wine()
     build = "native"
     if args.user_dir:
@@ -2024,6 +2060,7 @@ def run(args):
         else:
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
+            clear_level_flag(user_dir)
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args)
         if IS_WIN and not args.no_gcpatch:
             # the Windows game's engine patches, written into its memory once it runs (enginepatch.py: dtsmooth; off

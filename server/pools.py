@@ -23,6 +23,19 @@ RESPAWN_S = 10.0
 QUEUED_POLL_S = 1.0
 
 
+def tasks_per_child_kw(n):
+    """Recycle queued work only on CPython versions with gh-115634 fixed.
+
+    Older executors can stop replacing a worker while jobs remain queued. Memory-based
+    pool rotation remains available there; packaged builds use patched Python 3.13.
+    """
+    version = sys.version_info
+    safe = version >= (3, 15) or ((3, 14, 7) <= version < (3, 15)) or ((3, 13, 15) <= version < (3, 14))
+    if not n or n <= 0 or not safe:
+        return {}
+    return {"max_tasks_per_child": int(n)}
+
+
 class Abandoned(Exception):
     """A queued job its caller no longer wants (result_running's abandon: a teleport left its place), cancelled."""
 
@@ -155,6 +168,10 @@ class RespawningPool:
         self._live_lock = threading.Lock()
         if hung_s:
             threading.Thread(target=self._watch, name=f"{name} watchdog", daemon=True).start()
+        # the memory watch (budget.ROTATE_MB: small machines): a worker over it has its pool rotated (rotate)
+        self.rotations = 0
+        self._last_rotate = time.monotonic()
+        threading.Thread(target=self._mem_watch, name=f"{name} memory", daemon=True).start()
 
     def submit(self, fn, *args, **kwargs):
         return self._submit(fn, args, kwargs, None)
@@ -354,7 +371,157 @@ class RespawningPool:
             pass
         return True
 
+    def _mem_watch(self):
+        """budget.ROTATE_MB's watch: every ROTATE_CHECK_S, the pool rotated when one of its processes is over it."""
+        import budget
+        while True:
+            time.sleep(budget.ROTATE_CHECK_S)
+            try:
+                self._mem_step(time.monotonic())
+            except Exception as e:      # (never let the watch die)
+                log.debug("%s memory watch: %s: %s", self.name, type(e).__name__, e)
+
+    def worker_mb(self):
+        """{pid: MB} of the current pool's processes (budget.process_mb; None where unreadable)."""
+        import budget
+        with self._lock:
+            pool = self._pool
+        return {pid: budget.process_mb(pid) for pid in list((getattr(pool, "_processes", None) or {}).keys())}
+
+    def _mem_step(self, now):
+        """One memory check at now (time.monotonic()): True when it rotated the pool."""
+        import budget
+        if budget.ROTATE_MB <= 0 or now - self._last_rotate < budget.ROTATE_MIN_S:
+            return False
+        mbs = [mb for mb in self.worker_mb().values() if mb is not None]
+        if not mbs or max(mbs) < budget.ROTATE_MB:
+            return False
+        if self.inflight > self.workers:
+            return False                    # (a backlog: it would run in the old processes beside the new ones)
+        return self.rotate(f"a process at {max(mbs):.0f} MB, over {budget.ROTATE_MB} MB", now)
+
+    def rotate(self, why, now=None):
+        """A fresh pool for the jobs from now on; the old one finishes what it was given (queued and running jobs: none
+        fails) and its processes exit after, giving their memory back (budget.ROTATE_MB). True when rotated."""
+        with self._lock:
+            old = self._pool
+            if getattr(old, "_broken", False):
+                return False                # (broken: _renew's to make again)
+            self._pool = ProcessPoolExecutor(*self._args, **self._kwargs)
+            self._last_rotate = time.monotonic() if now is None else now
+            self.rotations += 1
+        log.info("%s worker processes replaced (%s; %d so far): the old ones finish their jobs and exit",
+                 self.name, why, self.rotations)
+        try:
+            old.shutdown(wait=False, cancel_futures=False)
+        except Exception:
+            pass
+        return True
+
     def shutdown(self, *args, **kwargs):
         with self._lock:
             pool = self._pool
         return pool.shutdown(*args, **kwargs)
+
+
+# An ElasticPool's extra processes stop once none of them has had a job for this long (s). BNGE_POOL_EXTRA_IDLE_S=0:
+# kept for the session once started (how the far-tile pool's ten processes stayed from 1.9.0 on: GitHub #1114, #1026)
+EXTRA_IDLE_S = float(os.environ.get("BNGE_POOL_EXTRA_IDLE_S", "") or 60.0)
+REAP_CHECK_S = 5.0
+
+
+class ElasticPool:
+    """A RespawningPool of `base` processes kept for the session and, beside it, up to `extra` more started when every
+    base process has a job and stopped again once they idle for EXTRA_IDLE_S: the far-tile pool's 10 processes (the 3D
+    map, a teleport's loading boost; 3 at once while driving) all stayed for the session from the first boost on, each
+    with its own caches, a desktop's server at 21 processes and ~14 GB after four minutes of a fresh city (GitHub #1114:
+    "unplayable at 22 instances"; 2026-11-11). submit / shutdown / inflight / workers as a RespawningPool's."""
+
+    def __init__(self, name, base, extra, *args, idle_s=None, **kwargs):
+        self.name, self.base_n, self.extra_n = name, max(1, int(base)), max(0, int(extra))
+        self._args, self._kwargs = args, kwargs
+        self.base = RespawningPool(name, self.base_n, *args, **kwargs)
+        self.extra = None
+        self.workers = self.base_n + self.extra_n
+        self.idle_s = EXTRA_IDLE_S if idle_s is None else idle_s
+        self._lock = threading.Lock()
+        self._idle_since = None
+        self.extra_starts = self.extra_stops = 0
+        # want(): the jobs its caller runs at once now (earthd: Server.far_limit, 3 while driving, 10 with the 3D map
+        # open or the loading boost on): no extras while it is within the base. Without it a job finishing and the
+        # next submitted at once could find the base still counting the old one (its future's callbacks run after its
+        # waiter wakes) and start the extras while driving
+        self.want = None
+        if self.extra_n and self.idle_s > 0:
+            threading.Thread(target=self._reap_loop, name=f"{name} reaper", daemon=True).start()
+
+    @property
+    def inflight(self):
+        ex = self.extra
+        return self.base.inflight + (ex.inflight if ex is not None else 0)
+
+    @property
+    def respawns(self):
+        ex = self.extra
+        return self.base.respawns + (ex.respawns if ex is not None else 0)
+
+    def submit(self, fn, *args, **kwargs):
+        """To a base process while one is free of jobs (counted in flight: queued or running) or the caller wants no
+        more than the base at once (want), else to the extras (started now if they are not running)."""
+        if not self.extra_n or self.base.inflight < self.base_n or self._within_base():
+            return self.base.submit(fn, *args, **kwargs)
+        with self._lock:            # (the reaper stops them under it: never a submit to a pool shut down)
+            if self.extra is None:
+                self.extra = RespawningPool(self.name, self.extra_n, *self._args, **self._kwargs)
+                self.extra_starts += 1
+                log.info("%s: %d more processes for a burst (they stop after %.0f s without a job)", self.name,
+                         self.extra_n, self.idle_s)
+            self._idle_since = None
+            return self.extra.submit(fn, *args, **kwargs)
+
+    def _within_base(self):
+        want = self.want
+        if want is None:
+            return False
+        try:
+            return want() <= self.base_n
+        except Exception:
+            return False
+
+    def _reap_loop(self):
+        while True:
+            time.sleep(REAP_CHECK_S)
+            try:
+                self.reap_step(time.monotonic())
+            except Exception as e:      # (never let the reaper die)
+                log.debug("%s reaper: %s: %s", self.name, type(e).__name__, e)
+
+    def reap_step(self, now):
+        """The extras stopped when they have had no job in flight for idle_s up to now. True when stopped."""
+        with self._lock:
+            ex = self.extra
+            if ex is None or self.idle_s <= 0:
+                return False
+            if ex.inflight:
+                self._idle_since = None
+                return False
+            if self._idle_since is None:
+                self._idle_since = now
+                return False
+            if now - self._idle_since < self.idle_s:
+                return False
+            self.extra, self._idle_since = None, None
+            self.extra_stops += 1
+        try:
+            ex.shutdown(wait=False)
+        except Exception:
+            pass
+        log.info("%s: the %d burst processes stopped (idle %.0f s)", self.name, self.extra_n, self.idle_s)
+        return True
+
+    def shutdown(self, *args, **kwargs):
+        with self._lock:
+            ex, self.extra = self.extra, None
+        if ex is not None:
+            ex.shutdown(*args, **kwargs)
+        return self.base.shutdown(*args, **kwargs)

@@ -105,7 +105,7 @@ class RussianInfrastructure(unittest.TestCase):
         from PIL import Image
         table = roadsigns.tables()[0]
         ids = [r['id'] for r in table['roles']]
-        path = ROOT / 'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_ru.color.png'
+        path = ROOT / 'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_ru.color.dds'
         with Image.open(path) as img:
             def cell(name):
                 k=ids.index(name); x=k % table['cols']*256; y=k // table['cols']*256
