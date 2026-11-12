@@ -1170,7 +1170,10 @@ class NetworkImageryTest(unittest.TestCase):
 
     def test_open_ocean(self):
         rgb, used = self.render(30.0, -140.0, size=4096.0)
-        self.assertEqual(set(used), {"eox2016"})       # uniform deep blue from both EOX layers
+        # Live EOX coverage may select either vintage; verify an actual EOX
+        # ocean image, not an upstream service's current fallback choice.
+        self.assertTrue(used)
+        self.assertLessEqual(set(used), {"eox2016", "eox2023"})
         self.assertLess(rgb.reshape(-1, 3).std(0).max(), 2)
         self.assertGreater(int(rgb[..., 2].mean()), int(rgb[..., 0].mean()))
 
