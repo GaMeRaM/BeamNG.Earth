@@ -487,5 +487,18 @@ class EndsNearTest(unittest.TestCase):
         self.assertIsNone(g._ends_near([np.array([0.0, 0.0])], 100.0, 2.5, 100.0)[0])
 
 
+class SmoothedApproachFillTest(unittest.TestCase):
+    def test_fill_meets_a_climbing_road_without_a_sharp_sag(self):
+        x = np.arange(101., dtype=np.float64)
+        xy = np.c_[x, np.zeros_like(x)]
+        ground = 204.8 + .035 * x
+        fill = grading.approach_add(xy, False, 3.1, 4., side_run=2., grade=.05, fill_z=ground)
+        self.assertIsNotNone(fill)
+        self.assertAlmostEqual(float(fill[0]), 3.1, places=8)
+        surface = ground + fill
+        self.assertLess(float(np.max(np.abs(np.diff(surface, n=2)))), .01,
+                        'bridge approach must meet the climbing road with rounded curvature')
+
+
 if __name__ == "__main__":
     unittest.main()

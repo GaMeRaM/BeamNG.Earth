@@ -2172,5 +2172,18 @@ class GravelTest(unittest.TestCase):
             self.assertEqual(roads.road_specs(self.roads(4, "gravel"))[-1].kind, "paved")
 
 
+class DeckJointWeldTest(unittest.TestCase):
+    def test_branched_parts_share_height_without_moving_free_ends(self):
+        edges = [(0, 1, np.array([0., 50., 100.])), (1, 2, np.array([0., 50., 100.])),
+                 (1, 3, np.array([0., 50., 100.]))]
+        profiles = [np.array([9., 9.5, 10.]), np.array([11., 11., 11.]), np.array([10.5, 10., 9.])]
+        original = [z.copy() for z in profiles]
+        got = roads._weld(edges, profiles)
+        np.testing.assert_allclose([got[0][-1], got[1][0], got[2][0]], 11., atol=1e-9)
+        np.testing.assert_allclose([got[0][0], got[1][-1], got[2][-1]], [9., 11., 9.], atol=1e-9)
+        for a, b in zip(profiles, original):
+            np.testing.assert_array_equal(a, b)
+
+
 if __name__ == "__main__":
     unittest.main()
