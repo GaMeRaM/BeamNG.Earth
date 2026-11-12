@@ -251,13 +251,19 @@ class ServerHarness(unittest.TestCase):
         """The shown tiles tile the radius square exactly once (checked on 64 m cells), with all
         L0 under the blocks (4 x 4 L0 tiles under a 1 km block on the 256 m grid, 5 x 5 off it)."""
         tiles = {k: ff.tile_of(k) for k in far.keys(aid)}
-        c = cells(tiles, 64.0)
-        n = sum(int(t.size // 64) ** 2 for t in tiles.values())
-        self.assertEqual(n, len(c), "overlapping tiles")
+        # The same exact coverage check on the 64 m lattice, without constructing millions of Python tuples
+        # for every pose. Disjoint axis-aligned tiles cover the target iff their clipped areas sum to its area.
+        bounds = np.asarray([t.bbox for t in tiles.values()], np.float64).reshape(-1, 4)
+        np.testing.assert_array_equal(bounds / 64, np.round(bounds / 64))
+        spans = np.minimum(bounds[:, None, 2:], bounds[None, :, 2:]) - np.maximum(
+            bounds[:, None, :2], bounds[None, :, :2])
+        self.assertFalse(np.triu((spans > 0).all(axis=2), 1).any(), "overlapping tiles")
         x0, x1 = math.floor((px - radius) / 64), math.ceil((px + radius) / 64)
         y0, y1 = math.floor((py - radius) / 64), math.ceil((py + radius) / 64)
-        want = {(i, j) for i in range(x0, x1) for j in range(y0, y1)}
-        self.assertFalse(want - c, "uncovered cells")
+        clipped = np.maximum(0, np.minimum(bounds[:, 2:], [x1 * 64, y1 * 64]) -
+                             np.maximum(bounds[:, :2], [x0 * 64, y0 * 64]))
+        self.assertEqual(float(np.prod(clipped, axis=1).sum()), (x1 - x0) * (y1 - y0) * 64 ** 2,
+                         "uncovered cells")
         for b in blocks:
             bb = ff.Block(*b, self.block).bbox
             under = [t for t in tiles.values() if overlaps(t.bbox, bb)]
@@ -1504,7 +1510,13 @@ class MachineProfileTest(unittest.TestCase):
                 os.environ.pop("BNGE_FAST_BASE_V", None)     # (the small tier: a 6 GB test runner is a lean one)
                 earthd.machine_profile(a, True)
             self.assertEqual(a.road_processes, budget.SMALL_ROAD_PROCESSES)
-            self.assertEqual(a.workers, budget.SMALL_FAR_WORKERS)
+            # (the compact layout's one far-tile process: earthd.SMALL_COMPACT; else the small profile's)
+            self.assertEqual(a.workers, budget.LEAN_FAR_WORKERS if earthd.SMALL_COMPACT else budget.SMALL_FAR_WORKERS)
+            a = self._args()
+            with mock.patch.object(budget, "tier", return_value="small"), \
+                    mock.patch.object(earthd, "SMALL_COMPACT", False):
+                earthd.machine_profile(a, True)
+            self.assertEqual(a.workers, budget.SMALL_FAR_WORKERS, "BNGE_SMALL_COMPACT=off: the small profile's")
             if budget.SMALL_ANALYSES_OFF:
                 self.assertEqual((a.deshadow, a.colormatch), ("off", "off"))
             self.assertEqual(earthd.FAST_BASE_V, earthd.SMALL_FAST_BASE_V)
@@ -1531,7 +1543,9 @@ class MachineProfileTest(unittest.TestCase):
             a = self._args()
             with mock.patch.object(budget, "tier", return_value="small"):
                 earthd.machine_profile(a, True)
-            self.assertEqual((a.road_processes, a.workers), (budget.SMALL_ROAD_PROCESSES, budget.SMALL_FAR_WORKERS))
+            self.assertEqual((a.road_processes, a.workers),
+                             (budget.SMALL_ROAD_PROCESSES,
+                              budget.LEAN_FAR_WORKERS if earthd.SMALL_COMPACT else budget.SMALL_FAR_WORKERS))
         finally:
             earthd.FAST_BASE_V = old
 

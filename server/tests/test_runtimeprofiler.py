@@ -31,9 +31,15 @@ def threaded_work():
 
 class ProfilerTest(unittest.TestCase):
     def test_cancellable_spawn_job_preserves_profiler_and_pool(self):
+        self._check_cancellable_spawn(0)
+
+    def test_cancellable_generation_queue_preserves_profiler_and_pool(self):
+        self._check_cancellable_spawn(2)
+
+    def _check_cancellable_spawn(self, tasks_per_child):
         import multiprocessing
         self.c.configure(True)
-        pool = pools.RespawningPool('profile cancel', 1, cancellable=True,
+        pool = pools.RespawningPool('profile cancel', 1, cancellable=True, tasks_per_child=tasks_per_child,
                                     mp_context=multiprocessing.get_context('spawn'))
         request = workcancel.Request()
         try:

@@ -378,15 +378,19 @@ def _wait_process(pid):
 PARENT_POLL_S = 2.0
 
 
+WARM_RECHECK_S = 1.0        # s between _warm_loop's looks at the cells other processes were planning
+_BUILDING = [0]             # blocks being built in this process now (build)
+
+
 def _read_warm(warm_q):
     while True:
         try:
-            aid, lat, lon, keys = warm_q.get()
+            aid, lat, lon, keys, *rest = warm_q.get()
         except (EOFError, OSError):
             return
         try:
             while True:         # only the latest list matters
-                aid, lat, lon, keys = warm_q.get_nowait()
+                aid, lat, lon, keys, *rest = warm_q.get_nowait()
         except queue.Empty:
             pass
         if not keys:            # (earthd.main's first item: it starts the queue's feeder thread early)
@@ -396,7 +400,33 @@ def _read_warm(warm_q):
             continue
         with _s.cv:
             _s.want = [(g, k) for k in keys]
+            # (earthd.Server.warm_roads: this process only reads them while it builds a block, _warm_loop)
+            _s.warm_read_only = bool(rest and rest[0])
             _s.cv.notify()
+
+
+def _warm_next(want, read_only):
+    """The next (grader, cell) of want for _warm_loop, or None. The cells not in this process's memory yet: one whose
+    plans are in the run's plan cache is read; one that is not is planned here, unless read_only (the requested
+    blocks' process while it builds a block and the prefetch lane's plans them: Server.warm_roads; idle between two
+    blocks of a drive it plans ahead as before) or another process is planning it now
+    (the next one instead of waiting for that one: plancache.PlanCache.busy)."""
+    for g, k in want:
+        if g.planned(k):
+            continue
+        sh = getattr(g, "shared", None)
+        has = getattr(sh, "has", None)
+        busy = getattr(sh, "busy", None)
+        if has is None or busy is None:     # (no plan cache of a run: planned here, as before)
+            return g, k
+        try:
+            if has(k):
+                return g, k
+            if not read_only and not busy(k):
+                return g, k
+        except Exception:
+            return g, k
+    return None
 
 
 def _warm_loop():
@@ -404,9 +434,11 @@ def _warm_loop():
         with _s.cv:
             job = None
             while job is None:
-                job = next(((g, k) for g, k in _s.want if not g.planned(k)), None)
+                job = _warm_next(_s.want, getattr(_s, "warm_read_only", False) and _BUILDING[0] > 0)
                 if job is None:
-                    _s.cv.wait()
+                    # (the cells other processes are planning now are looked at again: no pose may come to say so)
+                    # ... nor that this process's block is built: the cells left are planned here then)
+                    _s.cv.wait(WARM_RECHECK_S if any(not g.planned(k) for g, k in _s.want) else None)
         try:
             t0 = time.perf_counter()
             job[0].warm(job[1])
@@ -416,6 +448,18 @@ def _warm_loop():
             with _s.cv:
                 _s.want = [w for w in _s.want if w[1] != job[1]]
 
+
+
+def plan_cell(aid, lat, lon, key):
+    """Plan map cell key (z, x, y) for the server's own process (grading.PlanStore.delegate; aid, lat, lon: an anchor,
+    for the store's settings): True when its plans are in the run's plan cache after."""
+    import mapcells
+    g, _ = _s.anchor(aid, lat, lon)
+    if g is None or getattr(g, "store", None) is None or g.shared is None:
+        return False
+    k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
+    g.store.planner_of_cell(k)._cell_plans(k)
+    return g.shared.has(k)
 
 
 @profile_step('Road plans ahead')
@@ -528,9 +572,13 @@ def _take_pads(fuel_pads):
 def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
           ground_at=(0.0, 0.0)):
     """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check)."""
-    with _abandon_check(out_dir, aid):
-        return _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name, fuel_pads, provisional,
-                      ground_at)
+    _BUILDING[0] += 1               # (the pool's one job thread: _warm_loop reads it)
+    try:
+        with _abandon_check(out_dir, aid):
+            return _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name, fuel_pads, provisional,
+                          ground_at)
+    finally:
+        _BUILDING[0] -= 1
 
 
 def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
@@ -1162,7 +1210,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # cutting stood over the cut; hashk014's PR #69)
         items, _custom = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev,
                                                       decks=_tile_decks(bridges, cells, tx, ty) + _tile_decks(tunnels, cells, tx, ty),
-                                                      skip=skip, cache_dir=cache_dir)
+                                                      skip=skip, cache_dir=cache_dir, urban_fn=urban, widths=_s.widths,
+                                                      left_hand=left_hand)
         _bridge_fps = buildingsmod.bridge_footprints(     # (each laid onto its mapped bridge, baked there)
             frame, tx, ty, cache_dir,
             cell_fn=lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"))
@@ -2571,18 +2620,24 @@ def tunnel_profiles(aid, frame, elev, g=None):
     return roadsmod.ChainView(_chain_store("tunnels", roadsmod.TunnelProfiles, elev, setup), frame)
 
 
-def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_region=None):
+def _urban_fn():
+    """The land cover's town test of this process's Surface (road_specs' urban_fn), or None."""
+    return getattr(getattr(_s, "surface", None), "urban", None)
+
+
+def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_region=None, left_hand=False):
     """earthd.Server.build_far_bld_tile here (road-tile pool): buildings.far_tile (from the revisit cache when built in
     this anchor's place before)."""
     import buildings as buildingsmod
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
     k = revisit.key("bldfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,
-                    _s.md.versions() if _s.md is not None else None, lamp_region)
+                    _s.md.versions() if _s.md is not None else None, lamp_region, bool(left_hand))
     return _revisit_tile("bldfar", k, aid, tx, ty, out_dir, vfs_dir, f"bldfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_tile(frame, tx, ty, _s.md,
                                                        lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                                       out_dir, vfs_dir, aid, lamp_region),
+                                                       out_dir, vfs_dir, aid, lamp_region, _urban_fn(), _s.widths,
+                                                       left_hand),
                          lambda res: {"n": int(res[1])},
                          lambda path, extra: (path, int(extra.get("n", 0))),
                          _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty), md=_md_versions()))
@@ -2737,7 +2792,7 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     if kind == "bldfar":
         if not _far_cells_ready((kind, tile.key), *buildingsmod.far_needs(frame, tile, None)):
             return None
-        items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region)
+        items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region, _urban_fn(), _s.widths)
         mesh = buildingsmod.build(items, lite=True)
         n = len(items)
     elif kind == "bldsky":

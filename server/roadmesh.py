@@ -23,6 +23,7 @@ import numpy as np
 
 import cdae
 import heightmap
+import portals
 import shells
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
@@ -286,10 +287,21 @@ JUNCTION_MAX_BRANCHES = 8
 JUNCTION_CELL_M = 2.0
 JUNCTION_JOIN_M = 0.75
 JUNCTION_JOIN_Z_M = 0.75
+# A junction of several joints a few metres apart (a lid's or a viaduct's: dual carriageways, turn lanes), each short part
+# between two of them, is one field (earthfast junction_groups' clusters; GitHub #1083: Rautenweg over the S1 was 16
+# overlapping slabs at their own heights and tilts); its ends going on alone are pinned to their approaches, centre and
+# edges (JUNCTION_PIN_R_M: the correction's reach). BNE_JUNCTION_CLUSTER=off: per joint only, as before.
+JUNCTION_CLUSTER_ON = os.environ.get("BNE_JUNCTION_CLUSTER", "on") != "off"
+JUNCTION_CLUSTER_MAX_PARTS = 40
+JUNCTION_CLUSTER_MAX_M = 120.0      # m: its parts' box at most this either way (every tile round it has all its parts)
+JUNCTION_PIN_R_M = 8.0
+CLUSTER_SKIN_TILE_M = 11.0              # m: a cluster's deck skins' texture square in the world (roads.DECK's "tl")
+JUNCTION_CLUSTER_PIN_TOL_M = 0.05   # m: a pin may miss by this much (two arms' ends nearer than a lattice cell apart at
+                                    # different heights: Rautenweg's west banks, 4 cm), never more
 
 
 class _JunctionSurface:
-    def __init__(self, entries, joint):
+    def __init__(self, entries, joint, pins=None):
         self.fids = frozenset(c['fid'] for c, _p in entries)
         self.joint = np.asarray(joint, np.float64)
         # A road-relative basis, rather than an anchor's terrain grid: kept geometry and a new anchor's skin must
@@ -306,13 +318,36 @@ class _JunctionSurface:
         i1, j1 = np.ceil((allxy.max(0) + margin) / JUNCTION_CELL_M).astype(int)
         x, y = np.meshgrid(np.arange(self.i0, i1 + 1) * JUNCTION_CELL_M,
                            np.arange(self.j0, j1 + 1) * JUNCTION_CELL_M)
-        self.grid = np.ascontiguousarray(self._height(np.c_[x.ravel(), y.ravel()]).reshape(x.shape))
+        self.pin_xy, self.pin_w = None, None
+        nodes = np.c_[x.ravel(), y.ravel()]
+        base = self._height(nodes)
+        self.grid = np.ascontiguousarray(base.reshape(x.shape))
+        if pins is not None and len(pins):
+            import fast
+            self.pin_xy = np.ascontiguousarray(self.local(np.asarray(pins, np.float64)[:, :2]))
+            self.pin_w = np.zeros(len(pins))
+            target = np.asarray(pins, np.float64)[:, 2]
+            for _ in range(4):
+                r = target - self.at(np.asarray(pins, np.float64)[:, :2])
+                if np.max(np.abs(r)) < 1e-4:
+                    break
+                self.pin_w = self.pin_w + np.asarray(fast._ef.field_pins(self.pin_xy, np.ascontiguousarray(r),
+                                                                         np.zeros((0, 2)), JUNCTION_PIN_R_M, 0))
+                self.grid = np.ascontiguousarray((base + self._pin(nodes)).reshape(self.grid.shape))
+
+    def _pin(self, xy):
+        """The pins' correction at local xy (0 without pins)."""
+        if self.pin_w is None:
+            return np.zeros(len(xy))
+        import fast
+        return np.asarray(fast._ef.field_pins(self.pin_xy, np.ascontiguousarray(self.pin_w, np.float64),
+                                              np.ascontiguousarray(xy, np.float64), JUNCTION_PIN_R_M, 1))
 
     def local(self, xy):
         return (np.asarray(xy, np.float64)[:, :2] - self.joint[:2]) @ self.basis.T
 
     def _grid_height(self, xy):
-        return self._height(xy)
+        return self._height(xy) + self._pin(xy)
 
     def _ensure_grid(self, local):
         """Extend the same lattice when a pad/miter goes beyond the initial profile bounds. Clamping the cell
@@ -421,42 +456,44 @@ def _junction_surfaces(chunks, context=()):
         old = by_fid.get(c['fid'])
         if old is None or key > old[0]:
             by_fid[c['fid']] = (key, c, p)
-    ends = []
-    for fid, (key, c, p) in sorted(by_fid.items()):
-        if key[0] > JUNCTION_MAX_PART_M:
-            continue
-        for at in (0, -1):
-            ends.append((c, p if at == 0 else p[::-1]))
-    groups = []
-    for c, p in ends:
-        for group in groups:
-            ep = np.array([q[0] for _c, q in group])
-            if (np.linalg.norm(ep[:, :2] - p[0, :2], axis=1) <= JUNCTION_JOIN_M).all() and \
-                    np.ptp(np.r_[ep[:, 2], p[0, 2]]) <= JUNCTION_JOIN_Z_M:
-                group.append((c, p))
-                break
-        else:
-            groups.append([(c, p)])
-    candidates = [group for group in groups if len({c['fid'] for c, _p in group}) >= 3]
-    # A shared span at two forks cannot use only one fork's height field: that changes its
-    # surface at the other fork. Conservatively leave all such junctions on existing geometry.
-    occurrences = {}
-    for group in candidates:
-        for fid in {c['fid'] for c, _p in group}:
-            occurrences[fid] = occurrences.get(fid, 0) + 1
+    import fast
+    fast.require(241, "junction_groups")
+    kept = [(c, p) for _fid, (key, c, p) in sorted(by_fid.items()) if key[0] <= JUNCTION_MAX_PART_M]
+    if not kept:
+        return {}
+    ends, plen, half, skip, bbox = [], [], [], [], []
+    for c, p in kept:
+        for q, r in ((p[0], p[1]), (p[-1], p[-2])):
+            d = r[:2] - q[:2]
+            d = d / max(float(np.hypot(*d)), 1e-9)
+            ends.append([q[0], q[1], q[2], d[0], d[1]])
+        plen.append(float(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1).sum()))
+        half.append(float(c['w']) / 2)
+        skip.append(1 if c.get('jskip') else 0)
+        bbox.append([*p[:, :2].min(0), *p[:, :2].max(0)])
+    prm = np.array([JUNCTION_JOIN_M, JUNCTION_JOIN_Z_M, JUNCTION_MAX_PART_M, JUNCTION_MAX_BRANCHES,
+                    1.0 if JUNCTION_CLUSTER_ON else 0.0, JUNCTION_CLUSTER_MAX_PARTS, JUNCTION_CLUSTER_MAX_M], np.float64)
+    _grp, _field, fields, members, pins = fast._ef.junction_groups(
+        np.ascontiguousarray(ends, np.float64), np.asarray(plen, np.float64), np.asarray(half, np.float64),
+        np.asarray(skip, np.int64), np.ascontiguousarray(bbox, np.float64), prm)
     out = {}
-    for group in candidates:
-        if (len({c['fid'] for c, _p in group}) > JUNCTION_MAX_BRANCHES or
-                any(c.get('jskip') or occurrences[c['fid']] > 1 for c, _p in group)):
-            continue
-        field = _JunctionSurface(group, np.mean([p[0] for _c, p in group], axis=0))
-        # Each far endpoint is pinned to its ground approach. Nearby outgoing arms
-        # can pull it up or down; the 2 m lattice can also move an off-grid grade knot.
-        # Reject the whole shared field if any transition would gain a visible step.
-        free = np.asarray([p[-1] for _c, p in group])
-        if np.max(np.abs(field.at(free[:, :2]) - free[:, 2])) > 0.01:
-            continue
-        out.update({c['fid']: field for c, _p in group})
+    for f, (kind, jx, jy, jz) in enumerate(np.asarray(fields)):
+        ent = [(kept[k][0], kept[k][1][::-1] if rev else kept[k][1]) for ff, k, rev in members if ff == f]
+        pp = pins[pins[:, 0] == f][:, 1:]
+        if kind == 0:
+            field = _JunctionSurface(ent, np.array([jx, jy, jz]))
+            # Each far endpoint is pinned to its ground approach. Nearby outgoing arms
+            # can pull it up or down; the 2 m lattice can also move an off-grid grade knot.
+            # Reject the whole shared field if any transition would gain a visible step.
+            if np.max(np.abs(field.at(pp[:, :2]) - pp[:, 2])) > 0.01:
+                continue
+        else:
+            # a cluster of joints (a junction over a lid): one field, its lone ends pinned to their approaches
+            field = _JunctionSurface(ent, np.array([jx, jy, jz]), pins=pp)
+            if len(pp) and np.max(np.abs(field.at(pp[:, :2]) - pp[:, 2])) > JUNCTION_CLUSTER_PIN_TOL_M:
+                continue
+            field.cluster = True
+        out.update({c['fid']: field for c, _p in ent})
     return out
 
 
@@ -1235,6 +1272,13 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             k0 += 2 * k
         else:                                   # on a deck: over its opaque concrete top
             z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
+            # (a cluster's decks overlap all over its junction at one height: their skins, and the wear (patches, cracks:
+            # roadwear) of one over another's skin, flickered as noise, Rautenweg in game 2026-11-12. Its plain asphalt
+            # skins take the world's texture coordinates (below: where two lie on each other, one texture), its wear is
+            # left out; the markings stay. Left to the deck tops instead, the slabs' tops and the pad shaded apart)
+            jf = junctions.get(c.get('fid'))
+            if jf is not None and getattr(jf, 'cluster', False) and not c.get('deck') and layer != "mark":
+                continue
         if m not in mats:
             mats.append(m)
         mi = mats.index(m)
@@ -1265,6 +1309,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         field = junctions.get(c.get('fid')) if fz is not None else None
         if field is not None:
             pp, uu, tt, _src = field.top(P[-1], UV[-1], tri - nverts, LIFT[layer] + DECK_SKIN)
+            if getattr(field, 'cluster', False) and c.get('deck'):
+                uu = pp[:, :2] / CLUSTER_SKIN_TILE_M
             P[-1], UV[-1], tri = pp, uu, tt + nverts
         T.append(tri)
         M.append(np.full(len(tri), mi))
@@ -1668,6 +1714,8 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         tri[flip] = tri[flip][:, ::-1]
         if active_field is not None and mi == top:
             pp, uu, tt, _src = active_field.top(P[-1] + origin, UV[-1], tri - nv)
+            if getattr(active_field, 'cluster', False):     # (as the pads': world texture coordinates, build()'s note)
+                uu = pp[:, :2] / DECK_TOP_TILE_M
             P[-1], UV[-1], tri = pp - origin, uu, tt + nv
         T.append(tri)
         M.append(np.full(len(tri), mi))
@@ -1760,10 +1808,14 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     for pad in pads:                # (junction pads on bridges: roads.deck_pads; their rim's railings)
         start_p, start_t, start_uv, start_m, start_nv = len(P), len(T), len(UV), len(M), nv
         ring, centre = pad[0], pad[1]
+        joints = np.asarray(pad[3], np.float64) if len(pad) > 3 else np.asarray([centre], np.float64)
         incident = [(r, c) for r, c in rb if c.get('fid') in junctions and any(
-            np.linalg.norm(np.asarray(c['jn'])[at, :2] - centre[:2]) <= JUNCTION_JOIN_M and
-            abs(c['jn'][at][2] - centre[2]) <= JUNCTION_JOIN_Z_M for at in (0, -1))]
+            np.linalg.norm(np.asarray(c['jn'])[at, :2] - q[:2]) <= JUNCTION_JOIN_M and
+            abs(c['jn'][at][2] - q[2]) <= JUNCTION_JOIN_Z_M for at in (0, -1) for q in joints)]
         field = _PadSurface(ring, centre, incident, junctions) if incident else None
+        cl = {id(junctions[c['fid']]) for _r, c in incident}
+        if incident and len(cl) == 1 and getattr(junctions[incident[0][1]['fid']], 'cluster', False):
+            field = junctions[incident[0][1]['fid']]
         _pad(ring, centre, origin, P, T, UV, M, top, side, field)
         nv = sum(len(a) for a in P)
         for pts, out in (pad[2] if len(pad) > 2 else ()):
@@ -1862,7 +1914,7 @@ def _pad(ring, centre, origin, P, T, UV, M, top, side, field=None):
     top_v = np.vstack([c - [0, 0, PAD_DROP], ring - [0, 0, PAD_DROP]]) - o
     i = np.arange(k)
     tris = np.c_[np.zeros(k, np.int64), 1 + i, 1 + (i + 1) % k]
-    uv = np.c_[top_v[:, 0] / DECK_TOP_TILE_M, top_v[:, 1] / DECK_TOP_TILE_M]
+    uv = (top_v[:, :2] + o[:2]) / DECK_TOP_TILE_M      # (world: as a cluster's deck tops, deck()'s quads)
     if field is not None:
         top_v, uv, tris, _src = field.top(top_v + o, uv, tris)
         top_v -= o
@@ -2324,6 +2376,9 @@ TUNNEL_STONE = "bne_tunnel_stone"  # a low arch's portal faces and the retaining
                                     # Park's transverse walls and arches; the buildings' pale dressed stone read as
                                     # concrete, 2026-10-17)
 TUNNEL_STONE_IN = "bne_tunnel_stone_in"   # the same stone darker: a low arch's vault (in its shade)
+PORTAL_COLLAR = "bne_portal_collar"   # a portal's collar round the opening: fair-faced / painted concrete, lighter than
+                                      # its headwall (Loibl's white ring in a stone wall, Laerdal's pale hood in the
+                                      # slope; Mapillary 2026-11-12)
 TUNNEL_SOIL = "bne_tunnel_soil"     # grass on the ground over the masonry: a retaining wall's top behind its coping,
                                     # a low arch's top (stone slabs on the grass, the user 2026-10-17: "blend the
                                     # stone and terrain better")
@@ -2337,6 +2392,7 @@ CONCRETE_UV_M = 4.0        # m per repeat of the concrete (as a tunnel's)
 LOW_PORTAL_UP = 1.4        # m a low arch's portal face reaches over the vault (to the ground over it) ...
 LOW_PORTAL_SIDE = 3.0      # ... and beside the opening
 LOW_RISE = 0.4             # a low arch's vault rises this share of its height from its walls (a segmental arch)
+BOX_HAUNCH_M = 0.5         # m a cut-and-cover box's corner haunch reaches into its roof and walls
 ARCH_CAP_OVER = 0.75       # m a low arch's top lies over its vault (roads.ARCH_SOIL_MIN of soil there, + a little)
 LOW_CAP_MIN = 1.0          # m: a stone top shorter than this (a road just behind the face) is left out
 LOW_CAP_M = 7.0            # m a low arch's stone top runs back from its portal face over the mouth: the terrain there
@@ -2351,12 +2407,17 @@ TUNNEL_LAMP_DROP = 0.25    # ... its middle this far under the wall's top, ...
 TUNNEL_LAMP_IN = 0.08      # ... this far in from the wall
 
 
-def _tunnel_section(hw, th=TUNNEL_H, low=False):
+def _tunnel_section(hw, th=TUNNEL_H, low=False, box=False):
     """The tube's cross-section from the left road edge's floor over the vault to the right one: (lateral offset
     from the centre line, positive = left; height over the floor) for half-width hw (centre to wall) and a vault
     th over the floor (its walls in proportion). low: a park arch's segmental vault, a shallow circular arc rising
-    LOW_RISE of th from its walls (Central Park's transverse arches)."""
-    if low:
+    LOW_RISE of th from its walls (Central Park's transverse arches). box: a cut-and-cover box, its roof flat at th
+    with a haunch BOX_HAUNCH_M into each upper corner (a major road's low tube: Perth's Northbridge, Washington's
+    I-395 and Paris's Porte d'Italie mouths are rectangular, not arches, 2026-11-12)."""
+    if box:
+        hn = min(BOX_HAUNCH_M, 0.25 * th, 0.25 * hw)
+        vault = [(hw, th - hn), (hw - hn, th), (-hw + hn, th), (-hw, th - hn)]
+    elif low:
         rise = LOW_RISE * th
         wall = th - rise
         r = (hw * hw + rise * rise) / (2 * rise)
@@ -2486,7 +2547,7 @@ def tunnel(chunks, origin, walls=()):
         stone = low and not c.get("concrete")
         mat = 3 if stone else 5                               # (its portal faces: 2, the stone in daylight; a full
                                                             # tube's inside: 5, TUNNEL_INNER)
-        sec = _tunnel_section(hw, th, low)
+        sec = _tunnel_section(hw, th, low, box=low and not stone and portals.ON)    # (a major road's low tube: a box)
         k, m = len(mid), len(sec)
         rows = np.empty((m, k, 3))
         for j, (off, h) in enumerate(sec):
@@ -2521,10 +2582,52 @@ def tunnel(chunks, origin, walls=()):
         # the lamps: under the vault along both lines, every other step, faced down (a long tunnel's; not under an arch)
         if not low:
             nv = _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin)
+        fits = c.get("fit") or (None, None)
+        new_portal = portals.ON
+        if new_portal and not low and c.get("ground") is not None and len(c["ground"]) == len(c["n"]) and k >= 2:
+            # the tube's outside where the ground does not cover it (portals.cover: a box, soil on its top); the
+            # chunk's ground at the ribbon's rows, by the arc along it
+            cn = np.asarray(c["n"], np.float64)[:, :2]
+            sc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(cn, axis=0).T))]
+            sm = np.r_[0.0, np.cumsum(np.hypot(*np.diff(mid, axis=0).T))]
+            gr = np.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
+            # (no cover under a hood: it is the tube's outside from its mouth back to the hill's face)
+            for e_, f_ in enumerate(fits if c.get("portal") else ()):
+                if f_ is not None and (c.get("portal") or (False, False))[e_]:
+                    d_ = sm if e_ == 0 else sm[-1] - sm
+                    gr = np.where(d_ <= portals.setback(f_) + 0.5 if portals.setback(f_) > 0 else False, np.inf, gr)
+            nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
+                                                             gr - origin[2], hw, th, (False, False), CONCRETE_UV_M,
+                                                             SOIL_UV_M, sec), 0)
         pups = c.get("portal_up") or (None, None)
         caps = c.get("cap_m") or (None, None)       # (a road over the mouth: its stone top shorter, TunnelProfiles.caps)
         for end, at, pup, cap_m in zip(c.get("portal") or (False, False), (0, k - 1), pups, caps):
             if not end:
+                continue
+            fitd = fits[0 if at == 0 else 1] if new_portal else None
+            if fitd is not None:
+                # the mouth's structure from the ground round it (portals.structure: collar, headwall, wing walls);
+                # in concrete (a park's low arch: stone)
+                tt = mid[1] - mid[0] if at == 0 else mid[-1] - mid[-2]
+                tt = tt / max(float(np.hypot(*tt)), 1e-9)
+                ul, outv = np.array([-tt[1], tt[0]]), (-tt if at == 0 else tt)
+                near = [False, False]
+                for si, sg in enumerate((1.0, -1.0)):
+                    q = mid[at] + ul * sg * (hw + 3.0) + outv * 4.0
+                    near[si] = any(float(np.hypot(*(np.asarray(w["base"], np.float64)[:, :2] - q).T).min()) < 5.0
+                                   for w in walls if len(w["base"]))
+                stone_p = stone if low else False     # (a full tube's mouth: concrete, its hood or box; stone only
+                                                      # on a park's low arch)
+                nv = _add_blocks(P, T, UV, M, nv, portals.structure(
+                    fitd, np.r_[mid[at], z[at]] - origin, ul, outv, sec, th, hw, STONE_UV_M if stone_p else CONCRETE_UV_M,
+                    near, low), 2 if stone_p else 0, 2 if (low and stone_p) else 7)
+                if low and (cap_m is None or cap_m >= LOW_CAP_MIN):
+                    # a low arch's top over its mouth (the terrain is cut away there): at the ground behind the
+                    # headwall, as wide as the headwall
+                    soil = portals.crown_top(fitd, th, low) - portals.parapet(fitd, low)
+                    nv = _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, hw + min(float(fitd["sl"]), float(fitd["sr"])),
+                                   soil + (LOW_PORTAL_UP - ARCH_CAP_OVER), th, origin,
+                                   LOW_CAP_M if cap_m is None else min(LOW_CAP_M, float(cap_m)), 2 if stone_p else 0)
                 continue
             # the face: from the opening's outline out to a frame PORTAL_FRAME wider and higher, both sides
             inner = rows[:, at]
@@ -2556,13 +2659,32 @@ def tunnel(chunks, origin, walls=()):
             if low and (cap_m is None or cap_m >= LOW_CAP_MIN):
                 nv = _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, float(np.max(o[:, 0])), float(o[:, 1].max()), th, origin,
                                LOW_CAP_M if cap_m is None else min(LOW_CAP_M, float(cap_m)), 2 if stone else 0)
-    allm = [TUNNEL_SIDE, TUNNEL_LIGHT, TUNNEL_STONE, TUNNEL_STONE_IN, TUNNEL_SOIL, TUNNEL_INNER, WALL_SCREE]
+    allm = [TUNNEL_SIDE, TUNNEL_LIGHT, TUNNEL_STONE, TUNNEL_STONE_IN, TUNNEL_SOIL, TUNNEL_INNER, WALL_SCREE,
+            PORTAL_COLLAR]
     Tall = np.concatenate(T)
     Mall = np.concatenate([np.full(len(t), m, np.int64) for t, m in zip(T, M)]) if M else np.zeros(len(Tall), np.int64)
     used = sorted(set(int(v) for v in np.unique(Mall)) | {0, 1})     # (concrete and lamps first, as before)
     remap = np.zeros(len(allm), np.int64)
     remap[used] = np.arange(len(used))
     return (np.concatenate(P), Tall, np.concatenate(UV), [allm[i] for i in used], remap[Mall])
+
+
+def _add_blocks(P, T, UV, M, nv, mesh, face_mat, collar_mat=7):
+    """A portal kernel's mesh (positions, triangles, uvs, codes: 0 the structure, 1 soil, 2 the collar) appended to
+    tunnel()'s lists, the structure in material index face_mat, the collar in collar_mat; returns the new vertex
+    count."""
+    Pm, Tm, UVm, Cm = mesh
+    if not len(Tm):
+        return nv
+    P.append(np.asarray(Pm, np.float64))
+    UV.append(np.asarray(UVm, np.float64))
+    Tm, Cm = np.asarray(Tm, np.int64) + nv, np.asarray(Cm, np.int64)
+    for code, mat in ((0, face_mat), (1, 4), (2, collar_mat)):
+        sel = Cm == code
+        if sel.any():
+            T.append(Tm[sel])
+            M.append(mat)
+    return nv + len(Pm)
 
 
 def _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, side, top, th, origin, depth=None, side_mat=2):

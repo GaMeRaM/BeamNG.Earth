@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, CancelledError
 from unittest import mock
 
 import numpy as np
@@ -93,6 +93,39 @@ class ProcessCancellationTest(unittest.TestCase):
             with self.assertRaises(workcancel.WorkCancelled):
                 future.result(timeout=5)
             self.assertFalse(path.exists())
+
+
+class RotatingCancellationTest(ProcessCancellationTest):
+    """Owned cancellation remains valid across upstream's generation queue."""
+    def setUp(self):
+        self.pool = pools.RespawningPool('rotating cancel test', 1, cancellable=True,
+                                         tasks_per_child=3,
+                                         mp_context=multiprocessing.get_context('spawn'))
+
+    def test_obsolete_call_queue_item_never_enters_its_build(self):
+        self.pool.submit(os.getpid).result(timeout=10)
+        blocker = self.pool.submit(time.sleep, .3)
+        request = workcancel.Request()
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'must-not-start'
+            with workcancel.scope(request):
+                future = self.pool.submit_cancellable(until_cancelled, str(path))
+            request.cancel()
+            blocker.result(timeout=5)
+            with self.assertRaises(CancelledError):
+                future.result(timeout=5)
+            self.assertFalse(path.exists())
+            self.assertEqual(len(self.pool._cancel_free), 1024)
+
+    def test_cancelled_slot_does_not_leak_across_generations(self):
+        for _ in range(8):
+            request = workcancel.Request()
+            with workcancel.scope(request):
+                future = self.pool.submit_cancellable(os.getpid)
+            self.assertGreater(future.result(timeout=10), 0)
+            request.cancel()
+        self.assertEqual(len(self.pool._cancel_free), 1024)
+        self.assertGreaterEqual(self.pool.rotations, 2)
 
 
 class SharedPlanCancellationTest(unittest.TestCase):

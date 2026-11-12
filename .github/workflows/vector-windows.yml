@@ -77,7 +77,9 @@ jobs:
       - name: Imported road, memory and texture regressions
         run: python tools/run_tests.py test_budget test_shed test_lanesections test_width_model test_roadsmooth test_roadsurf test_corridors test_deck_ground test_rail_yield test_roadz_hk test_heightmap test_mod_textures test_build_s2_packs test_dem test_geodesy test_regional_revision --par 2 --timeout 600 --logs build/road-integration-tests
       - name: Imported upstream regression checks
-        run: python tools/run_tests.py test_abandon test_reach test_revisit_side test_revisitpack test_grade_binned test_farpvs test_ground_standin test_ground_square test_far_first test_halo_reads test_enginepatch test_prov_refresh test_veg_geo_jobs test_netfetch test_netstate test_imagery test_osm_tag_shards test_lod2roofs test_nycmassing test_railtags test_server --par 2 --timeout 600 --logs build/road-integration-tests
+        run: python tools/run_tests.py test_memwatch test_portals test_road_clearance test_roadlayercache test_speed242 test_tilecuts test_deckjoins test_deckpad_levels test_warm_queue test_abandon test_reach test_revisit_side test_revisitpack test_grade_binned test_farpvs test_ground_standin test_ground_square test_far_first test_halo_reads test_enginepatch test_prov_refresh test_veg_geo_jobs test_netfetch test_netstate test_imagery test_osm_tag_shards test_lod2roofs test_nycmassing test_railtags --par 2 --timeout 600 --logs build/road-integration-tests
+      - name: Synthetic server sessions
+        run: python tools/run_tests.py test_server --par 1 --timeout 600 --logs build/road-integration-tests
       - name: Reported world geometry regressions
         run: python tools/run_tests.py test_abutment_pad test_gradesep test_bridgeattachments test_railways test_railprofile test_geotiles test_roadgeo test_fargeo test_osmfuel_tiles test_footbridges test_guardrails test_powerlines test_power_clearance test_vegetation test_building_overrides test_lamp_collision test_seacarve --par 2 --timeout 180 --logs build/road-integration-tests
       - name: Nonblocking tile publication and affinity
