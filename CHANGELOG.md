@@ -4,7 +4,7 @@ What changed in each release of BeamNG.Earth, newest first.
 
 Fork entries separate **Изменения upstream** from **Наши правки**. Cache and validation notes follow separately. Mention unresolved errors only when the release changes their behaviour or adds relevant diagnostics; do not repeat unrelated known-issue disclaimers.
 
-## 1.9.1-beta.51 — upstream dev bb65fafb (2026-11-14)
+## 1.9.1-beta.52 — upstream dev bb65fafb (2026-11-14)
 
 ### Изменения upstream
 
@@ -34,6 +34,7 @@ Fork entries separate **Изменения upstream** from **Наши правк
 
 ### Наши правки
 
+- Для Kennedybruecke принята новая upstream-база измерений: длина проблемных участков в локальной базе 156 → 125 м, крупные ступени уменьшены, но два соседних локальных шага выросли примерно на 4,5 и 6,7 см. Это явный компромисс upstream-исправления, а не устранение всех неровностей; остальные контрольные места форка не перебазированы.
 - Сохранены российские знаки, профайлер, адресная отмена работ, векторный навигатор и необходимые локальные исправления геометрии. Российские цвета остаются отдельным атласом; его DDS также создаётся из исходника при установке. Общие знаки используют upstream-атлас.
 - Добавлены проверки подписанных решений, фонового уточнения и terfast в основной набор и Windows CI. Новая упаковка объединена с документацией и файлами форка.
 

@@ -102,11 +102,12 @@ class RussianInfrastructure(unittest.TestCase):
             self.assertFalse(townsigns.enabled(False))
 
     def test_ru_motorway_atlas_has_green_field_and_living_zone_blue(self):
-        from PIL import Image
+        sys.path.insert(0, str(ROOT))
+        from tools.mod_textures_dds import open_texture
         table = roadsigns.tables()[0]
         ids = [r['id'] for r in table['roles']]
         path = ROOT / 'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_ru.color.dds'
-        with Image.open(path) as img:
+        with open_texture(path) as img:
             def cell(name):
                 k=ids.index(name); x=k % table['cols']*256; y=k // table['cols']*256
                 return np.array(img.convert('RGB').crop((x,y,x+256,y+256))).astype(int)

@@ -64,7 +64,7 @@ for the hole scan): the same box, radius, layer mask and hole flag, bit for bit.
   1024² blocks (7,936 cells) 0 differences. `win/test_terfast.sh` runs the Windows code on Linux on stand-in cells
   against the loops written out sample by sample; `server/tests/test_enginepatch_terfast.py` covers the search and
   the block layout.
-- Measured (the same build, the patch switched by its environment variable / its state): 
+- Measured (the same build, the patch switched by its environment variable / its state):
   - Steam Deck (512² blocks at 2 m, 30 fps cap, Fells Point -> Dundalk at 45 mph, alternating two real blocks for
     the swap alone): `setFile`'s main-thread CPU 22.9 -> 1.9 ms a swap (perf); the swap call 18.4 -> 11.3 ms (what is
     left is mostly the wait for the GPU device, ~4.5 ms, and the mod's own Lua); in the drive the swap's frame
