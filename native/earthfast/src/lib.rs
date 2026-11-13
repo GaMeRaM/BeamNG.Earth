@@ -18,6 +18,7 @@ mod spaceclouds;
 mod cdaez;
 mod clearance;
 mod f32z;
+mod blockstore;
 mod packz;
 mod gpu;
 mod traffic;
@@ -73,6 +74,7 @@ mod perfclean;
 mod membudget;
 mod mdhtml;
 mod reportpack;
+mod farrestore;
 mod roadlanes;
 mod waytags;
 mod pmtiles;
@@ -112,6 +114,7 @@ mod meshtrim;
 mod shelterfit;
 mod tilecuts;
 mod bldclear;
+mod bnwt;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6353,6 +6356,22 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reportpack::report_logs_pack, m)?)?;
     m.add_function(wrap_pyfunction!(reportpack::report_body, m)?)?;
     m.add_function(wrap_pyfunction!(reportpack::report_nearby, m)?)?;
-    m.add("VERSION", 269)?;
+    // 268: bnwt (our prebaked z14 input tiles, BNWT: the lossless tile codec, the PMTiles writer's head, a square's
+    // tile-id run and a directory's entries in a range; server/bnwt.py, tools/build_bnwt.py)
+    bnwt::register(m)?;
+    // 273 (269-272 kept for other branches): bnwt FORMAT 2 (no cell in a tile, the cell's edges coded: open-sea tiles
+    // deduplicated, run-length directory entries), bnwt_assign (a block's rows to its cells, as the parquet bbox test)
+    // 274 (on 273; was 269 on its branch): the graded terrain blocks kept on disk (blockstore: blockstore_put_heights, blockstore_get_heights,
+    // blockstore_put_block, blockstore_get_block, blockstore_prune; server/blockcache.py)
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_put_heights, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_get_heights, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_put_block, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_get_block, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_prune, m)?)?;
+    // 275 (on 274; was 270 on its branch): a cached place's far field put back in one call (farrestore: far_restore, far_shape_stamp;
+    // server/farrestore.py; 269 was left for the block chunk cache)
+    m.add_function(wrap_pyfunction!(farrestore::far_restore, m)?)?;
+    m.add_function(wrap_pyfunction!(farrestore::far_shape_stamp, m)?)?;
+    m.add("VERSION", 276)?;
     Ok(())
 }

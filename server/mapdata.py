@@ -66,6 +66,7 @@ import gradesep
 import mapcells
 import mapgeom
 import maprasters
+import bnwt
 import netfetch
 import overture
 import pmtiles
@@ -361,6 +362,9 @@ class MapData:
         self.overture = overture.Reader(self.raw_dir, self.fetcher, release, threads)
         # Overture's own vector tiles for the layers they hold whole (pmtiles.LAYERS), the parquet files the fallback
         self.pmtiles = pmtiles.Reader(self.raw_dir, self.fetcher, release) if MAP_SOURCE == "pmtiles" else None
+        # our prebaked input tiles (bnwt.py, BNGE_BNWT_URL) for the layers they hold: the cell its source gives, bit for
+        # bit (same file, same keys), one range read for a block of cells
+        self.bnwt = bnwt.Reader(self.raw_dir, self.fetcher, release) if bnwt.enabled() else None
         import picnicsource            # (OSM picnic tables: Overture's picnic_table class is unpopulated)
         self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
         import billboardsource         # (OSM billboards: Overture does not keep advertising=billboard)
@@ -408,6 +412,8 @@ class MapData:
         self.overture.close()
         if getattr(self, "pmtiles", None) is not None:
             self.pmtiles.close()
+        if getattr(self, "bnwt", None) is not None:
+            self.bnwt.close()
 
     def _rails(self, key, layer, feats, built=_ASK):
         """The roads layer's rail segments with OSM's railway tags (railtags.py), once per build of them."""
@@ -636,6 +642,21 @@ class MapData:
             v["levelways"] = levelways.VERSION
         return v
 
+    def warm_manifests(self):
+        """The weekly datasets' manifests (rails, lanes, stations: versions()' keys) fetched now, in the background (the
+        server's start): a first run's tiles, plans and cell facts were keyed without them until a build happened to
+        ask, and none of those was found again by the next run (versions)."""
+        def run():
+            for src in (getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
+                        getattr(self, "station_tags", None)):
+                if src is None:
+                    continue
+                try:
+                    src.version()
+                except Exception as e:
+                    log.debug("manifest of %s: %s: %s", getattr(src, "name", src), type(e).__name__, e)
+        threading.Thread(target=run, daemon=True, name="manifests").start()
+
     def bundle_versions(self):
         """Offline source identity for prepared road plans, including cached but not yet opened shards.
 
@@ -790,7 +811,9 @@ class MapData:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
             feats = fell = None
-            if self._pmt(layer):
+            if self._pmt(layer) and getattr(self, "bnwt", None) is not None and layer in bnwt.LAYERS:
+                feats, sources = self._bnwt_query(layer, key, kind, bnwt.PMT)
+            if self._pmt(layer) and feats is None:
                 try:
                     feats, sources = self.pmtiles.query(layer, key, kind)
                 except Exception as e:      # (any: the parquet files have the same layer, slower)
@@ -811,6 +834,9 @@ class MapData:
                         osm.cancel()
                     got["_fallback"] = np.array(True)
                     return got
+            if feats is None and fell is None and not self._pmt(layer) and getattr(self, "bnwt", None) is not None \
+                    and layer in bnwt.LAYERS:
+                feats, sources = self._bnwt_query(layer, key, kind, "parquet")
             if feats is None:
                 feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
@@ -840,6 +866,22 @@ class MapData:
                 prov = dict(LIDAR_CANOPY, files=r.files, also=CANOPY["id"])
         arrays["provenance"] = np.array(json.dumps(prov, sort_keys=True))
         return arrays
+
+    def _bnwt_query(self, layer, key, kind, source="parquet"):
+        """(Features, sources) of the layer from the prebaked tiles (bnwt.py) as source gives them (Overture's tiles:
+        bnwt.PMT, else "parquet"), (None, None) when they cannot say (the source itself then: the same content)."""
+        try:
+            return self.bnwt.query(layer, key, kind, source)
+        except DEFERRED:
+            if kind not in ("demand", "urgent"):
+                raise                       # (a prefetch the hosts had no room for: as the parquet path's)
+        except bnwt.Unavailable as e:
+            log.debug("mapdata %s %s: no prebaked tile (%s): from the parquet files", key, layer, e)
+        except Exception as e:              # (any: the parquet files have the same layer)
+            log.warning("mapdata %s %s: prebaked tile failed (%s: %s): from the parquet files", key, layer,
+                        type(e).__name__, e)
+        self.bnwt.stats["fallbacks"] += 1
+        return None, None
 
     def _osm_pool(self):
         with self._lock:
@@ -1306,6 +1348,10 @@ class MapData:
                 cd.layers[layer], prov, _ = entry
             if layer == "buildings":
                 self._bdtopo(key, layer, cd.layers[layer])
+            elif layer == "roads" and getattr(cd.layers[layer], "__dict__", {}).get("_lidar_rule"):
+                # (its ranges made on the lidar rule for want of the lidar: what is made on them is kept on the layer,
+                # so whatever takes the layer is not kept either: revisit.fault in the taker's thread)
+                revisit.fault(lidar=True)
             if prov:
                 pid = prov["id"]
                 if pid in provs:            # roads + connectors: one transportation record
@@ -1427,10 +1473,20 @@ class MapData:
         """The map tiles of the (cell, layer)s in needs not on disk yet fetched in batches (pmtiles.Reader.prefetch:
         neighbouring tiles in one range read) before they are built cell by cell. No-op without the tiles source.
         Returns the tiles asked for."""
+        n, done = 0, set()
+        if getattr(self, "bnwt", None) is not None:
+            todo = [(_key(k), ly) for k, ly in needs if ly in bnwt.LAYERS and not self.has(_key(k), ly)
+                    and bnwt.ARCHIVES[bnwt.ARCHIVE_OF[ly]]["source"] == bnwt.source_of(ly, MapData._pmt(self, ly))]
+            try:
+                done = self.bnwt.prefetch(todo, kind) if todo else set()
+                n += len(done)
+            except Exception as e:          # (the cells' own builds read their sources then)
+                log.debug("mapdata: prebaked tiles prefetch: %s: %s", type(e).__name__, e)
         if getattr(self, "pmtiles", None) is None:
-            return 0
-        todo = [(_key(k), ly) for k, ly in needs if MapData._pmt(self, ly) and not self.has(_key(k), ly)]
-        return self.pmtiles.prefetch(todo, kind) if todo else 0
+            return n
+        todo = [(_key(k), ly) for k, ly in needs if MapData._pmt(self, ly) and not self.has(_key(k), ly)
+                and (_key(k), ly) not in done]      # (Overture's tiles not fetched where the prebaked tiles answer)
+        return n + (self.pmtiles.prefetch(todo, kind) if todo else 0)
 
     def side_prefetch(self, keys):
         """The side_sources' background reads of these cells (a road tile's own) started now, without waiting; France's
