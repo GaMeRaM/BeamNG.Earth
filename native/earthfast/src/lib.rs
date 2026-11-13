@@ -6353,6 +6353,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reportpack::report_logs_pack, m)?)?;
     m.add_function(wrap_pyfunction!(reportpack::report_body, m)?)?;
     m.add_function(wrap_pyfunction!(reportpack::report_nearby, m)?)?;
-    m.add("VERSION", 268)?;
+    m.add("VERSION", 269)?;
     Ok(())
 }

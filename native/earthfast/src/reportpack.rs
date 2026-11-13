@@ -73,6 +73,11 @@ fn home_at(chars: &[char], i: usize) -> Option<usize> {
     } else if sep(chars[i]) && prev.is_none_or(|p| !p.is_ascii_alphanumeric() && !sep(p)) {
         // /home/<name>, /var/home/<name>, /Users/<name>, /media/<name>, /run/media/<name>, /mnt/c/Users/<name>
         j = seps(chars, i)?;
+        // Root's home has no separate user-name component (containers and root-run diagnostics).
+        if at(chars, j, "root") && (j + 4 == chars.len() || sep(chars[j + 4])
+            || chars[j + 4].is_whitespace() || matches!(chars[j + 4] as u32, 34 | 39)) {
+            return Some(j + 4);
+        }
         let mut hit = false;
         for w in ["var/home", "run/media", "home", "users", "media"] {
             if at(chars, j, w) {
@@ -699,6 +704,8 @@ mod tests {
         assert_eq!(s("/var/home/alice/x and /Users/carol/y"), "<home>/x and <home>/y");
         assert_eq!(s("/run/media/deck/sdcard/steamapps"), "<home>/sdcard/steamapps");
         assert_eq!(s("/mnt/c/Users/dave/z"), "<home>/z");
+        assert_eq!(s("/root/cache"), "<home>/cache");
+        assert_eq!(s("home /root and /rooted/file"), "home <home> and /rooted/file");
         assert_eq!(s(r"D:\Documents and Settings\eve\q"), r"<home>\q");
         assert_eq!(s("/usr/home/x"), "/usr/home/x", "only a home folder at the path's start");
         assert_eq!(s("logged in as tecnagamer, TecnaGamer's car"), "logged in as <user>, <user>'s car");

@@ -66,6 +66,10 @@ class ReportSendTest(unittest.TestCase):
         os.makedirs(os.path.join(self.user, "beamngEarth", "reports", "20261112_101501_profile_2"))
         self.assertTrue(reportsend.folder(self.user, "20261112_101501_profile_2"))
 
+    def test_root_home_is_scrubbed_without_matching_prefixes(self):
+        self.assertEqual(reportsend._ef().report_scrub('/root/cache and /rooted/x', [], False),
+                         '<home>/cache and /rooted/x')
+
     def test_send_with_choices(self):
         self.choose(screenshot=False, exactLocation=False)
         asyncio.run(self.sender().send(NAME))
