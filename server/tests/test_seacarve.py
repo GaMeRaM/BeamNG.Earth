@@ -371,21 +371,31 @@ class LandLookupTest(unittest.TestCase):
         sea = (np.array([south(100)]), np.array([LON0]))
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as d2:
             sc = seacarve.SeaCarver(md, d)
-            t, out = self.run_bg(lambda: sc.water(*land))
-            t.join(5)
-            self.assertFalse(t.is_alive(), "land: answered with the bathymetry still out")
-            calls = md.calls
-            ts, outs = self.run_bg(lambda: sc.water(*sea))
-            ts.join(0.5)
-            self.assertTrue(ts.is_alive(), "by the sea: waits for it")
-            md.fetcher.gate.set()
-            ts.join(10)
-            self.assertAlmostEqual(float(outs["r"][0][0]), -FakeBathy.BATHY, places=1)
-            ref = seacarve.SeaCarver(BathyMapData(), d2).water(*land)
-            for a, b in zip(out["r"], ref):
-                np.testing.assert_array_equal(a, b)
-            self.assertFalse(sc._land, "the whole raster replaced the one without bathymetry")
-            self.assertEqual(md.calls, calls, "built with the bathymetry from the first build's state, not again")
+            reference = seacarve.SeaCarver(BathyMapData(), d2)
+            try:
+                t, out = self.run_bg(lambda: sc.water(*land))
+                t.join(5)
+                self.assertFalse(t.is_alive(), "land: answered with the bathymetry still out")
+                calls = md.calls
+                ts, outs = self.run_bg(lambda: sc.water(*sea))
+                ts.join(0.5)
+                self.assertTrue(ts.is_alive(), "by the sea: waits for it")
+                md.fetcher.gate.set()
+                ts.join(10)
+                self.assertAlmostEqual(float(outs["r"][0][0]), -FakeBathy.BATHY, places=1)
+                ref = reference.water(*land)
+                for a, b in zip(out["r"], ref):
+                    np.testing.assert_array_equal(a, b)
+                self.assertFalse(sc._land, "the whole raster replaced the one without bathymetry")
+                self.assertEqual(md.calls, calls, "built with the bathymetry from the first build's state, not again")
+            finally:
+                # Both land lookups can start a full raster writer. Finish these before
+                # TemporaryDirectory removes their cache (Windows disallows that race).
+                md.fetcher.gate.set()
+                for carver in (sc, reference):
+                    if carver._full_ex is not None:
+                        carver._full_ex.shutdown(wait=True)
+
 
 
 class PrefetchTest(unittest.TestCase):
