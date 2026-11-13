@@ -59,6 +59,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import numpy as np
+import dnp
 
 import geodesy
 import gradesep
@@ -1207,6 +1208,20 @@ class MapData:
         """CellData of one cell with the given layers (fetched / built / cached as needed)."""
         return self._cell_collect(self._cell_submit(key, layers, kind))
 
+    def layer_unkept(self, key, layer, kind="background"):
+        """One cell's decoded layer (as cell(key, (layer,)).layers[layer]) for a caller that reads many cells once:
+        from memory when it is there, else decoded for this call alone and not kept in the MEM_MB cache. The modding
+        API's cachedOnly places read up to places.CACHED_CELLS_MAX cells: through cell() they would push the roads
+        layers every road tile reads out of MEM_MB (its note above) and be decoded again by the next build."""
+        key = _key(key)
+        with self._mem_lock:
+            got = self._mem.get((str(key), layer))
+        if got is not None:
+            return got[0]
+        lat_c, lon_c = key.center()
+        entry, _hit, _dt = self._decoded_layer(key, layer, kind, geodesy.EnuFrame(lat_c, lon_c, 0.0), remember=False)
+        return entry[0]
+
     def cells(self, keys, layers=LAYERS, kind="demand"):
         """[cell(key, layers, kind) for key in keys], their layers loaded side by side: the loops that asked for a
         list of cells one after another waited for each cell's download and decode before asking for the next (a cold
@@ -1649,7 +1664,7 @@ def preview(cells, path, px_per_cell=1024):
     ty = y0 + (jj + 0.5) / scale
     n = 2.0 ** z
     lon = tx / n * 360.0 - 180.0
-    lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * ty / n))))
+    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * ty / n))))
     mx = (tx / n - 0.5) * 2 * maprasters.MERC_HALF
     my = (0.5 - ty / n) * 2 * maprasters.MERC_HALF
     lc_img = np.full((H, W, 3), 255, np.uint8)

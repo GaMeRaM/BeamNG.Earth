@@ -10,6 +10,7 @@
 //! back through callbacks only when a road needs them, as the Python did), the opt-in French and European passes, and
 //! the Spec namedtuples. The numbers are the Python's bit for bit: numpy's pairwise sums, linspace and interp, libm's
 //! cos / hypot, Python's min / max (the first of equals) and round (half to even).
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -484,7 +485,7 @@ fn urban_samples(ll: &[P], step_m: f64) -> Vec<P> {
         if p[1] > mx || mx.is_nan() { mx = p[1] }
     }
     let lat = 0.5 * (mn + mx);
-    let sx = 111320.0 * lat.to_radians().cos();
+    let sx = 111320.0 * lat.to_radians().dcos();
     let mut dist = vec![0.0f64; ll.len()];
     for k in 1..ll.len() {
         let (dx, dy) = ((ll[k][0] - ll[k - 1][0]) * sx, (ll[k][1] - ll[k - 1][1]) * 110540.0);
@@ -504,16 +505,16 @@ fn urban_samples(ll: &[P], step_m: f64) -> Vec<P> {
     }).collect()
 }
 
-/// roads._beside: the points d m left and right of each vertex of each line (counts of pts in turn).
-fn beside(pts: &[P], counts: &[usize], d: f64) -> (Vec<P>, Vec<P>) {
+/// roads._beside: the points ds[n] m left and right of each vertex of line n (counts of pts in turn).
+fn beside(pts: &[P], counts: &[usize], ds: &[f64]) -> (Vec<P>, Vec<P>) {
     let mut left = pts.to_vec();
     let mut right = pts.to_vec();
     let mut k = 0;
-    for &c in counts {
+    for (&c, &d) in counts.iter().zip(ds) {
         let p = &pts[k..k + c];
         if c >= 2 {
             let lat: Vec<f64> = p.iter().map(|q| q[1]).collect();
-            let mx = 111320.0 * (np_sum(&lat) / (c as f64)).to_radians().cos();
+            let mx = 111320.0 * (np_sum(&lat) / (c as f64)).to_radians().dcos();
             let m = [mx, 110540.0];
             let q: Vec<P> = p.iter().map(|v| [v[0] * m[0], v[1] * m[1]]).collect();
             for j in 0..c {
@@ -524,7 +525,7 @@ fn beside(pts: &[P], counts: &[usize], d: f64) -> (Vec<P>, Vec<P>) {
                 } else {
                     [(q[j + 1][0] - q[j - 1][0]) / 2.0, (q[j + 1][1] - q[j - 1][1]) / 2.0]
                 };
-                let h = t[0].hypot(t[1]);
+                let h = t[0].dhypot(t[1]);
                 let h = if h.is_nan() { h } else if h > 1e-9 { h } else { 1e-9 };
                 let t = [t[0] / h, t[1] / h];
                 let off = [(-t[1] * d) / m[0], (t[0] * d) / m[1]];
@@ -567,6 +568,7 @@ struct Prm {
     urban_sample: f64,
     urban_share: f64,
     urban_beside: f64,
+    urban_highway_beside: f64,
     urban_beside_share: f64,
     urban_both_share: f64,
     dual_gap0: f64,
@@ -593,7 +595,8 @@ impl Prm {
         let g = |k: &str| prm_get(p, k);
         Ok(Prm {
             min_part: g("MIN_PART")?, urban_sample: g("URBAN_SAMPLE_M")?, urban_share: g("URBAN_SHARE")?,
-            urban_beside: g("URBAN_BESIDE_M")?, urban_beside_share: g("URBAN_BESIDE_SHARE")?,
+            urban_beside: g("URBAN_BESIDE_M")?, urban_highway_beside: g("URBAN_HIGHWAY_BESIDE_M")?,
+            urban_beside_share: g("URBAN_BESIDE_SHARE")?,
             urban_both_share: g("URBAN_BOTH_SHARE")?, dual_gap0: g("DUAL_GAP_M0")?, dual_gap1: g("DUAL_GAP_M1")?,
             dual_share: g("DUAL_SHARE")?, dual_cos: g("DUAL_COS")?, mountain_on: g("MOUNTAIN_ON")? != 0.0,
             mountain_switchbacks: g("MOUNTAIN_SWITCHBACKS")?, mountain_span: g("MOUNTAIN_SPAN_M")?,
@@ -614,7 +617,7 @@ fn switchbacks(ll: &[P], span: f64, turn: f64) -> usize {
         return 0;
     }
     let lat: Vec<f64> = ll.iter().map(|p| p[1]).collect();
-    let kx = 111320.0 * (np_mean(&lat)).to_radians().cos();
+    let kx = 111320.0 * (np_mean(&lat)).to_radians().dcos();
     let mut flat = Vec::with_capacity(ll.len() * 2);
     for p in ll {
         flat.push((p[0] - ll[0][0]) * kx);
@@ -639,11 +642,11 @@ pub fn winding(ll: &[P], step: f64) -> (f64, f64) {
         return (0.0, 0.0);
     }
     let lat: Vec<f64> = ll.iter().map(|p| p[1]).collect();
-    let kx = 111320.0 * (np_mean(&lat)).to_radians().cos();
+    let kx = 111320.0 * (np_mean(&lat)).to_radians().dcos();
     let xy: Vec<[f64; 2]> = ll.iter().map(|p| [(p[0] - ll[0][0]) * kx, (p[1] - ll[0][1]) * 110540.0]).collect();
     let mut s = vec![0.0f64; xy.len()];
     for k in 1..xy.len() {
-        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).dhypot(xy[k][1] - xy[k - 1][1]);
     }
     let total = s[s.len() - 1];
     if total < 2.0 * step {
@@ -664,7 +667,7 @@ pub fn winding(ll: &[P], step: f64) -> (f64, f64) {
     let mut turn = 0.0f64;
     let mut prev: Option<f64> = None;
     for w in pts.windows(2) {
-        let h = (w[1][1] - w[0][1]).atan2(w[1][0] - w[0][0]);
+        let h = (w[1][1] - w[0][1]).datan2(w[1][0] - w[0][0]);
         if let Some(p) = prev {
             let mut d = h - p;
             if d > std::f64::consts::PI {
@@ -816,7 +819,7 @@ fn dual(l: &Layer, rules: &RoadRules, prm: &Prm, specs: &mut [Option<Sp>], europ
         let lines: Vec<(usize, usize)> = idx.iter().map(|&i| l.all_pts(i)).collect();
         let lat: Vec<f64> = lines.iter().flat_map(|&(a, b)| (a..b).map(|k| l.ll[[k, 1]])).collect();
         let lat0 = np_mean(&lat);
-        let m = [111320.0 * lat0.to_radians().cos(), 110540.0];
+        let m = [111320.0 * lat0.to_radians().dcos(), 110540.0];
         let r0 = l.pt(lines[0].0);
         let xy: Vec<Vec<f64>> = lines.iter().map(|&(a, b)| {
             let mut v = Vec::with_capacity(2 * (b - a));
@@ -1133,6 +1136,15 @@ impl RoadRules {
         if !asks.is_empty() {
             let urban_fn = urban_fn.unwrap();
             let lines: Vec<(usize, usize)> = asks.iter().map(|q| l.all_pts(q.i)).collect();
+            // (a motorway's or trunk road's built-up land further out, URBAN_HIGHWAY_BESIDE_M: WorldCover's built-up
+            // fringe of a wide rural freeway's own pavement reached the 30 m probes, I-25 at the Colorado / Wyoming line,
+            // wyo-backroads' PR #1117)
+            let reach: Vec<f64> = asks.iter().map(|q| if self.has(l.cls[q.i] as usize, F_MOTORWAY | F_TRUNK) {
+                prm.urban_highway_beside
+            } else {
+                prm.urban_beside
+            }).collect();
+            let edge: Vec<f64> = vec![prm.edge_m; asks.len()];
             let (pts, counts) = py.detach(|| {
                 let mut pts: Vec<P> = Vec::new();
                 let mut counts = Vec::with_capacity(lines.len());
@@ -1142,12 +1154,12 @@ impl RoadRules {
                     counts.push(s.len());
                     pts.extend(s);
                 }
-                let (lf, rt) = beside(&pts, &counts, prm.urban_beside);
+                let (lf, rt) = beside(&pts, &counts, &reach);
                 let mut all = pts.clone();
                 all.extend(lf);
                 all.extend(rt);
                 if european {
-                    let (el, er) = beside(&pts, &counts, prm.edge_m);
+                    let (el, er) = beside(&pts, &counts, &edge);
                     all.extend(el);
                     all.extend(er);
                 }
@@ -1437,7 +1449,7 @@ fn rural_connectors(l: &Layer, rules: &RoadRules, prm: &Prm, out: &mut [Option<S
         return;
     }
     let lat: Vec<f64> = points.iter().map(|p| p[1]).collect();
-    let scale = [111320.0 * np_mean(&lat).to_radians().cos(), 110540.0];
+    let scale = [111320.0 * np_mean(&lat).to_radians().dcos(), 110540.0];
     for &i in &cand {
         let Some(e) = ends(i) else { continue };
         if l.lens[i] > 2.0 * prm.urban_beside {

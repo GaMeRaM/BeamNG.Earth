@@ -535,6 +535,16 @@ function M.heldCamera(c)
   return h
 end
 
+-- The modding API's rebased event (api.lua, 1.7): the world's origin moved from the anchor `old` (nil: the first one)
+-- to st.anchor, so an add-on's own game coordinates are stale and it converts them again (api.toGame). Said right
+-- after st.anchor changed, in the frame that moved the world.
+function M._apiRebased(old, purpose)
+  local api = rawget(_G, 'beamngEarth_api')
+  if not (api and api._event and st.anchor) then return end
+  pcall(api._event, 'rebased', { lat = st.anchor.lat, lon = st.anchor.lon, oldLat = old and old.lat or nil,
+    oldLon = old and old.lon or nil, anchorId = st.anchorId, purpose = purpose })
+end
+
 local function commitTeleport(msg)
   local tr, err = anchorTerrain(msg)
   gov:heavyNow() -- the user asked for a jump: no waiting for a calm frame
@@ -587,12 +597,14 @@ local function commitTeleport(msg)
   be:reloadCollision()
   M._psum.mod.note('collision')
 
+  local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
   require('beamngEarth/turbinestream').reanchor(st.anchor)
   roads.replace(st.anchor, msg.anchorId)     -- (road geotiles too: roads.lua)
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(msg.lat, msg.lon)
+  M._apiRebased(oldAnchor, 'teleport')
   st.block, st.terrainPending, st.terrainErrorAt = { cx = tr.cx, cy = tr.cy }, nil, nil
   edgeguard.newFrame(st.guard)
   sendCommits(msg.anchorId, tr.cx, tr.cy)
@@ -646,9 +658,11 @@ local function finishRebase()
   if rb.purpose == 'view' then M._enterViewFrame(xf)
   elseif rb.purpose == 'carback' then M._leaveViewFrame() end
 
+  local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = rb.newAnchor, msg.anchorId, msg.anchorKey
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(st.anchor.lat, st.anchor.lon)
+  M._apiRebased(oldAnchor, rb.purpose)
   st.block, st.terrainPending, st.terrainErrorAt = tr and { cx = tr.cx, cy = tr.cy } or nil, nil, nil
   edgeguard.newFrame(st.guard)
   if tr then sendCommits(msg.anchorId, tr.cx, tr.cy)
@@ -1531,6 +1545,10 @@ local function onMessage(msg)
       beammp = tostring(msg.beammp or ''), answers = appPathAnswers,
       result = r and { what = tostring(r.what or ''), ok = r.ok == true, text = tostring(r.text or '') }
         or (appPaths and appPaths.result) }
+  elseif t == 'report_status' or t == 'report_context_done' then
+    -- the in-game reports' sends and the server's part of a report (report.lua, reportsend.lua; server reportsend.py)
+    local rep = rawget(_G, 'beamngEarth_report')
+    if rep and rep.onServerMessage then rep.onServerMessage(msg) end
   elseif t == 'memory' then
     -- the world server's memory and its limit (server memwatch.status): the settings page's line
     M._memoryInfo = { usedMB = tonumber(msg.usedMB) or 0, limitMB = tonumber(msg.limitMB) or 0,
@@ -2439,6 +2457,14 @@ local function perfContext()
     end
   end
   if (st.serverBacklog or 0) > 0 then d[#d + 1] = 'server backlog ' .. st.serverBacklog end
+  -- the single slow pieces of the last second (a "roads" or "net" frame is mostly one: a collision rebuild, a
+  -- building mesh's first load, a terrain commit message; London 2026-11-12)
+  local big = roads.lastBig
+  if big and os.clock() - big.at < 1.0 then d[#d + 1] = string.format('roads unit %s %.0f ms', big.kind, big.ms) end
+  local slowMsg = M._netq.lastSlow
+  if slowMsg and os.clock() - slowMsg.at < 1.0 then
+    d[#d + 1] = string.format('message %s %.0f ms', slowMsg.type, slowMsg.ms)
+  end
   c.doing = table.concat(d, ', ')
   c.extra = string.format('Lua %.0f MB%s%s', collectgarbage('count') / 1024,
     st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '', M._alloc.text())
@@ -2661,7 +2687,6 @@ local function onUpdate(dtReal, dtSim)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
-  if st.inOurLevel then gps.update(st.anchor, st.player) end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
   local frameMs = frameMs0
@@ -2737,6 +2762,11 @@ local function onUpdate(dtReal, dtSim)
       local c = nq.cost[tostring(msg.type)]
       if not c then c = { n = 0, ms = 0, max = 0 }; nq.cost[tostring(msg.type)] = c end
       c.n, c.ms, c.max = c.n + 1, c.ms + ms, math.max(c.max, ms)
+      if ms >= 20 then          -- (a hitch's context: perfContext names the message that made a "net" frame)
+        local s = nq.lastSlow or {}
+        s.type, s.ms, s.at = tostring(msg.type), ms, os.clock()
+        nq.lastSlow = s
+      end
     end
     M._alloc.roll(st.clock)
     M._alloc.frame()
@@ -2799,6 +2829,9 @@ local function onUpdate(dtReal, dtSim)
   end
 
   updatePlayer(dtReal)
+  -- Rebase commits can change the anchor after the previous frame's player sample. Route only with
+  -- this frame's position, once the vehicle move has become visible in the matching world frame.
+  if st.inOurLevel and not st.lagProbe then gps.update(st.anchor, st.player) end
   if st.active then
     if not dropHoldFailed and (not st.paused or dropHold.active) then     -- (it runs on while it paused the game)
       local ok, err = pcall(updateDropHold, dtReal)
@@ -3518,17 +3551,19 @@ function M.dashboardContext()
   local player
   local pl = st.player
   if pl then
-    player = { lat = pl.lat, lon = pl.lon, speed = pl.speed } -- speed is m/s
+    -- x, y: the world frame (the road graph's: the screens draw its roads round the car); north: true north's angle
+    -- clockwise from the frame's +y at the car (radians)
+    player = { lat = pl.lat, lon = pl.lon, speed = pl.speed, x = pl.x, y = pl.y, north = 0 } -- speed is m/s
+    local anchor = st.anchor
+    if anchor and anchor.northAt then
+      local okN, nx, ny = pcall(anchor.northAt, anchor, pl.x, pl.y)
+      if okN and tonumber(nx) and tonumber(ny) then player.north = math.atan2(nx, ny) end
+    end
     local veh = getPlayerVehicle and getPlayerVehicle(0)
     if veh then
       local ok, dir = pcall(function() return veh:getDirectionVector() end)
       if ok and dir and math.abs(dir.x) + math.abs(dir.y) >= 1e-6 then
-        local heading = math.deg(math.atan2(dir.x, dir.y))
-        local anchor = st.anchor
-        if anchor and anchor.northAt then
-          local okN, nx, ny = pcall(anchor.northAt, anchor, pl.x, pl.y)
-          if okN and tonumber(nx) and tonumber(ny) then heading = heading - math.deg(math.atan2(nx, ny)) end
-        end
+        local heading = math.deg(math.atan2(dir.x, dir.y)) - math.deg(player.north)
         player.heading = (heading + 360) % 360 -- degrees clockwise from true north
       end
     end
@@ -3542,6 +3577,7 @@ function M.dashboardContext()
     active = st.inOurLevel == true,
     connected = net.isConnected(),
     mapPort = st.mapPort,
+    anchorId = st.anchorId,         -- (the road graph's frame must be this one: dashboard.lua)
     attribution = attributionText(farfield.counters()),
     imageryCreditsByArea = creditsByArea,
     otherCredits = serverOtherCredits,

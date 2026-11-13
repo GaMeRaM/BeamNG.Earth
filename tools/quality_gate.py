@@ -42,6 +42,7 @@ MODULES = (
     "test_ground_square", "test_far_first", "test_halo_reads", "test_enginepatch",
     "test_prov_refresh", "test_drivability",
     "test_memwatch", "test_portals", "test_road_clearance", "test_roadlayercache", "test_speed242", "test_tilecuts", "test_deckjoins", "test_deckpad_levels", "test_warm_queue",
+    "test_determinism",
 )
 
 

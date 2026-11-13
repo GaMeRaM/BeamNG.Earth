@@ -12,6 +12,7 @@ import logging
 import numpy as np
 
 import fast
+import dnp
 
 log = logging.getLogger("earthd.powerlines")
 
@@ -80,8 +81,8 @@ def supported_points(ring, arms):
     maximum = min(250., max(30., (float(np.min(arms[:, 1])) - WIRE_CLEAR_M - SPAN_RESERVE_M) / SAG))
     result = [ring[0]]
     for a, b in zip(ring[:-1], ring[1:]):
-        scale = np.array([111320. * np.cos(np.radians((a[1] + b[1]) / 2)), 111320.])
-        count = max(1, int(np.ceil(np.linalg.norm((b[:2] - a[:2]) * scale) / maximum)))
+        scale = np.array([111320. * dnp.cos(np.radians((a[1] + b[1]) / 2)), 111320.])
+        count = max(1, int(np.ceil(dnp.norm((b[:2] - a[:2]) * scale) / maximum)))
         result.extend(a + (b - a) * (k / count) for k in range(1, count + 1))
     return np.asarray(result)
 # The yards: West Coast USA's substation yard (-238, 20) as a kit, in its parts' own frame (its forest4 files'
@@ -203,7 +204,7 @@ def _off_roads(frame, md, e, n, ll, clear_m=None):
         return got
     ang = 2.0 * np.pi * np.arange(CLEAR_DIRS) / CLEAR_DIRS
     rings = np.arange(CLEAR_STEP_M, CLEAR_SEARCH_M + 1e-6, CLEAR_STEP_M)
-    around = (rings[:, None, None] * np.stack([np.cos(ang), np.sin(ang)], -1)[None]).reshape(-1, 2)
+    around = (rings[:, None, None] * np.stack([dnp.cos(ang), dnp.sin(ang)], -1)[None]).reshape(-1, 2)
     for i in range(len(e)):
         lines = gasstations.drive_lines(frame, roads_of(mapcells.cell_of(float(ll[i, 1]), float(ll[i, 0]))),
                                         float(e[i]), float(n[i]), 30.0 + CLEAR_SEARCH_M)

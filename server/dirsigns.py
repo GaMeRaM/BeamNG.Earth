@@ -24,6 +24,7 @@ import numpy as np
 
 import exitsigns
 import fast
+import dnp
 import mapcells
 import roads
 import speedsigns
@@ -286,7 +287,7 @@ def board_kind(style, kind, board, rows):
         a, delta = pts[:-1], np.diff(pts, axis=0)
         length2 = np.sum(delta * delta, axis=1)
         frac = np.clip(np.sum((q - a) * delta, axis=1) / np.maximum(length2, 1e-9), 0., 1.)
-        if np.any(np.sum((a + frac[:, None] * delta - q) ** 2, axis=1) < 0.25):
+        if np.any(np.sum(dnp.sq(a + frac[:, None] * delta - q), axis=1) < 0.25):
             return 'freeway'
     return 'road'
 
@@ -308,7 +309,7 @@ def steps_back(boards, rows, frame):
         for xy, m in lines:
             ab = np.diff(xy, axis=0)
             t = np.clip(((q - xy[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
-            d = float(np.linalg.norm(xy[:-1] + t[:, None] * ab - q, axis=1).min())
+            d = float(dnp.norm(xy[:-1] + t[:, None] * ab - q, axis=1).min())
             if d < best:
                 best, meta = d, m
         if meta is not None and best <= 5.0 and int(meta[2]) == motorway and not meta[4]:

@@ -1,6 +1,7 @@
 """Ground-level covered driveways cut through procedural buildings, with matching solid geometry."""
 import copy
 
+import dnp
 import numpy as np
 from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
@@ -52,7 +53,7 @@ def collect(frame, layers, x0, y0, size=256.0):
                     xy = np.c_[e - x0, n - y0]
                     if len(xy) < 2 or (xy.max(0) < -50).any() or (xy.min(0) > size + 50).any():
                         continue
-                    length = float(np.hypot(*np.diff(xy, axis=0).T).sum())
+                    length = float(dnp.hypot(*np.diff(xy, axis=0).T).sum())
                     if length < 1.0 or (flag == "is_tunnel" and length > 45.0):
                         continue
                     if specs is None:
@@ -87,7 +88,7 @@ def apply(items, passages):
         xy = np.asarray(xy, np.float64).copy()
         for at, neighbour in ((0, 1), (-1, -2)):
             direction = xy[at] - xy[neighbour]
-            xy[at] += direction * END_PAD_M / max(float(np.hypot(*direction)), 1e-9)
+            xy[at] += direction * END_PAD_M / max(float(dnp.hypot(*direction)), 1e-9)
         cuts.append((LineString(xy).buffer(width / 2 + SIDE_PAD_M, cap_style="flat"), height))
     out = []
     for spec, gmin, gmax in items:
@@ -169,7 +170,7 @@ def walls(mesh, fragment, ring, z0, top, looks, lite):
     colors = np.asarray(original.C).reshape(-1, 4, 4)
     for a, end in zip(ring, np.roll(ring, -1, axis=0)):
         delta = end - a
-        length = float(np.linalg.norm(delta))
+        length = float(dnp.norm(delta))
         if length < 1e-5:
             continue
         u = delta / length
@@ -177,8 +178,8 @@ def walls(mesh, fragment, ring, z0, top, looks, lite):
         exterior = False
         for p, q in zip(source.ring, np.roll(source.ring, -1, axis=0)):
             direction = q - p
-            if (abs(float(direction @ normal)) < 1e-5
-                    and abs(float((a - p) @ normal)) < 1e-5):
+            if (abs(float(dnp.matmul(direction, normal))) < 1e-5
+                    and abs(float(dnp.matmul(a - p, normal))) < 1e-5):
                 exterior = True
                 break
         if not exterior:
@@ -188,12 +189,12 @@ def walls(mesh, fragment, ring, z0, top, looks, lite):
             continue
         for k, (quad, uv) in enumerate(zip(positions, uvs)):
             # Includes the sash overlays standing 3 cm proud of their wall.
-            if np.max(np.abs((quad[:, :2] - a) @ normal)) > .05:
+            if np.max(np.abs(dnp.matmul(quad[:, :2] - a, normal))) > .05:
                 continue
             polygon = np.c_[quad, uv]
             for plane in (lambda p: p[2] - z0, lambda p: top - p[2],
-                          lambda p: float((p[:2] - a) @ u),
-                          lambda p: length - float((p[:2] - a) @ u)):
+                          lambda p: float(dnp.matmul(p[:2] - a, u)),
+                          lambda p: length - float(dnp.matmul(p[:2] - a, u))):
                 if len(polygon) < 3:
                     break
                 polygon = _clip(polygon, plane)
@@ -202,5 +203,5 @@ def walls(mesh, fragment, ring, z0, top, looks, lite):
             token = (original.M[k * 2], tuple(colors[k, 0]))
             for j in range(1, len(polygon) - 1):
                 tri = polygon[[0, j, j + 1]]
-                if np.linalg.norm(np.cross(tri[1, :3] - tri[0, :3], tri[2, :3] - tri[0, :3])) > 1e-8:
+                if dnp.norm(np.cross(tri[1, :3] - tri[0, :3], tri[2, :3] - tri[0, :3])) > 1e-8:
                     mesh.tri(*tri[:, :3], *tri[:, 3:], token)

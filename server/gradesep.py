@@ -20,6 +20,7 @@ import weakref
 import numpy as np
 
 import fast
+import dnp
 import mapcells
 import roads
 import railways
@@ -193,6 +194,8 @@ def _layer_rows(f):
                 st = roads.STYLE.get(c)
                 if st is not None:
                     sel = road & (clss == c)
+                    if c == "cycleway":         # (only a street closed to cars is a road: roads.cycle_streets)
+                        sel &= roads.cycle_streets(f)
                     kinds[sel], halves[sel] = 0, st[0] / 2.0
             for i in np.flatnonzero(subs == "rail").tolist():
                 if railways.drawn(f, i) is not None:
@@ -303,7 +306,7 @@ def _spans(md, key, feats):
         a, b = int(starts[ln]), int(starts[ln + 1]) - 1
         for at, inside in ((a, a + 1), (b, b - 1)):
             outward = pts[at] - pts[inside]
-            probe_pts[at] += PORTAL_OUT_M * outward / max(float(np.linalg.norm(outward)), 1e-9)
+            probe_pts[at] += PORTAL_OUT_M * outward / max(float(dnp.norm(outward)), 1e-9)
     fast.require(169, "gradesep_candidates")
     cand, smp = fast._ef.gradesep_candidates(probe_pts, starts, kinds, halves, groups, de, np.array(
         [END_M, SAMPLE_GAP_M, SAMPLE_STEP_M, MIN_SIN, TOUCH_M, GAP_MAX_M, TURN_COS, GAP_SHARE, 0.0 if ON else 1.0],
@@ -346,7 +349,7 @@ def _spans(md, key, feats):
     for ln, s0, s1, how in sp:
         ln = int(ln)
         i, a, b = oi_l[ln], oa_l[ln], ob_l[ln]
-        L = float(np.hypot(*np.diff(pts[starts[ln]:starts[ln + 1]], axis=0).T).sum())
+        L = float(dnp.hypot(*np.diff(pts[starts[ln]:starts[ln + 1]], axis=0).T).sum())
         if i < 0 or L <= 0 or s1 - s0 <= 0:
             continue
         got.append((i, a + (b - a) * float(s0) / L, a + (b - a) * float(s1) / L, int(how)))
@@ -380,8 +383,8 @@ def _bridge_source_keys(feats):
                 continue
             ring = np.asarray(part[0], np.float64)
             for a, b in zip(ring[:-1], ring[1:]):
-                scale = np.array([111320. * np.cos(np.radians((a[1] + b[1]) / 2)), 111320.])
-                n = max(1, int(np.ceil(np.linalg.norm((b - a) * scale) / 500.)))
+                scale = np.array([111320. * dnp.cos(np.radians((a[1] + b[1]) / 2)), 111320.])
+                n = max(1, int(np.ceil(dnp.norm((b - a) * scale) / 500.)))
                 points = np.linspace(a, b, n + 1)
                 for p, q in zip(points[:-1], points[1:]):
                     out.update(mapcells.cells_for_bbox(min(p[1], q[1]), min(p[0], q[0]),

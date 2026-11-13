@@ -24,8 +24,11 @@ import threading
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import secrossings
+import streetparking
 import dem as demmod
 import development as developmentmod
 import farfield
@@ -180,11 +183,15 @@ def load_airports(cache_dir, dem):
 
 
 def _rss_mb():
-    try:
-        with open("/proc/self/statm") as f:
-            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1e6
-    except (OSError, ValueError):
-        return 0.0
+    """This process's memory in RAM, in MB (budget.resident_mb: Windows too, where this read 0)."""
+    import budget
+    return budget.resident_mb() or 0.0
+
+
+def _held_mb():
+    """... and what the memory ceiling counts (budget.memory_mb: resident + swapped; Windows: private bytes)."""
+    import budget
+    return budget.memory_mb() or 0.0
 
 
 def _trace_memory(every_s=60.0, top=10):
@@ -217,7 +224,9 @@ def _trace_memory(every_s=60.0, top=10):
             else:
                 top_sites = [(f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno}", st.size)
                              for st in snap.statistics("lineno")[:top]]
-            log.info("memory pid %d: rss %.0f MB, traced %.0f MB; top: %s", os.getpid(), _rss_mb(), total / 1e6,
+            # (held: what the memory ceiling counts, budget.memory_mb; the tracer's own tables are part of it)
+            log.info("memory pid %d: rss %.0f MB, held %.0f MB (%.0f the tracer's), traced %.0f MB; top: %s",
+                     os.getpid(), _rss_mb(), _held_mb(), tracemalloc.get_tracemalloc_memory() / 1e6, total / 1e6,
                      "; ".join(f"{k} {v / 1e6:.0f} MB" for k, v in top_sites))
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
@@ -780,11 +789,10 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
                                              bridges.depth_of(fid)))
     except Exception as e:          # no decks: the graph follows the ground under bridges
         log.debug("navgraph decks: %s: %s", type(e).__name__, e)
-    tun = {}
-    try:            # (the tunnels the road tiles build: the AI drives through them, navgraph.build; off: AI_TUNNELS)
-        for fid, _spec, xy, z, _lon in () if not navgraphmod.AI_TUNNELS else tunnel_profiles(aid, frame, elev, g).parts(feats, (x - w, y - w, x + w, y + w)):
-            tun.setdefault(navgraphmod.part_fid(fid), []).append((np.asarray(xy, np.float64)[:, :2],
-                                                               np.asarray(z, np.float64)))
+    tun, open_tun = {}, {}
+    try:
+        tun, open_tun = navgraphmod.tunnel_floors(tunnel_profiles(aid, frame, elev, g), feats,
+                                               (x - w, y - w, x + w, y + w))
     except Exception as e:          # no tunnels: their stretches stay the minimap's only
         log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
@@ -796,7 +804,7 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
         if de_nodes:
             de_routes = _de_routes(_s.md, keys)
     nodes = secrossings.read(_s.md, frame, keys) if secrossings.wanted(rules.get("country"), de_nodes) else None
-    graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, widths=_s.widths,
+    graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, open_tunnels=open_tun, widths=_s.widths,
                               left_hand=left_hand,
                               mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
                               priority=None if nodes is None else nodes["priority"],
@@ -1100,7 +1108,7 @@ def _dem_warm(frame, box, zoom):
             return int(math.floor((x / 360.0 + 0.5) * n))
 
         def row(y):
-            return int(math.floor((0.5 - math.asinh(math.tan(math.radians(y))) / (2 * math.pi)) * n))
+            return int(math.floor((0.5 - dmath.asinh(dmath.tan(math.radians(y))) / (2 * math.pi)) * n))
         r0, r1 = max(0, row(float(la.max()))), min(n - 1, row(float(la.min())))
         keys = [(int(zoom), c % n, r) for r in range(r0, r1 + 1) for c in range(col(float(lo.min())), col(float(lo.max())) + 1)]
     except Exception as e:      # (never in the tile's way: its samples fetch what they need as before)
@@ -1264,7 +1272,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
              if towns_on and props is not None and out_dir is not None else None)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles,
-                                 walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
+                                 # (the stations' made-up driveways: no sidewalk across them; nor along a square's
+                                 # street-side parking rows, streetparking.plaza_bay_cuts)
+                                 walk_cuts=fuel_cuts + (streetparking.plaza_bay_cuts(frame, tx, ty, _s.md)
+                                                        if walks is not None and _s.md is not None else []),
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region, country=country,
                                  structures=buildingsmod.centres(items, tx, ty) if items else (),
@@ -1473,7 +1484,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # for one Szeged tile against 1.6.3's 4 and 16; the grading only moves ground near roads, which towers keep off)
         powerlines.tile_lines(frame, tx, ty, _s.md, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                               props, wires, clearance=clearance[0] if clearance else None)
-        mappedpoles.tile_poles(frame, tx, ty, _s.md, elev, props, wires, pole_profile, urban)
+        mappedpoles.tile_poles(frame, tx, ty, _s.md, elev, props, wires, pole_profile, urban,
+                               clearance=clearance[0] if clearance else None)
         import fences
         try:
             props.extend(fences.rows(frame, infra_fn, box, elev, decks=[{"n": np.column_stack((xy, z)), "w": spec.width}
@@ -1984,8 +1996,8 @@ def _map_walks(src, dst, walks):
             c = dict(wk["corner"])
             c["arc"] = mp(c["arc"])
             c["outer"] = [tuple(v) for v in mp(np.asarray(c["outer"], np.float64).reshape(-1, 3))]
-            inw = np.asarray(c["inward"], np.float64).reshape(-1, 2) @ r2.T
-            c["inward"] = inw / np.maximum(np.hypot(*inw.T), 1e-12)[:, None]
+            inw = dnp.matmul(np.asarray(c["inward"], np.float64).reshape(-1, 2), r2.T)
+            c["inward"] = inw / np.maximum(dnp.hypot(*inw.T), 1e-12)[:, None]
             wk["corner"] = c
         else:
             wk["pts"] = mp(wk["pts"])
@@ -2142,7 +2154,7 @@ def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts):
             continue
         piv = float(info.get("pivot", e.get("pivot", 0.0)))
         r, _t, c = geotiles.placement(tile.frame, frame, (0.0, 0.0, piv))
-        s = r.T @ c
+        s = dnp.matmul(r.T, c)
         with open(src, "rb") as f:
             blob = fast._ef.cdae_shear(f.read(), float(e["pos"][2]), float(s[0]), float(s[1]), float(s[2]), piv)
         name = f"rx_{aid}_{tile.key}_{what}.cdae"
@@ -2161,7 +2173,7 @@ def _geo_near(gx, gy, lat, lon):
         import geotiles
         la, lo = geotiles.centre(gx, gy)
         dy = (float(la) - float(lat)) * 111320.0
-        dx = (float(lo) - float(lon)) * 111320.0 * math.cos(math.radians(float(lat)))
+        dx = (float(lo) - float(lon)) * 111320.0 * dmath.cos(math.radians(float(lat)))
         return math.hypot(dx, dy) <= URGENT_PHOTO_M
     except Exception:           # (no urgency rather than no tile)
         return False
