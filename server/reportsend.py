@@ -69,8 +69,13 @@ def folder(user_dir, name):
 
 
 def roots(user_dir):
-    return [os.path.join(user_dir, sub, "reports") for sub in SUBDIRS
-            if os.path.isdir(os.path.join(user_dir, sub, "reports"))]
+    # Windows resolves both spellings to the same directory; Linux may also have an alias.
+    unique = {}
+    for sub in SUBDIRS:
+        path = os.path.join(user_dir, sub, "reports")
+        if os.path.isdir(path):
+            unique.setdefault(os.path.normcase(os.path.realpath(path)), path)
+    return list(unique.values())
 
 
 def user_names():

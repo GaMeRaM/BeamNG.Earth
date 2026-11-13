@@ -66,6 +66,15 @@ class ReportSendTest(unittest.TestCase):
         os.makedirs(os.path.join(self.user, "beamngEarth", "reports", "20261112_101501_profile_2"))
         self.assertTrue(reportsend.folder(self.user, "20261112_101501_profile_2"))
 
+    def test_alias_roots_are_scanned_once(self):
+        alias = os.path.join(self.user, 'beamngEarth')
+        if not os.path.exists(alias):
+            try:
+                os.symlink(os.path.join(self.user, 'beamngearth'), alias, target_is_directory=True)
+            except OSError as e:
+                self.skipTest(str(e))
+        self.assertEqual(len(reportsend.roots(self.user)), 1)
+
     def test_root_home_is_scrubbed_without_matching_prefixes(self):
         self.assertEqual(reportsend._ef().report_scrub('/root/cache and /rooted/x', [], False),
                          '<home>/cache and /rooted/x')
