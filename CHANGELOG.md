@@ -4,7 +4,7 @@ What changed in each release of BeamNG.Earth, newest first.
 
 Fork entries separate **Изменения upstream** from **Наши правки**. Cache and validation notes follow separately. Mention unresolved errors only when the release changes their behaviour or adds relevant diagnostics; do not repeat unrelated known-issue disclaimers.
 
-## 1.9.1-beta.47 — upstream dev b122aafc (2026-11-13)
+## 1.9.1-beta.48 — upstream dev b122aafc (2026-11-13)
 
 ### Изменения upstream
 
@@ -28,6 +28,8 @@ Fork entries separate **Изменения upstream** from **Наши правк
 - Упомянутые upstream замеры ускорения относятся к его тестовым местам и состоянию кэша. В этом выпуске они не выдаются за результат измерений на компьютере пользователя.
 
 ### Наши правки
+
+- Исправлена очистка временного кэша в Windows-тесте ширин дорог: завершённые задачи и memory-mapped файлы освобождаются перед удалением каталога. Семантика передачи результатов и ошибок upstream сохранена.
 
 - Сохранены адресная отмена устаревших работ, профайлер, векторный навигатор, российские знаки и необходимые исправления геометрии/отчётов. Передача областей ошибок объединена с существующим исполнителем задач; отмена проверяется отдельно.
 - Добавлены новые проверки кэша блоков, базовых снимков, пакетного восстановления, BNWT, областей ошибок и возврата на уровень в основной набор и Windows CI.

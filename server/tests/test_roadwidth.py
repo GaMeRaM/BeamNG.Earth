@@ -134,6 +134,9 @@ class StoreTest(unittest.TestCase):
             # (a cell's walls are its own buildings: a neighbour that failed is not kept, the home cell is)
             self.assertTrue(all(f.startswith(os.path.join(str(home.z), str(home.x), str(home.y) + ".")) for f in files),
                             files)
+            # Finished executor futures may retain mapped results until cyclic GC. Release them before Windows
+            # deletes this temporary directory, just as the successful-read case above already does.
+            gc.collect()
 
 class CopiesTest(unittest.TestCase):
     def test_each_copy_of_a_road_its_own_width(self):
