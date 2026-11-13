@@ -152,6 +152,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--collect-all", "shapely",       # GEOS binaries for building passage cuts
            "--hidden-import", "truststore",     # Windows: the native certificate store (netfetch.windows_ssl_context, PR #371)
            "--add-data", f"{os.path.join(ROOT, 'mod', 'beamng_earth')}{SEP}mod/beamng_earth",
+           # (the mod's DDS textures' lossless sources: modtextures.py makes the DDS at install)
+           "--add-data", f"{os.path.join(ROOT, 'mod', 'texture_sources')}{SEP}mod/texture_sources",
+           "--hidden-import", "modtextures",
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'LICENSE')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'CREDITS.md')}{SEP}.",

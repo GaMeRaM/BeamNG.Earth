@@ -2,7 +2,8 @@
 """The road sign atlases (task 017): every role of server/data/sign_roles.json drawn to its cell, from vectors, so the
 geometry, colours and symbols are exact and the artwork is ours (no third party's picture goes in).
 
-    python tools/build_sign_atlas.py            writes mod/.../art/shapes/beamngEarth/bne_signs_<system>.color.png
+    python tools/build_sign_atlas.py            writes mod/.../art/shapes/beamngEarth/bne_signs_<atlas>.color.png (one for
+                                                every system: variant_cells, sign_roles.json)
     python tools/build_sign_atlas.py --check    fails if a role has no drawing or a cell falls outside the sheet
 
 A cell is the unit square [-1, 1]^2 with y up. The sign's outline is cut by the mesh (native roadsigns.rs: outline(),
@@ -761,7 +762,44 @@ def bg_of(role):
     return {"circle": WHITE, "tri_up": WHITE, "tri_down": WHITE, "octagon": WHITE, "diamond": BLACK}.get(role["shape"], WHITE)
 
 
-def sheet(table, field, system=""):
+FIELDS = {"white": WHITE, "yellow": YELLOW}
+
+
+def draw_cell(table, role, field):
+    px = table["cell_px"]
+    pen = Pen(px, bg_of(role))
+    pen.inner = WHITE
+    DRAW[role["id"]](pen, field)
+    return pen.done(px)
+
+
+def sheet(table):
+    """The one atlas of every system (2026-11-13; was one sheet per system, 10.7 MB of DDS each, most cells the same):
+    each role in its cell drawn on the first system's field colour, and in variant_cells the roles whose drawing
+    depends on another system's field colour drawn on that colour (the warning triangles' yellow field)."""
+    px, cols, rows = table["cell_px"], table["cols"], table["rows"]
+    out = Image.new("RGB", (cols * px, rows * px), WHITE)
+    base = FIELDS[next(iter(table["systems"].values()))]
+    by_id = {r["id"]: r for r in table["roles"]}
+    for k, role in enumerate(table["roles"]):
+        out.paste(draw_cell(table, role, base), ((k % cols) * px, (k // cols) * px))
+    for field, cells in table.get("variant_cells", {}).items():
+        for rid, k in cells.items():
+            out.paste(draw_cell(table, by_id[rid], FIELDS[field]), ((k % cols) * px, (k // cols) * px))
+    return out
+
+
+def field_dependent(table):
+    """{field: [role ids drawn differently on it than on the first system's field]}."""
+    base = FIELDS[next(iter(table["systems"].values()))]
+    out = {}
+    for field in list(table["systems"].values())[1:]:
+        out[field] = [r["id"] for r in table["roles"]
+                      if draw_cell(table, r, base).tobytes() != draw_cell(table, r, FIELDS[field]).tobytes()]
+    return out
+
+
+def russian_sheet(table, field, system=""):
     """The atlas of one system: field is the warning triangle's colour."""
     px, cols, rows = table["cell_px"], table["cols"], table["rows"]
     out = Image.new("RGB", (cols * px, rows * px), WHITE)
@@ -804,12 +842,21 @@ def main():
     if missing or extra or len(ids) != len(set(ids)) or len(ids) > table["cols"] * table["rows"]:
         print(f"roles without a drawing: {missing}; drawings without a role: {extra}", file=sys.stderr)
         return 1
+    cells = [c for v in table.get("variant_cells", {}).values() for c in v.values()]
+    if (len(cells) != len(set(cells)) or any(c < len(ids) or c >= table["cols"] * table["rows"] for c in cells)
+            or {f: sorted(v) for f, v in field_dependent(table).items()}
+            != {f: sorted(table.get("variant_cells", {}).get(f, {})) for f in list(table["systems"].values())[1:]}):
+        print("variant_cells: not exactly the roles drawn differently on each field colour, or cells taken twice / "
+              "outside the sheet", file=sys.stderr)
+        return 1
     if a.check:
         return 0
-    for name, field in table["systems"].items():
-        path = os.path.join(a.out, f"bne_signs_{name}.color.png")
-        sheet(table, {"white": WHITE, "yellow": YELLOW}[field], name).quantize(colors=224, dither=Image.NONE).save(path, optimize=True)
-        print(path, os.path.getsize(path) // 1024, "KB")
+    path = os.path.join(a.out, f"bne_signs_{table['atlas']}.color.png")
+    sheet(table).quantize(colors=224, dither=Image.NONE).save(path, optimize=True)
+    print(path, os.path.getsize(path) // 1024, "KB (then tools/mod_textures_dds.py)")
+    if "vienna_ru" in table["systems"]:
+        path = os.path.join(a.out, "bne_signs_vienna_ru.color.png")
+        russian_sheet(table, WHITE, "vienna_ru").quantize(colors=224, dither=Image.NONE).save(path, optimize=True)
     return 0
 
 

@@ -124,6 +124,7 @@ import roadmesh as roadmeshmod  # noqa: E402
 import roadwear  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
 import revisit as revisitmod  # noqa: E402
+import latework  # noqa: E402
 import farrestore as farrestoremod  # noqa: E402
 import signstream  # noqa: E402
 import roadsigns as roadsignsmod  # noqa: E402
@@ -745,6 +746,7 @@ NICE_ROADS = 3              # the road tile workers' niceness on top of it (bloc
 NICE_FAR = 6                # the far field's (the scenery far away last)
 NICE_FAR_BUILDINGS = 9      # the far buildings': after the far field (on a Steam Deck's four cores a teleport's far
                             # buildings took ~23 s of CPU, next to the road tiles and the far field)
+NICE_LATE = 10              # the late pool's (latework.py: road content built short built again, for later): last of all
 IMAGERY_PREFETCH = 40       # queued tiles whose imagery is fetched ahead of their build (only spare request tokens)
 PREFETCH_AGAIN_S = 2.0      # s before a queued tile's imagery prefetch is asked for again
 # ... and the tiles after those, with a host's spare request tokens alone (netfetch "prefetch": dropped while its bucket is
@@ -1472,6 +1474,8 @@ class Server:
         self.areas = None               # saved areas downloaded ahead (areas.Areas; main_async, with a Cache)
         self.fast_pool = None           # the saved areas' fast mode: its own road processes (fast_precache)
         self.make_fast_pool = None      # n -> such a pool (main_async: the road pool's initializer), or None
+        self.late = None                # latework.LateWork (start_late: road content built short, built again later)
+        self.late_pool = None
         self._fast_lock = threading.Lock()
         if cache is not None:
             for producer in (self.dem, self.imagery, self.deshadow, self.colormatch):
@@ -2513,7 +2517,10 @@ class Server:
             self.sea.prefetch_full(sorted(own, key=lambda k: (own[k], k)))
         import roadz        # (the measured road heights of the same cells, kept on disk for the road processes)
         if roadz.PROVIDER is not None:
-            roadz.PROVIDER.warm(sorted({kl[0] for kl in order if kl[1] == "roads"}, key=lambda k: (where(k), str(k))))
+            # (nearest the player first from now on: the prefetch, roadz.PREFETCH_ON; a preload's spot is no anchor)
+            near = Server.late_focus(self, anchor, x, y) if hasattr(anchor, "id") else None
+            roadz.PROVIDER.warm(sorted({kl[0] for kl in order if kl[1] == "roads"}, key=lambda k: (where(k), str(k))),
+                                near)
         return n
 
     def roads_geo_ok(self):
@@ -2632,6 +2639,9 @@ class Server:
         if res is not None and res.get("content") is not None:
             self.keep_fuel_pads(res["content"][3])
             Server.keep_fuel_tried(self, (res["content"][2] or {}).get("fuel_tried"))
+            late = getattr(self, "late", None)
+            if content and late is not None:    # (built again later if it was not kept: latework.py)
+                late.note(gx, gy)
         return res
 
     def geo_content_key(self, gx, gy):
@@ -2698,6 +2708,104 @@ class Server:
             lamps, country, "/temp/beamngEarth/areas_scratch", pole_profile=Server.pole_profile(self),
             wait_gaps=fast is not None, de_junctions=designsmod.enabled(self.dej_on),
             towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self)), timeout)
+
+    LATE_TIMEOUT_S = 1200.0         # s a late build may take (its process waits for the lidar it lacks itself)
+
+    def start_late(self, pool):
+        """What a session built short (road geotiles' content, map cells' plans) built again in pool once its lidar is
+        in (latework.py)."""
+        import roadz
+        self.late_pool = pool
+        self.late = latework.LateWork(self.late_build, self.late_kept, Server.late_cells, roadz.PROVIDER,
+                                      getattr(pool, "workers", 1), self.late_scan, self.late_idle)
+        self.late.start()
+
+    def late_idle(self):
+        """Room for the late work: no anchor's first block building, the road processes not all busy (a cold visit's
+        36 road tiles round the car took 129 -> 171 s with the late builds beside them, Manhattan 2026-11-13)."""
+        if self.anchors_preparing:
+            return False
+        rp = self.road_pool
+        return rp is None or getattr(rp, "inflight", 0) < getattr(rp, "workers", 1)
+
+    @staticmethod
+    def late_cells(item):
+        """The map cells whose lidar a late item reads: its box's, LATE_PAD_M round it."""
+        import geotiles
+        if item[0] == "g":
+            _la, _lo, s, w, n, e = geotiles.info(item[1], item[2])
+        else:
+            w, s, e, n = mapcells.CellKey(*item[1:4]).bounds()
+        pad = latework.LATE_PAD_M / 111320.0
+        padx = pad / max(0.05, dmath.cos(math.radians((s + n) / 2)))
+        return mapcells.cells_for_bbox(s - pad, w - padx, n + pad, e + padx)
+
+    def late_kept(self, item):
+        """Is a late item kept already? A geotile's content in the revisit cache; a cell's plans: the late job reads
+        a kept copy at once, so asked there."""
+        return item[0] == "g" and self.geo_prebuilt(item[1], item[2]) is not None
+
+    def late_scan(self):
+        """The cells this run's plan cache holds plans of made short (their ".short" markers: plancache.store)."""
+        run = os.environ.get(plancachemod.RUN_ENV)
+        if not run:
+            return []
+        out = []
+        for p in glob.glob(os.path.join(self.cache_dir, "plans", run, plancachemod.FRAMES, "*", "*.npz.short")):
+            try:
+                z, x, y = (int(v) for v in os.path.basename(p)[:-len(".npz.short")].split("_"))
+            except ValueError:
+                continue
+            out.append(("c", z, x, y))
+        return out
+
+    def late_build(self, item):
+        """latework's build of an item in the late pool (its own plan and lidar-decision run, the lidar waited for):
+        True when kept, False when still short, None when it could not run."""
+        if self.late_pool is None or self.mapdata is None:
+            return None
+        if item[0] == "g":
+            gx, gy = item[1], item[2]
+            lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
+            fut = self.late_pool.submit(
+                blockworker.prebuild_geo, gx, gy, gzoom, os.path.join(self.root, "late_scratch"), self.buildings, lh,
+                mph, self.gas_stations, buried, lamps, country, "/temp/beamngEarth/late_scratch",
+                pole_profile=Server.pole_profile(self), wait_gaps=True, de_junctions=designsmod.enabled(self.dej_on),
+                towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self))
+        else:
+            fut = self.late_pool.submit(blockworker.late_plan, *item[1:4])
+        try:
+            got = poolsmod.result_running(fut, self.LATE_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            log.warning("late work: %s: no answer in %.0f s", latework._name(item), self.LATE_TIMEOUT_S)
+            if hasattr(self.late_pool, "recycle"):
+                self.late_pool.recycle(f"late {latework._name(item)} hung")
+            return None
+        except Exception as e:
+            log.info("late work: %s: %s: %s", latework._name(item), type(e).__name__, e)
+            return None
+        return None if got is None and item[0] == "c" else bool(got)
+
+    def late_focus(self, anchor, x, y):
+        """The player's place (anchor frame x, y) for the lidar prefetch and the late work: nearest first. Returns
+        the prefetch's cell -> m."""
+        import geotiles
+        frame = anchor.frame
+
+        def cell_m(k, frame=frame, x=x, y=y):
+            la, lo = k.center()
+            e, n, _ = frame.geodetic_to_enu(la, lo, 0.0)
+            return math.hypot(float(e) - x, float(n) - y)
+
+        def item_m(item):
+            if item[0] == "g":
+                la, lo = geotiles.centre(item[1], item[2])
+                e, n, _ = frame.geodetic_to_enu(la, lo, 0.0)
+                return math.hypot(float(e) - x, float(n) - y)
+            return cell_m(mapcells.CellKey(*item[1:4]))
+        if self.late is not None:
+            self.late.where = item_m
+        return cell_m
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
@@ -3488,6 +3596,13 @@ class Server:
             for k in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
                 if k not in keys:
                     keys.append(k)
+        import roadz        # (their lidar read ahead, nearest the player first: no plan waits for it, roadz.prefetch)
+        prov = roadz.PROVIDER
+        if prov is not None and roadz.PREFETCH_ON:
+            try:
+                prov.prefetch([k for k in keys if prov.lidar_wanted(k)], Server.late_focus(self, anchor, x, y))
+            except Exception as e:      # (only the head start is lost)
+                log.debug("lidar prefetch: %s: %s", type(e).__name__, e)
         # (the prefetch lane's process plans them; the requested blocks' process, while it builds a block, only reads
         # the planned ones into its memory, WARM_SPLIT: its own warm thread planned every cell round the player beside a first visit's
         # graded block, under one interpreter lock: 21 cells' plans, ~30 CPU-s, in the process whose block and whose
@@ -3507,6 +3622,21 @@ class Server:
                 self.warm_thread = threading.Thread(target=self._warm_loop, name="roads-ahead", daemon=True)
                 self.warm_thread.start()
             self.warm_cv.notify()
+
+    def decisions_prefetch(self, lat, lon):
+        """The shared decision archives' blocks round a new place (decisions.py: road plans and cell facts built and
+        signed by the project's builder for this version) downloaded while its first block starts."""
+        import decisions
+        if not decisions.enabled() or self.mapdata is None or not self.grading:
+            return
+        t0 = time.perf_counter()
+        try:
+            n = decisions.prefetch_near(self.cache_dir, self.mapdata.versions(), lat, lon)
+        except Exception as e:
+            log.info("decisions: prefetch: %s: %s", type(e).__name__, e)
+            return
+        if n:
+            log.info("decisions: %d blocks round %.4f, %.4f on hand in %.2f s", n, lat, lon, time.perf_counter() - t0)
 
     def bake_sync(self, anchor, x, y):
         """The data repo's baked packs near the player (bakepack.sync: road plans and cell facts made offline) fetched
@@ -8756,6 +8886,8 @@ class Connection:
                 log.warning("anchor %d: coarse far field ahead: %s: %s", anchor.id, type(e).__name__, e)
         # (the map data the first block's grading and the road tiles will ask for, fetched meanwhile)
         asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self.s.warm_place, anchor, cx, cy)
+        if teleport:        # (and the shared decision archives' blocks there: the planning reads them from the disk)
+            asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self.s.decisions_prefetch, lat, lon)
         self.status(f"Building terrain at {lat:.5f}, {lon:.5f}...")
         t0 = time.perf_counter()
         # a teleport's first block without its road plans, the graded one sent when built (make_provisional)
@@ -10958,6 +11090,14 @@ async def main_async(args):
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
+    import roadz as roadzmod
+    if roadzmod.PREFETCH_ON:                    # (likewise: the lidar read ahead here, taken by them when on disk)
+        os.environ[roadzmod.PREFETCH_ENV] = "1"
+    try:                                        # (other versions' shared decision blocks: decisions.py)
+        import decisions as decisionsmod
+        decisionsmod.prune(args.cache_dir)
+    except Exception as e:
+        log.info("decisions: prune: %s: %s", type(e).__name__, e)
     roadsurfmod.mark_run_start()                # (likewise: the photo's road surfaces made before it are this run's)
     lean = getattr(args, "tier", None) in ("lean", "emergency") and LEAN_POOLS
     # (the compact layout: the lean tiers', and the small tier's (SMALL_COMPACT): a block process for both lanes, the far
@@ -11051,6 +11191,14 @@ async def main_async(args):
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,
                       args.airports == "on", args.sea == "on", NICE_FAR_BUILDINGS, roadsmod.ROADS_IN_GROUND))
+    late_pool = None
+    if road_pool is not None and not compact and latework.ON and revisitmod.ON:
+        # road content built short, built again once its lidar is in (latework.py): the lowest priority
+        late_pool = poolsmod.RespawningPool(
+            "late", latework.processes(), mp_context=ctx, initializer=blockworker.init_late,
+            initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
+                      args.surface == "on", None, logging.getLogger().level,
+                      args.airports == "on", args.sea == "on", NICE_LATE, roadsmod.ROADS_IN_GROUND))
     log.info("startup: preparing world folders and services")
     server = Server(args.user_dir, args.cache_dir, max(args.workers, getattr(args, "far_max", args.workers)), kfun, args.hysteresis,
                     args.far_radius, fmt,
@@ -11079,6 +11227,8 @@ async def main_async(args):
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.make_fast_pool = make_fast_pool
+    if late_pool is not None:
+        server.start_late(late_pool)
     if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches: dropped by the free memory / the budget)
         import rangeread
         budget.register_shed(server.dem.clear_memory)
@@ -11808,6 +11958,14 @@ def main():
             rel = None
         os.environ["BNGE_DEM_CDN"] = rel or "off"   # (the block workers read it at their import of dem)
         demmod.MT_CDN_RELEASE = rel
+    if "BNGE_DECISIONS" not in os.environ:   # (the shared decision archives where the switch says: decisions.py)
+        import cdn as cdnmod
+        try:
+            on = not args.offline and cdnmod.decisions_on(netfetch.Fetcher(offline=args.offline), args.cache_dir)
+        except Exception as e:
+            log.warning("cdn: %s: %s", type(e).__name__, e)
+            on = False
+        os.environ["BNGE_DECISIONS"] = "on" if on else "off"    # (before the workers start: they inherit it)
     if args.cells != 32 and args.near_visual not in MESH_LAYOUT:
         ap.error("--cells 64 needs --near-visual mesh (terrain mode is frozen at the v1.3.1 layout)")
     if args.block != TERRAIN_BLOCK and args.near_visual not in MESH_LAYOUT:
