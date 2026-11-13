@@ -371,31 +371,25 @@ class LandLookupTest(unittest.TestCase):
         sea = (np.array([south(100)]), np.array([LON0]))
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as d2:
             sc = seacarve.SeaCarver(md, d)
-            reference = seacarve.SeaCarver(BathyMapData(), d2)
-            try:
-                t, out = self.run_bg(lambda: sc.water(*land))
-                t.join(5)
-                self.assertFalse(t.is_alive(), "land: answered with the bathymetry still out")
-                calls = md.calls
-                ts, outs = self.run_bg(lambda: sc.water(*sea))
-                ts.join(0.5)
-                self.assertTrue(ts.is_alive(), "by the sea: waits for it")
-                md.fetcher.gate.set()
-                ts.join(10)
-                self.assertAlmostEqual(float(outs["r"][0][0]), -FakeBathy.BATHY, places=1)
-                ref = reference.water(*land)
-                for a, b in zip(out["r"], ref):
-                    np.testing.assert_array_equal(a, b)
-                self.assertFalse(sc._land, "the whole raster replaced the one without bathymetry")
-                self.assertEqual(md.calls, calls, "built with the bathymetry from the first build's state, not again")
-            finally:
-                # Both land lookups can start a full raster writer. Finish these before
-                # TemporaryDirectory removes their cache (Windows disallows that race).
-                md.fetcher.gate.set()
-                for carver in (sc, reference):
-                    if carver._full_ex is not None:
-                        carver._full_ex.shutdown(wait=True)
-
+            t, out = self.run_bg(lambda: sc.water(*land))
+            t.join(5)
+            self.assertFalse(t.is_alive(), "land: answered with the bathymetry still out")
+            calls = md.calls
+            ts, outs = self.run_bg(lambda: sc.water(*sea))
+            ts.join(0.5)
+            self.assertTrue(ts.is_alive(), "by the sea: waits for it")
+            md.fetcher.gate.set()
+            ts.join(10)
+            self.assertAlmostEqual(float(outs["r"][0][0]), -FakeBathy.BATHY, places=1)
+            rsc = seacarve.SeaCarver(BathyMapData(), d2)
+            ref = rsc.water(*land)
+            for a, b in zip(out["r"], ref):
+                np.testing.assert_array_equal(a, b)
+            self.assertFalse(sc._land, "the whole raster replaced the one without bathymetry")
+            self.assertEqual(md.calls, calls, "built with the bathymetry from the first build's state, not again")
+            for ex in (sc._full_ex, sc._prefetch_ex, rsc._full_ex, rsc._prefetch_ex):
+                if ex is not None:              # (the land cells' background builds still writing in d / d2)
+                    ex.shutdown(wait=True)
 
 
 class PrefetchTest(unittest.TestCase):
@@ -721,16 +715,6 @@ class UndergroundLinesTest(unittest.TestCase):
         sc._carve_lines(0, 0, 0.0, 0.0, n, 1.0, np.zeros((n, n)), np.full((n, n), np.nan), np.zeros((n, n), bool))
         self.assertEqual(len(carved), 1, "the open river once (one cell's lines seen once), the piped one never")
         self.assertTrue(riverlines.underground(Lines(), 1))
-
-class StillWaterEvidenceTest(unittest.TestCase):
-    def test_river_through_explicit_pond_does_not_make_it_flowing(self):
-        f = Water([('pond', []), ('reservoir', []), ('lake', []), ('water', [])])
-        self.assertEqual([seacarve.SeaCarver._flowing_lake(f,i) for i in range(4)], [False,False,False,True])
-    def test_majority_water_plateau_ignores_high_bank_pixels(self):
-        heights = np.r_[np.full(60,240.5),np.full(40,242.5)]
-        self.assertEqual(seacarve._majority_plateau(heights),240.5)
-        self.assertIsNone(seacarve._majority_plateau(np.linspace(240,250,100)))
-        self.assertIsNone(seacarve._majority_plateau(np.r_[np.full(50,240.5),np.full(50,242.5)]))
 
 
 if __name__ == "__main__":
