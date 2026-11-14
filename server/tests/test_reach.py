@@ -355,6 +355,12 @@ class FakeLoop:
 
 @unittest.skipUnless(HAVE, "earthfast >= reach.NEED")
 class GeoTrackerTreeTest(unittest.TestCase):
+    def setUp(self):
+        patch = mock.patch("roads.asyncsubmit.submit",
+                           side_effect=lambda lp, pool, fn, *args, **kw: lp.run_in_executor(pool, fn, *args))
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_tree_order_and_unwanted(self):
         import geodesy
         import geotiles
@@ -370,10 +376,6 @@ class GeoTrackerTreeTest(unittest.TestCase):
         t.pool = object()
         loop = FakeLoop()
         conn = SimpleNamespace(s=None, send=lambda m: None)
-        patch = mock.patch("roads.asyncsubmit.submit",
-                           side_effect=lambda lp, pool, fn, *args, **kw: lp.run_in_executor(pool, fn, *args))
-        patch.start()
-        self.addCleanup(patch.stop)
         t.on_pose(conn, 1, 0.0, 0.0, loop, None, vel=(v, 0.0), frame=frame, tree=tr)
         north = geotiles.tiles_near(frame, 1000.0, 3000.0, 10.0, exact=True)[0][:2]
         east = geotiles.tiles_near(frame, 3000.0, 0.0, 10.0, exact=True)[0][:2]

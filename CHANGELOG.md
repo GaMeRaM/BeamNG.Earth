@@ -4,7 +4,7 @@ What changed in each release of BeamNG.Earth, newest first.
 
 Fork entries separate **Изменения upstream** from **Наши правки**. Cache and validation notes follow separately. Mention unresolved errors only when the release changes their behaviour or adds relevant diagnostics; do not repeat unrelated known-issue disclaimers.
 
-## 1.9.1-beta.53 — upstream dev 64883f0a (2026-11-14)
+## 1.9.1-beta.54 — upstream dev 64883f0a (2026-11-14)
 
 ### Изменения upstream
 
