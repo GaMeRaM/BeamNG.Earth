@@ -554,6 +554,8 @@ MAP_BLD_FAR_MAX_M = 6000.0      # ... at most this far,
 MAP_BLD_SKY_EYE = 3.0           # the skyline to this many times it ...
 MAP_BLD_SKY_MAX_M = 20000.0     # ... at most this far (Connection.building_reach)
 VIEW_ANCHOR_Q = 1 / 32          # the 3D map's view-only anchors' height quantum (m): no survey, no block driven on
+# s a road tile's job may run before it counts as hung and its processes are restarted, unless they still use CPU
+# (busy: waited for on, up to pools.HUNG_CEILING_X times this; central London's first visit, 2026-11-13)
 ROAD_TILE_TIMEOUT_S = float(os.environ.get("BNGE_ROAD_TILE_TIMEOUT", "") or 300.0)
 # s past ROAD_TILE_TIMEOUT_S a road process's job may run before its pool's watchdog restarts the processes (pools
 # hung_s): the road tiles' own wait recycles first; this catches jobs whose waiters have no timeout (GitHub #1058)
@@ -2869,7 +2871,8 @@ class Server:
         t0, waited = time.perf_counter(), []
         try:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited, abandon=lambda: Server.is_abandoned(self, aid)
-                                          or Server.geo_left_behind(self, aid, gx, gy) or Server.geo_unwanted(self, aid, gx, gy))
+                                          or Server.geo_left_behind(self, aid, gx, gy) or Server.geo_unwanted(self, aid, gx, gy),
+                                          pool=self.road_pool, what=f"road geotile {gx}_{gy}")
             took = time.perf_counter() - t0
             if took > ROAD_GEO_SLOW_S:      # (nyc_speed.py's road lead: queue against build)
                 st = {}
@@ -2885,12 +2888,12 @@ class Server:
                          tm.get("exact_s", 0.0), top)
         except poolsmod.Abandoned:
             return None                         # (a teleport left its anchor: not built)
-        except concurrent.futures.TimeoutError:
+        except concurrent.futures.TimeoutError as e:
             fut.cancel()
-            log.warning("road geotile %d_%d: no answer from its worker in %.0f s: built again", gx, gy,
-                        ROAD_TILE_TIMEOUT_S)
+            why = str(e) or f"no answer in {ROAD_TILE_TIMEOUT_S:.0f} s"     # (busy processes waited for on: pools)
+            log.warning("road geotile %d_%d: no answer from its worker (%s): built again", gx, gy, why)
             if hasattr(self.road_pool, "recycle"):
-                self.road_pool.recycle(f"road geotile {gx}_{gy} hung for {ROAD_TILE_TIMEOUT_S:.0f} s")
+                self.road_pool.recycle(f"road geotile {gx}_{gy} hung: {why}")
             raise
         if res is None and st and (content or skin):
             anchor.stale_missing.add((gx, gy))      # (built behind, shown at the swap)
@@ -2915,7 +2918,8 @@ class Server:
                                             models_dir=self.root, pole_profile=Server.pole_profile(self),
                                             de_junctions=designsmod.enabled(self.dej_on),
                                             towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self),
-                                            rules=Server.ground_rules(self))
+                                            rules=Server.ground_rules(self),
+                                            cache_dir=getattr(self.mapdata, "cache_dir", None))
 
     def ground_rules(self):
         """This server's ground rules fingerprint (blockcache.ground_rules), as its road processes make it
@@ -3093,13 +3097,15 @@ class Server:
             try:
                 # bounded: a worker that never answered held this thread and its roads.Tracker slot for good (4
                 # slots: four hung tiles and no road tile ever again, the loading line at "roads & buildings 0/26")
-                res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S)
-            except concurrent.futures.TimeoutError:
+                res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, pool=self.road_pool,
+                                              what=f"road tile {tx}_{ty}")
+            except concurrent.futures.TimeoutError as e:
                 fut.cancel()
-                log.warning("road tile %d_%d of anchor %d: no answer from its worker in %.0f s: built again",
-                            tx, ty, aid, ROAD_TILE_TIMEOUT_S)
+                why = str(e) or f"no answer in {ROAD_TILE_TIMEOUT_S:.0f} s"     # (busy processes waited for on: pools)
+                log.warning("road tile %d_%d of anchor %d: no answer from its worker (%s): built again",
+                            tx, ty, aid, why)
                 if hasattr(self.road_pool, "recycle"):
-                    self.road_pool.recycle(f"road tile {tx}_{ty} hung for {ROAD_TILE_TIMEOUT_S:.0f} s")
+                    self.road_pool.recycle(f"road tile {tx}_{ty} hung: {why}")
                 raise
             log.debug("road tile %d_%d: %.2f s (queue + build)", tx, ty, time.perf_counter() - t0)
             self.keep_fuel_pads(res[2])
@@ -11876,6 +11882,11 @@ async def main_async(args):
         proc_dir = os.path.join(args.cache_dir, "netstats", "proc")
         os.environ["BNE_NETSTATS_PROC"] = proc_dir
         netfetch._PROC_DIR = proc_dir
+    # (the one-at-a-time export hosts admitted across every process of the server, netfetch.SharedGate: set before the
+    # workers start so they inherit it)
+    if not os.environ.get(netfetch.SHARED_ENV):
+        os.environ[netfetch.SHARED_ENV] = os.path.join(args.cache_dir, "netgate")
+    netfetch.SHARED_DIR = os.environ[netfetch.SHARED_ENV]
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)

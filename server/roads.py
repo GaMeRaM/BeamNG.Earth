@@ -7600,50 +7600,59 @@ class BridgeProfiles:
     def _cell_entries(self, key):
         """([((fid, j), (spec, deck line, lon, level, ring points))], [((fid, "g"), [ground lines])]) of cell key, made
         once (every chain solved gathered its cells again: each a loop over all their roads, 2026-10-25). Not to be
-        changed by the caller."""
+        changed by the caller. Kept only when made complete: the read and the entries made from it run in a revisit
+        scope of their own, and any fault there (this thread's, the pool workers' it took, the process's, a spec rule's
+        fallback) answers this call alone, so the next chain solve reads the cell again and faults again, rather than
+        taking a short copy without the fault and calling its network final (subsea._final, review 2026-11-13)."""
+        import revisit
         cache = self.__dict__.setdefault("cell_entries", {})
         with self.lock:
             got = cache.get(str(key))
         if got is not None:
             return got
         parts, roads_ = [], []
-        feats = self.cell_fn(key)
-        if feats is not None and len(feats):
-            bs = self.specs_of(feats)
-            rs = road_specs(feats)
-            names = feats.attrs.get("name")
-            for i in range(len(feats)):
-                fid = str(feats.ids[i])
-                if bs[i] is not None:
-                    lvls = self.levels_of(feats, i)
-                    best = {}
-                    for j, (pk, ring) in enumerate(_keyed(self.keys_of, self.parts_of, feats, i)):
-                        if (fid, pk) in best and len(ring) <= best[(fid, pk)][4]:
-                            continue
-                        e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                        best[(fid, pk)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
-                                          float(np.mean(ring[:, 0])), lvls[j] if j < len(lvls) else 1.0, len(ring),
-                                          str(names[i]) if names is not None else "")     # (roadz: name matching)
-                    parts.extend(best.items())
-                if rs[i] is not None:
-                    lines = []
-                    for ring in ground_parts(feats, i):
-                        e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                        lines.append(np.stack([e, n], axis=1))
-                    roads_.append(((fid, "g"), lines))
-                elif _rail_drawn(feats, i):
-                    # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
-                    # lay on the tracks; only roads under a deck were counted)
-                    import railways
-                    lines = []
-                    for kind, rings in railways._pieces(feats, i):
-                        if kind == "ground":
-                            for ring in rings:
-                                e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                                lines.append(np.stack([e, n], axis=1))
-                    if lines:
-                        roads_.append(((fid, "r"), lines))
-        got = (parts, roads_)
+        # (the read AND everything made from it in a revisit scope of its own: the pool workers' faults it took,
+        # a spec rule's lookup that fell back (germanroads.adjust_specs in specs_of / road_specs) count too)
+        with revisit.scope() as read:
+            feats = self.cell_fn(key)
+            if feats is not None and len(feats):
+                bs = self.specs_of(feats)
+                rs = road_specs(feats)
+                names = feats.attrs.get("name")
+                for i in range(len(feats)):
+                    fid = str(feats.ids[i])
+                    if bs[i] is not None:
+                        lvls = self.levels_of(feats, i)
+                        best = {}
+                        for j, (pk, ring) in enumerate(_keyed(self.keys_of, self.parts_of, feats, i)):
+                            if (fid, pk) in best and len(ring) <= best[(fid, pk)][4]:
+                                continue
+                            e, n = mapgeom.enu_xy(feats, self.frame, ring)
+                            best[(fid, pk)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
+                                              float(np.mean(ring[:, 0])), lvls[j] if j < len(lvls) else 1.0, len(ring),
+                                              str(names[i]) if names is not None else "")     # (roadz: name matching)
+                        parts.extend(best.items())
+                    if rs[i] is not None:
+                        lines = []
+                        for ring in ground_parts(feats, i):
+                            e, n = mapgeom.enu_xy(feats, self.frame, ring)
+                            lines.append(np.stack([e, n], axis=1))
+                        roads_.append(((fid, "g"), lines))
+                    elif _rail_drawn(feats, i):
+                        # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
+                        # lay on the tracks; only roads under a deck were counted)
+                        import railways
+                        lines = []
+                        for kind, rings in railways._pieces(feats, i):
+                            if kind == "ground":
+                                for ring in rings:
+                                    e, n = mapgeom.enu_xy(feats, self.frame, ring)
+                                    lines.append(np.stack([e, n], axis=1))
+                        if lines:
+                            roads_.append(((fid, "r"), lines))
+            got = (parts, roads_)
+        if not read.complete:
+            return got
         with self.lock:
             if len(cache) > 64:
                 cache.clear()
@@ -8914,14 +8923,18 @@ class TunnelProfiles(BridgeProfiles):
         done = self.__dict__.setdefault("hw_done", set())
         if str(key) in done:            # (the same half widths each time: once per cell)
             return
-        done.add(str(key))
-        feats = self.cell_fn(key)
-        if feats is None or len(feats) == 0:
-            return
-        rs = road_specs(feats)
-        for i in range(len(feats)):
-            if rs[i] is not None:
-                self._hw[(str(feats.ids[i]), "g")] = rs[i].width / 2
+        import revisit
+        hw = {}
+        with revisit.scope() as read:   # (the read and its specs: a spec rule's lookup that fell back counts too)
+            feats = self.cell_fn(key)
+            if feats is not None and len(feats):
+                rs = road_specs(feats)
+                for i in range(len(feats)):
+                    if rs[i] is not None:
+                        hw[(str(feats.ids[i]), "g")] = rs[i].width / 2
+        self._hw.update(hw)             # (this solve uses them either way)
+        if read.complete:
+            done.add(str(key))          # (only once made complete: a short one is made again by the next solve)
 
     def _cover_roads(self, xy, s, kinds, ground, cover=None):
         """kinds with each covered section carried on until the ground roads crossing over it are covered (their
