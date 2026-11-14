@@ -82,6 +82,7 @@ mod pmtiles;
 mod underdeck;
 mod deckground;
 mod railseam;
+mod stageshare;
 mod classgrid;
 mod frontage;
 mod furnstations;
@@ -107,6 +108,8 @@ mod roadtone;
 mod railbeds;
 mod osmtagshards;
 mod gradebins;
+mod par;
+mod bc1fast;
 mod l0roads;
 mod groundphoto;
 mod layerfold;
@@ -119,6 +122,7 @@ mod bldclear;
 mod bnwt;
 mod aerialcov;
 mod decisions;
+mod paintlist;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -1387,7 +1391,8 @@ fn bc7_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py
     let (nby, nbx) = ((h + 3) / 4, (w + 3) / 4);
     let mut out = vec![0u8; nby * nbx * 16];
     // block rows in bands across the cores (a 4096² base photo was 0.46 s on one, 2026-10-28)
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(nby.max(1));
+    // (the process's shared cap, par.rs: a thread per 2 k blocks at most)
+    let threads = par::threads_for(nby * nbx, 2048).min(nby.max(1));
     let rows_per = (nby + threads - 1) / threads.max(1);
     std::thread::scope(|sc| {
     for (bi, band) in out.chunks_mut((rows_per * nbx * 16).max(16)).enumerate() {
@@ -2607,25 +2612,8 @@ fn srgb_monotonic() -> bool {
 /// Rows of out (row_len values each) filled by f(row, its values) on up to 8 threads in bands (each value from its own
 /// inputs only: the same numbers as one thread).
 fn par_rows<T: Send, F: Fn(usize, &mut [T]) + Sync>(out: &mut [T], row_len: usize, f: F) {
-    let rows = if row_len == 0 { 0 } else { out.len() / row_len };
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(rows.max(1));
-    if threads <= 1 || rows * row_len < 1 << 16 {
-        for (y, r) in out.chunks_mut(row_len.max(1)).enumerate() {
-            f(y, r);
-        }
-        return;
-    }
-    let per = rows.div_ceil(threads);
-    std::thread::scope(|sc| {
-        for (bi, band) in out.chunks_mut(per * row_len).enumerate() {
-            let f = &f;
-            sc.spawn(move || {
-                for (k, r) in band.chunks_mut(row_len).enumerate() {
-                    f(bi * per + k, r);
-                }
-            });
-        }
-    });
+    // (the process's shared cap, par.rs: a thread per 64 k values at most)
+    par::rows(out, row_len, par::threads_for(out.len(), 1 << 16), f)
 }
 
 pub(crate) fn mip_levels_core(img: numpy::ndarray::ArrayView3<u8>, lut: numpy::ndarray::ArrayView1<f32>, sharpen: f32)
@@ -6421,6 +6409,29 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 285 (on 283; 284 is the governor branch's): the mod's textures encoded at install time from their lossless sources (texdds: texture_dds_files,
     // texture_dds, TEXDDS_ID; modtextures.py, install.py, tools/package.py)
     texdds::register(m)?;
-    m.add("VERSION", 286)?;
+    // 287 (on 285; 286 is the stage-sharing branch's, 284 the governor branch's): the per-sample kernels on threads
+    // under one cap per process (par: set_native_threads, native_threads; grade_points_binned's bins, the mip levels,
+    // the CPU BC1 / BC7 encoders), the far textures' DDS on the CPU (bc1fast: dds_levels' integer mips and ISPC's BC1
+    // kernels; bc1_encode_fast, mip_levels_fast, bc1_ispc_linked)
+    m.add_function(wrap_pyfunction!(par::set_native_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(par::native_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(bc1fast::bc1_encode_fast, m)?)?;
+    m.add_function(wrap_pyfunction!(bc1fast::mip_levels_fast, m)?)?;
+    m.add_function(wrap_pyfunction!(bc1fast::bc1_ispc_linked, m)?)?;
+    // 290 (286 on its branch; 288 and 289 are other branches'): road stages shared by the server's processes (stageshare:
+    // stage_claim, stage_wait, stage_release, stage_busy, stage_put, stage_get; server/plancache.py's stage_*,
+    // grading._Planner._road_stage)
+    stageshare::register(m)?;
+    // 293 (291 and 292 are other branches'): RoadReach.grow takes the driver's intent (intent_turn, intent_brake,
+    // intent_s: server/reach.py intent())
+    // 295 (on 293; 294 is the stage-sharing fix branch's; written as 288 on 285, then 291 on 290): a ground photo's
+    // whole paint in one call from paint lists made once per set of map cells (paintlist: PaintStyle, PaintRoads,
+    // PaintPolys, PaintFields, paint_photo, pil_raster; server/paintlist.py, surface.paint_square), roadtone's coverage
+    // loop shared with it
+    paintlist::register(m)?;
+    // 296 (on 295; written as 294 on 290): the stage claims with an owner token, the process's start time and an
+    // uptime lease, changed only under the folder's lock; a damaged stage file written again (stage_claim / stage_wait
+    // repair; stage_put and stage_release take the token)
+    m.add("VERSION", 297)?;
     Ok(())
 }

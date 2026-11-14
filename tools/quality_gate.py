@@ -43,7 +43,7 @@ MODULES = (
     "test_prov_refresh", "test_drivability",
     "test_memwatch", "test_portals", "test_road_clearance", "test_roadlayercache", "test_speed242", "test_tilecuts", "test_deckjoins", "test_deckpad_levels", "test_warm_queue",
     "test_determinism",
-    "test_decisions", "test_latework", "test_enginepatch_terfast", "test_aerialpacks", "test_base_photo_revisit", "test_blockcache", "test_bnwt", "test_farrestore", "test_photo_lawns_in_use", "test_revisit_scopes", "test_world_reset",
+    "test_native_threads","test_paintlist","test_ground_rules","test_chain_short","test_chainview_prefer","test_subsea_final","test_stale_revisit","test_build_decisions","test_server_list","test_preload_place","test_enu_ahead","test_regional_geotiles", "test_decisions", "test_latework", "test_enginepatch_terfast", "test_aerialpacks", "test_base_photo_revisit", "test_blockcache", "test_bnwt", "test_farrestore", "test_photo_lawns_in_use", "test_revisit_scopes", "test_world_reset",
 )
 
 
