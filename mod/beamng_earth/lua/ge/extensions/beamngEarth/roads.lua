@@ -2874,6 +2874,8 @@ function M.setHold(on) holdActive = on and true or false end
 -- facades and wires come when they come (in Manhattan they kept a drop hold 20 s). Roads off: yes.
 -- `explain` is diagnostic-only: the same predicate returns the first blocking tile/part.
 -- Normal per-frame callers allocate no reason tables and keep the existing boolean contract.
+function M.readyDriving(aid, x, y) return M.readyAround(aid, x, y, 8) end
+
 function M.readyAround(aid, x, y, r, explain)
   local function blocked(reason, key, part)
     if explain then return false, { reason = reason, tile = key, part = part,

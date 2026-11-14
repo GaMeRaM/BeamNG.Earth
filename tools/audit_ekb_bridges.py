@@ -20,6 +20,7 @@ import roads
 import roadmesh
 
 SITES = {
+    'vostok-low': (56.82583, 60.49059),
     'deryabina': (56.81400, 60.55128),
     'metallurgov': (56.82547, 60.56169),  # actual bridge, east of the car's screenshot coordinate
     'islamov': (56.82707, 60.51352),

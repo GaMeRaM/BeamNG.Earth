@@ -28,8 +28,14 @@ class AutoBridgeTest(unittest.TestCase):
             long=[part('a',[[0,0],[400,0]],True),part('b',[[0,12],[400,12]],True)]
             self.assertFalse(grading._cw_auto_allowed(pack(long+lower)))
 
+    def test_reported_vostok_bridge_clears_traffic(self):
+        self._reported_bridge("vostok_low")
+
     def test_reported_m12_bridge_clears_traffic(self):
-        site = load('m12_west_low', prefix='bridge')
+        self._reported_bridge("m12_west_low")
+
+    def _reported_bridge(self, name):
+        site = load(name, prefix='bridge')
         md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={'roads':site.cells.get(str(key))}))
         with mock.patch.object(revisit, 'ON', False), mock.patch.object(grading, 'CW_ON', True), \
              mock.patch.object(grading, 'CW_MODE', 'auto'), mock.patch.object(grading._xs, 'ON', False):
@@ -45,7 +51,7 @@ class AutoBridgeTest(unittest.TestCase):
                 chunks=roads.build_tile(site.frame,tx,ty,cells,elev,bridges=bridges,walks=[],roads_out=ground,country='RU')
                 mesh=roadmesh.deck(chunks,(0,0,0))
                 for fid, spec, xy,z,_ in bridges.parts(cells,roads.tile_bbox(tx,ty)):
-                    if str(fid) not in {'7ca294f9-317f-4fbb-a39d-71c7bb1b3620','f5b2bcfe-5b15-4235-b87b-c194e02436bf'}: continue
+                    if str(fid) not in {'7ca294f9-317f-4fbb-a39d-71c7bb1b3620','f5b2bcfe-5b15-4235-b87b-c194e02436bf', 'fb1ac4a0-89b4-4580-97f6-1ec7d323b7c4'}: continue
                     arc=np.r_[0.,np.cumsum(np.linalg.norm(np.diff(xy,axis=0),axis=1))]
                     self.assertLessEqual(float(np.max(abs(np.diff(z)/np.diff(arc)))),.065)
                     for _,sp,line,_ in ground:

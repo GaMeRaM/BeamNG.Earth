@@ -101,7 +101,7 @@ jobs:
       - name: Lua sign and streaming checks
         run: |
           python -m pip install lupa==2.8
-          python tools/run_lua_tests.py test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_drophold test_rebase test_simhold test_settings test_beammp test_codeswap test_loadprogress test_gcpace
+          python tools/run_lua_tests.py test_edgeguard test_collisiontrace test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_drophold test_rebase test_simhold test_settings test_beammp test_codeswap test_loadprogress test_gcpace
       - name: Bootloader from source
         run: python tools/build_bootloader.py
       - name: Build the exe

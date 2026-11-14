@@ -253,4 +253,40 @@ T.check(edgeguard.groundBelow(vec3(0, 0, 0)) == nil, 'a miss (the full length): 
 function castRayStatic(from, d, len) return edgeguard.RAY_UP + 0.4 end
 T.near(edgeguard.groundBelow(vec3(0, 0, 0)), 0.4, 1e-12, 'a hit: the height above the ground')
 
+-- A road arrives after terrain: hold inside the block and retain the look-ahead point.
+do
+  local ready, asked = false, nil
+  local gate = function(x, y) asked = x; return ready end
+  local g = edgeguard.new()
+  local car = newVeh(0, 0, GROUND_Z + 0.4, 30, 0)
+  simTimeAuthority.paused = false
+  edgeguard.update(g, car, BOX, 100, gate)
+  T.check(g.pausedByUs and g.roadBlocked, 'late road collision pauses on ready terrain')
+  local target = asked
+  car.vel = vec3(0, 0, 0)
+  edgeguard.update(g, car, BOX, 101, gate)
+  T.check(g.pausedByUs and asked == target, 'held car waits for original look-ahead point')
+  ready = true
+  edgeguard.update(g, car, BOX, 102, gate)
+  T.check(not g.pausedByUs and not simTimeAuthority.paused, 'road ready releases the hold')
+end
+
+do
+  local g = edgeguard.new()
+  local p = {x=0, y=0}
+  local calls = 0
+  local ready = function() calls = calls + 1; return false end
+  edgeguard.roadReady(g, p, 20, 0, 0, ready)
+  edgeguard.roadReady(g, p, 20, 0, 0.1, ready)
+  T.check(calls == 1, 'normal driving readiness probes are bounded to five per second')
+  edgeguard.newFrame(g)
+  T.check(not g.roadPoint and not g.roadBlocked, 'rebase clears the previous frame road target')
+  local ray = edgeguard.groundBelow
+  edgeguard.groundBelow = function() return nil end
+  simTimeAuthority.paused = false
+  edgeguard.update(g, newVeh(0, 0, GROUND_Z + 100, 30, 0), BOX, 100, ready)
+  T.check(not g.pausedByUs, 'airborne vehicle is not stopped for late road collision')
+  edgeguard.groundBelow = ray
+end
+
 T.done('test_edgeguard')

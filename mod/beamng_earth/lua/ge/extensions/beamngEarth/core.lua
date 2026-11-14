@@ -2161,7 +2161,10 @@ local function updateGuard()
     g.mode = 'off'
     return
   end
-  local ok, err = pcall(edgeguard.update, g, veh, box, st.clock)
+  local ok, err = pcall(edgeguard.update, g, veh, box, st.clock, function(x, y)
+    return not net.isConnected() or st.viewFrame or dropHold.active or st.swap
+      or roads.readyDriving(st.anchorId, x, y)
+  end)
   if not ok then
     guardFailed, g.mode = true, 'off'
     pcall(edgeguard.release, g)
@@ -2188,6 +2191,7 @@ function M._traceCollisionHold()
     elseif not st.sessionId then reason = 'server_hello'
     elseif st.followHeld then reason = 'altitude_rule'
     elseif windowMinimized() then reason = 'window_minimized'
+    elseif st.guard.roadBlocked then reason = 'road_collision'
     elseif tp then reason = not tp.ready and 'server_terrain' or (st.followBlocked or 'terrain_commit')
     elseif p and (p.ready or p.purpose == 'teleport' or p.purpose == 'resync') then
       reason = p.ready and 'anchor_commit' or 'server_anchor'
@@ -2195,7 +2199,13 @@ function M._traceCollisionHold()
     else reason = 'no_next_terrain_request' end
     local box = guardBox()
     local ready, road
-    if pl and st.anchorId then ready, road = roads.readyAround(st.anchorId, pl.x, pl.y, drophold.NEAR_M, true) end
+    if pl and st.anchorId then
+      if st.guard.roadBlocked and st.guard.roadPoint then
+        ready, road = roads.readyAround(st.anchorId, st.guard.roadPoint.x, st.guard.roadPoint.y, 8, true)
+      else
+        ready, road = roads.readyAround(st.anchorId, pl.x, pl.y, drophold.NEAR_M, true)
+      end
+    end
     if kind == 'drop' and connected and st.sessionId and not tp and not p then reason = ready == false and 'ground_or_nearby_colliders' or 'ground_settling' end
     local reloads = roads.reloadLog()
     local w = st.followWait

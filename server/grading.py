@@ -555,13 +555,13 @@ def _cw_auto_allowed(chains):
                   for parts, _order in chains)
     if samples > CW_AUTO_MAX_SAMPLES:
         return False
-    # Auto repairs only divided-highway overpasses over another divided highway.
+    # Auto repairs paired highway overpasses and single primary spans over divided through roads.
     # Other networks remain opt-in: enabling an entire city's profiles can change unrelated joins.
     parts = [p for seq, _order in chains for p in seq]
-    bridges = [p for p in parts if p[2] and p[3] in ("motorway", "trunk")
+    bridges = [p for p in parts if p[2] and p[3] in ("motorway", "trunk", "primary")
                and UNDER_MAX_BRIDGE_M < roadsmod._length(p[1]) <= CW_AUTO_MAX_SPAN_M]
-    ground = [p for p in parts if not p[2] and p[3] in ("motorway", "trunk")]
-    if len(bridges) < 2 or len(ground) < 2:
+    ground = [p for p in parts if not p[2] and p[3] in ("motorway", "trunk", "primary")]
+    if not bridges or len(ground) < 2:
         return False
     spans = []
     for p in bridges:
@@ -574,6 +574,8 @@ def _cw_auto_allowed(chains):
                 crossed.add(q[4])
         if len(crossed) >= 2:
             spans.append(p)
+    if any(p[3] == "primary" for p in spans):
+        return True  # one arterial over both carriageways, still bounded by span/network size
     for i, a in enumerate(spans):
         for b in spans[i + 1:]:
             ua, ub = a[1][-1, :2] - a[1][0, :2], b[1][-1, :2] - b[1][0, :2]
@@ -4308,7 +4310,7 @@ class _Planner:
             for key in [home] + list(home.neighbours()):
                 c = self._cell_enu(key, ground=False)
                 if CW_MODE == "auto" and not _xs.ON:
-                    candidate = any(cls in ("motorway", "trunk")
+                    candidate = any(cls in ("motorway", "trunk", "primary")
                                     and UNDER_MAX_BRIDGE_M < roadsmod._length(line) <= CW_AUTO_MAX_SPAN_M
                                     for line, cls in zip(c['bridges'], c.get('bridge_cls', ())))
                     if candidate:

@@ -115,6 +115,8 @@ package.preload['socket'] = function()
 end
 
 local core = require('beamngEarth/core')
+  -- No streaming road meshes in this swap fixture.
+  require('beamngEarth/roads').readyDriving = function() return true end
 require('beamngEarth/statusbar').enabled = false   -- its own test: test_statusbar.lua (these count text draws)
 local wallNow = 0
 core._governor().clock = function() return wallNow end

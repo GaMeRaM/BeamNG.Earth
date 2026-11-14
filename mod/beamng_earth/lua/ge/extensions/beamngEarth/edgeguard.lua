@@ -65,7 +65,10 @@ end
 
 -- The world frame changed (an anchor committed: teleport, rebase, resync): the ground height it
 -- remembers for the rescue is in the old frame's coordinates.
-function M.newFrame(g) g.lastGroundZ, g.lastGroundT, g.lastT = nil, nil, nil end
+function M.newFrame(g)
+  g.lastGroundZ, g.lastGroundT, g.lastT = nil, nil, nil
+  g.roadPoint, g.roadCheckAt, g.roadBlocked = nil, nil, nil
+end
 
 -- The highest speed towards an edge at distance d that can still stop STOP_M inside it; negative
 -- (a pull back inwards) inside the stop line.
@@ -165,20 +168,41 @@ function M.release(g)
   g.pausedByUs = nil
 end
 
-function M.update(g, veh, box, clock)
+-- Optional road readiness gate: retain the look-ahead point while physics is held.
+function M.roadReady(g, p, vx, vy, clock, ready)
+  if not ready then g.roadBlocked, g.roadPoint = nil, nil; return true end
+  if not g.pausedByUs and clock < (g.roadCheckAt or -math.huge) then return not g.roadBlocked end
+  g.roadCheckAt = clock + 0.2
+  local q = g.pausedByUs and g.roadPoint or {x = p.x + vx * 0.6, y = p.y + vy * 0.6}
+  q = q or p
+  local ok = ready(q.x, q.y)
+  g.roadBlocked = not ok
+  g.roadPoint = not ok and q or nil
+  return ok
+end
+
+function M.update(g, veh, box, clock, ready)
   local p, vel = veh:getPosition(), veh:getVelocity()
   local vx, vy = M.plausible(g, clock, p.x, p.y, vel.x, vel.y)
   local v = { x = vx, y = vy }
   local d = min(p.x - box[1], box[3] - p.x, p.y - box[2], box[4] - p.y)
+  local roadReady = M.roadReady(g, p, vx, vy, clock, ready)
   if g.pausedByUs then
     if not simPaused() then                       -- the player resumed: let them drive back inwards
       g.pausedByUs, g.resumedAt = nil, clock
-    elseif d > M.STOP_M + M.RESUME_INSIDE_M then  -- the block followed
+    elseif roadReady and d > M.STOP_M + M.RESUME_INSIDE_M then  -- the block followed
       M.release(g)
     else
       g.mode = 'hold'
       return g.mode
     end
+  end
+  if not roadReady and not simPaused() and M.groundBelow(p) ~= nil
+      and clock - (g.resumedAt or -math.huge) >= M.RESUME_GRACE_S then
+    simPause(true)
+    g.pausedByUs, g.mode = true, 'hold'
+    g.holds = g.holds + 1
+    return g.mode
   end
   if d > M.warnDistance(sqrt(v.x * v.x + v.y * v.y), g.warnCap) + M.RAY_MARGIN then
     g.mode = 'clear'
