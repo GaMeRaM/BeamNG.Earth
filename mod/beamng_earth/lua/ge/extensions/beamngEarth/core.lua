@@ -71,6 +71,7 @@ local levelinfo = require('beamngEarth/levelinfo') -- the level select's spawn p
 local banner = require('beamngEarth/banner') -- the connection banner (docs/DEVTOOLS.md)
 local hudapps = require('beamngEarth/hudapps') -- the same three as BeamNG UI apps (the ".Earth" app layout)
 local edgeguard = require('beamngEarth/edgeguard') -- never fall off the last block (docs/ROADMAP.md)
+M._collisiontrace = require('beamngEarth/collisiontrace')
 local drophold = require('beamngEarth/drophold') -- a car dropped far away waits for its ground
 local groundcover = require('beamngEarth/groundcover') -- grass on the surface layers (docs/ROADMAP.md v1.5)
 local roads = require('beamngEarth/roads') -- DecalRoads from the server's road tiles (docs/ROADMAP.md v1.6)
@@ -193,6 +194,7 @@ local function resetState()
     -- frames a follow request spent waiting, by cause (the harness's view of why the block lags):
     -- server = not answered yet, gate = ready but its far tiles not live, governor = no heavy slot yet
     followWait = { server = 0, gate = 0, governor = 0 },
+    collisionTrace = M._collisiontrace.new(),
     followHeld = false, followHolds = 0, groundAhead = nil, -- the altitude rule (follow.altitudeHold)
     -- the last COMMIT_LOG follow commits, each { load, coll, cover (ms in the commit), f = { the wall ms of
     -- the commit frame and the two after it } } (what a block move costs, and where: GPU uploads land in
@@ -1909,6 +1911,7 @@ local function notePlayerPos(force)
 end
 
 local function updateWorld(dt)
+  st.followBlocked = nil
   if (st.pending and (st.pending.purpose == 'teleport' or st.pending.importAt)) or st.teleportRetry then
     if M._anchorload.expired(st.pending, st.teleportRetry, st.clock) then
       M.failAnchorLoad('timeout', 'first ground deadline exceeded')
@@ -2016,7 +2019,7 @@ local function updateWorld(dt)
     st.wasMinimized = minimized
     log('I', 'beamngEarth', minimized and 'window minimized: terrain moves wait' or 'window restored: terrain moves resume')
   end
-  if minimized then return end
+  if minimized then st.followBlocked = 'window_minimized'; return end
   M.applyBaseLater()
   local dr = st.deferredRefresh
   if dr then
@@ -2063,7 +2066,11 @@ local function updateWorld(dt)
   local b = st.block
   -- commit gating: the far tiles of the strip the move uncovers must be live, and no coarse tile
   -- may straddle the new block (design 2.3, farfield.uncoverReady)
-  local gate = b and function(ncx, ncy) return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) end
+  local gate = b and function(ncx, ncy)
+    local ready = farfield.uncoverReady(b.cx, b.cy, ncx, ncy)
+    if not ready then st.followBlocked = 'far_tiles' end
+    return ready
+  end
   local fa, tx, ty, preferred = follow.decide(pl.x, pl.y, pl.vx, pl.vy, b and b.cx, b and b.cy, st.terrainPending,
     st.clock, st.terrainRetryAt, gate, st.terrainLatency)
   if fa == 'prepare' then
@@ -2083,6 +2090,7 @@ local function updateWorld(dt)
       st.terrainPending = nil
       commitTerrain(tp.msg)
     else
+      st.followBlocked = 'frame_budget'
       st.followWait.governor = st.followWait.governor + 1
     end
   elseif fa == 'discard' then
@@ -2090,6 +2098,7 @@ local function updateWorld(dt)
   elseif st.terrainPending and b and follow.cheb(pl.x, pl.y, b.cx, b.cy) > follow.COMMIT_DIST then
     -- past the commit distance and still not committing: why
     local w = st.followWait
+    st.followBlocked = not st.terrainPending.ready and 'server_terrain' or (st.followBlocked or 'terrain_not_committed')
     if not st.terrainPending.ready then w.server = w.server + 1 else w.gate = w.gate + 1 end
   end
 end
@@ -2164,6 +2173,50 @@ local function updateGuard()
     local okd, errd = pcall(require('beamngEarth/softdrag').update, veh, box, g.warnCap, st.clock)
     if not okd then log('W', 'beamngEarth', 'soft drag: ' .. tostring(errd)) end
   end
+end
+
+-- The banner alone cannot distinguish a terrain-edge hold from a drop's nearby-road wait.
+-- Keep these snapshots in core.status() too, so an in-game report captures a hold that already ended.
+function M._traceCollisionHold()
+  local kind = st.inOurLevel and (st.guard.pausedByUs and 'edge' or (dropHold.active and 'drop')) or nil
+  if not kind and not st.collisionTrace.kind then return end
+  M._collisiontrace.update(st.collisionTrace, kind, st.clock, function()
+    local tp, p, pl, b = st.terrainPending, st.pending, st.player, st.block
+    local connected = net.isConnected()
+    local reason
+    if not connected then reason = 'disconnected'
+    elseif not st.sessionId then reason = 'server_hello'
+    elseif st.followHeld then reason = 'altitude_rule'
+    elseif windowMinimized() then reason = 'window_minimized'
+    elseif tp then reason = not tp.ready and 'server_terrain' or (st.followBlocked or 'terrain_commit')
+    elseif p and (p.ready or p.purpose == 'teleport' or p.purpose == 'resync') then
+      reason = p.ready and 'anchor_commit' or 'server_anchor'
+    elseif st.terrainErrorAt then reason = 'terrain_error_or_retry'
+    else reason = 'no_next_terrain_request' end
+    local box = guardBox()
+    local ready, road
+    if pl and st.anchorId then ready, road = roads.readyAround(st.anchorId, pl.x, pl.y, drophold.NEAR_M, true) end
+    if kind == 'drop' and connected and st.sessionId and not tp and not p then reason = ready == false and 'ground_or_nearby_colliders' or 'ground_settling' end
+    local reloads = roads.reloadLog()
+    local w = st.followWait
+    return { reason = reason, connected = connected, anchor = st.anchorId,
+      guardMode = st.guard.mode, serverHealthy = st.guard.healthy,
+      terrainRetryInS = math.max(0, (st.terrainRetryAt or 0) - st.clock),
+      terrainLatency = st.terrainLatency, followBlocked = st.followBlocked,
+      position = pl and { x = pl.x, y = pl.y, z = pl.z, vx = pl.vx, vy = pl.vy },
+      block = b and { cx = b.cx, cy = b.cy },
+      edgeM = pl and box and math.min(pl.x - box[1], box[3] - pl.x,
+        pl.y - box[2], box[4] - pl.y) or nil,
+      terrain = tp and { requestId = tp.requestId, cx = tp.cx, cy = tp.cy, ready = tp.ready or false,
+        ageS = st.clock - (tp.sentAt or st.clock) },
+      anchorRequest = p and { purpose = p.purpose, ready = p.ready or false, stage = p.stage,
+        ageS = st.clock - (p.sentAt or st.clock) },
+      followWait = { server = w.server, gate = w.gate, governor = w.governor },
+      followCount = st.followCount, backlog = st.serverBacklog,
+      placing = st.placeFrames ~= nil, floorPending = st.floorZ ~= nil,
+      roadsReady = ready, roadBlocker = road, roadQueue = roads.queued(),
+      collisionReloads = roads.reloads(), lastReload = reloads[#reloads] }
+  end, function(e) log('I', 'beamngEarth', 'collision wait: ' .. jsonEncode(e)) end)
 end
 
 local function updateBanner(dt)
@@ -3033,6 +3086,13 @@ local function onUpdate(dtReal, dtSim)
     updateGuard()
     t = mark('sky', t)
   end
+  if not M._collisionTraceBroken then
+    local ok, err = pcall(M._traceCollisionHold)
+    if not ok then
+      M._collisionTraceBroken = true -- diagnostics must never interrupt loading or spam every frame
+      log('W', 'beamngEarth', 'collision wait diagnostics disabled: ' .. tostring(err))
+    end
+  end
   drawUi(dtReal)
   t = mark('draw', t)
   if not M._mpMarked then M._mpMarked = true; pcall(mpsession.setMark, mark, hitchClock) end
@@ -3430,7 +3490,7 @@ function M.status()
     inOurLevel = st.inOurLevel, nearVisual = nearVisual, rawView = rawView, terrainRendered = terrain.isRenderEnabled(),
     anchorId = st.anchorId, anchorKey = st.anchorKey, pending = st.pending and st.pending.purpose,
     block = st.block, terrainPending = st.terrainPending and { st.terrainPending.cx, st.terrainPending.cy },
-    followWait = st.followWait, commits = st.commits,
+    followWait = st.followWait, commits = st.commits, collisionWaits = st.collisionTrace.events,
     followHeld = st.followHeld, followHolds = st.followHolds, groundAhead = st.groundAhead and st.groundAhead.z,
     baseRefreshes = st.baseRefreshes,
     rebaseDistance = rebase.distance, lastFollowMs = st.lastFollowMs, lastRebaseMs = st.lastRebaseMs,

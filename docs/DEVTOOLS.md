@@ -417,3 +417,23 @@ the photo stays on Commons).
   system editor) and opens the GitHub new-issue page (title, body, label map / performance / bug /
   enhancement; body cut below 7000 URL characters) and the folder. Issue forms: `.github/ISSUE_TEMPLATE/`.
 
+
+### Automatic collision-wait diagnostics (fork)
+
+No console command is needed. While the edge guard holds a driving car, `beamng.log` gets
+`collision wait:` JSON records (`start`, `waiting`, `end`). Repeated snapshots are five real
+seconds apart, including time with physics paused. A rapidly toggling guard is limited to two
+detailed probes/log lines per one-second window; `suppressedLogs` counts omitted lines.
+Suppressed transitions retain their kind and duration with `diagnostics_rate_limited` in the history. The latest 60 events
+are also in `beamngEarth_core.status()` under `collisionWaits` and therefore in an in-game report.
+They reset with the level/session state; no separate telemetry upload is performed.
+
+`reason` describes terrain/anchor loading or commit gating; `roadBlocker` is separate context,
+not proof that roads caused an edge hold. It names the first blocking tile and part within
+300 m. `terrain.requestId`, `terrain.ageS`, `anchor`, block centres, `followWait` counters and
+`backlog` help correlate the event with `server.log`. Queue lengths describe client work.
+`lastReload` uses the existing collision-rebuild log's CPU clock; `reloadCpuAgeMs` is CPU
+time in milliseconds, not real elapsed wait time. Use `at`/`elapsedS` for the latter.
+
+After a freeze, send the in-game report or `beamng.log` together with `server.log` and the
+approximate incident time. Visible asphalt alone does not prove the terrain collision is ready.

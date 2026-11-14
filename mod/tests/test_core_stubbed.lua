@@ -1128,4 +1128,32 @@ do -- a computer with too little memory (the server's emergency tier): one warni
   T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
   guihooks = oldGh
 end
+-- Automatic driving-hold evidence is retained after release, without diagnostic work in normal frames.
+do
+  local st = core._state()
+  st.inOurLevel, st.clock = true, 1000
+  st.guard.pausedByUs = true
+  st.pending, st.followHeld = nil, false
+  st.sessionId = 'diagnostic-test'
+  st.terrainPending = { cx = 256, cy = 0, sentAt = 970, requestId = 'held-terrain' }
+  st.collisionTrace = core._collisiontrace.new()
+  core._traceCollisionHold()
+  local e = st.collisionTrace.events[1]
+  T.check(e and e.event == 'start' and e.kind == 'edge' and e.reason == 'server_terrain', 'driving hold: server terrain reason')
+  T.check(e.terrain.ageS == 30 and e.terrain.requestId == 'held-terrain', 'terrain request identity and wall age captured')
+  st.clock, st.terrainPending.ready, st.followBlocked = 1005, true, 'frame_budget'
+  core._traceCollisionHold()
+  T.check(st.collisionTrace.events[2].reason == 'frame_budget', 'ready terrain held by frame budget distinguished')
+  st.clock, st.guard.pausedByUs = 1007, nil
+  core._traceCollisionHold()
+  T.check(st.collisionTrace.events[3].event == 'end' and st.collisionTrace.events[3].elapsedS == 7,
+    'automatic completion evidence survives release')
+  st.terrainPending = nil -- synthetic ready request above intentionally has no terrain payload
+  local originalTrace, sampled = core._traceCollisionHold, 0
+  core._traceCollisionHold = function() sampled = sampled + 1 end
+  core.onUpdate(0.05, 0.05)
+  core._traceCollisionHold = originalTrace
+  T.check(sampled == 1, 'ordinary game frame invokes the automatic diagnostic hook')
+end
+
 T.done('test_core_stubbed')

@@ -2658,33 +2658,47 @@ function M.setHold(on) holdActive = on and true or false end
 -- Are the road tiles of anchor aid within r of (x, y) all in, their colliders (decks, tunnels, sidewalks, buildings)
 -- made and solid (made before the last collision rebuild)? Only what collides counts: the drawn road surface, building
 -- facades and wires come when they come (in Manhattan they kept a drop hold 20 s). Roads off: yes.
-function M.readyAround(aid, x, y, r)
+-- `explain` is diagnostic-only: the same predicate returns the first blocking tile/part.
+-- Normal per-frame callers allocate no reason tables and keep the existing boolean contract.
+function M.readyAround(aid, x, y, r, explain)
+  local function blocked(reason, key, part)
+    if explain then return false, { reason = reason, tile = key, part = part,
+      reloadCpuAgeMs = reloads > 0 and now() - lastReloadAt or nil, createQ = #createQ, walkQ = #walkQ,
+      collisionDirty = collisionDirty } end
+    return false
+  end
   if not M.enabled then return true end
-  if anchorId ~= aid then return false end
+  if anchorId ~= aid then return blocked('anchor_mismatch') end
   local busy = {}
   for _, q in ipairs(walkQ) do
-    if not q.renderOnly and q.what ~= 'road' and q.what ~= 'wire' then busy[q.key] = true end
+    if not q.renderOnly and q.what ~= 'road' and q.what ~= 'wire' then busy[q.key] = q.what end
+  end
+  local function check(key, skin)
+    local t = tiles[key]
+    if not t then return blocked('tile_missing', key) end
+    if not skin and t.ghost then return blocked('tile_ghost', key) end
+    if busy[key] then return blocked('object_queued', key, busy[key]) end
+    if skin and (not t.skin or t.skin.anchor ~= aid) then return blocked('skin_missing', key) end
+    for what in pairs(t.colWant or {}) do
+      if not t[what] then return blocked('collider_missing', key, what) end
+      if ((t.colAt and t.colAt[what]) or math.huge) >= lastReloadAt then
+        return blocked('collision_reload_pending', key, what)
+      end
+    end
+    return true
   end
   local n = M.TILE_M
-  if M.geo then           -- (geotiles: those whose quads come within r, their skins this anchor's)
+  if M.geo then
     for _, k in ipairs(M.geoKeysNear(x, y, r)) do
-      local key = geoKey(k)
-      local t = tiles[key]
-      if not t or busy[key] or not t.skin or t.skin.anchor ~= aid then return false end
-      for what in pairs(t.colWant or {}) do
-        if not t[what] or ((t.colAt and t.colAt[what]) or math.huge) >= lastReloadAt then return false end
-      end
+      local ok, why = check(geoKey(k), true)
+      if not ok then return ok, why end
     end
     return true
   end
   for gx = math.floor((x - r) / n), math.floor((x + r) / n) do
     for gy = math.floor((y - r) / n), math.floor((y + r) / n) do
-      local key = tileKey(aid, gx .. '_' .. gy)
-      local t = tiles[key]
-      if not t or t.ghost or busy[key] then return false end
-      for what in pairs(t.colWant or {}) do
-        if not t[what] or ((t.colAt and t.colAt[what]) or math.huge) >= lastReloadAt then return false end
-      end
+      local ok, why = check(tileKey(aid, gx .. '_' .. gy), false)
+      if not ok then return ok, why end
     end
   end
   return true

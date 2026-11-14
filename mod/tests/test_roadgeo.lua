@@ -146,11 +146,39 @@ do
     'turbine base mapped exactly at elevation')
 end
 
+-- Probe only this geotile: diagnosis uses the very same readiness predicate as the hold.
+local savedKeysNear = roads.geoKeysNear
+roads.geoKeysNear = function() return { key } end
+do
+  local ok, why = roads.readyAround(999, car.x, car.y, 50, true)
+  T.check(not ok and why.reason == 'anchor_mismatch', 'diagnosis: wrong anchor')
+  ok, why = roads.readyAround(1, car.x, car.y, 50, true)
+  T.check(not ok and why.reason == 'skin_missing' and why.tile ~= nil, 'diagnosis: absent surface names tile')
+end
 -- its skin for A
 T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
+do
+  local ok, why = roads.readyAround(1, car.x, car.y, 50, true)
+  T.check(not ok and why.reason == 'object_queued' and why.part ~= nil, 'diagnosis: collision object still in import queue')
+end
 run(1, A)
 T.check(#objsWith('rs_1_road') == 1 and #objsWith('rs_1_walk.') == 1, 'skin made')
+do
+  local ok, why = roads.readyAround(1, car.x, car.y, 50, true)
+  T.check(not ok and why.reason == 'collision_reload_pending' and why.part ~= nil,
+    'diagnosis: object exists but physics reload is still pending')
+end
 roads.collisionRebuilt()
+do
+  local ok, why = roads.readyAround(1, car.x, car.y, 50, true)
+  T.check(ok and why == nil, 'diagnosis clears after collision rebuild')
+end
+roads.geoKeysNear = function() return { 'missing_tile' } end
+do
+  local ok, why = roads.readyAround(1, car.x, car.y, 50, true)
+  T.check(not ok and why.reason == 'tile_missing' and why.tile == 'g:missing_tile', 'diagnosis: missing tile identity')
+end
+roads.geoKeysNear = savedKeysNear
 T.check(roads.settledFor(1, car.x, car.y), 'settled: the geotile under the car made with its skin')
 T.check(roads.readyAround(1, car.x, car.y, 50) == false or true, 'readyAround runs')
 
