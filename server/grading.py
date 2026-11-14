@@ -536,7 +536,23 @@ UNDER_ANY_ON = os.environ.get("BNE_UNDERPASS_ANY", "on") != "off"
 # ramps for those bridges (a motorway's too); the rules above decide for every other.
 import crossings as _xs
 import carriageways as _cw
-CW_AUTO = os.environ.get("BNE_BRIDGE_NETWORK", "off") == "on"
+CW_MODE = os.environ.get("BNE_BRIDGE_NETWORK", "auto").lower()
+CW_AUTO = CW_MODE != "off"
+CW_AUTO_MAX_CHAINS = 64
+CW_AUTO_MAX_SAMPLES = 12000
+CW_AUTO_BUDGET_S = 8.0
+
+
+def _cw_auto_allowed(chains):
+    """Default bridge repair is bounded; explicit interchange/network opt-in keeps the full solver."""
+    if _xs.ON or CW_MODE == "on":
+        return True
+    if len(chains) > CW_AUTO_MAX_CHAINS:
+        return False
+    samples = sum(math.ceil(sum(roadsmod._length(p[1]) for p in parts) / _cw.STEP_M) + len(parts)
+                  for parts, _order in chains)
+    return samples <= CW_AUTO_MAX_SAMPLES
+
 CW_ON = (_xs.ON or CW_AUTO) and os.environ.get("BNE_CARRIAGEWAYS", "on") != "off"
 CW_MAX_M = 8000.0       # m: a carriageway chain is cut here (a branch point or a loose end comes long before)
 CW_HEADROOM_M = roadsmod.MIN_BRIDGE_HEADROOM_M + roadsmod.BRIDGE_HEADROOM_MARGIN_M   # m of headroom the carriageways
@@ -4342,6 +4358,8 @@ class _Planner:
             chains.append(([parts[i] for i, _r in seq], [(n, r) for n, (_i, r) in enumerate(seq)]))
         chains = [ch for ch in chains if any(p_[2] for p_ in ch[0]) or len(ch[0]) > 0]
         prof = {}
+        if not _cw_auto_allowed(chains):
+            return {"parts": parts, "prof": {}, "auto_skipped": True}
         try:
             if chains:
                 prof = self._cw_cluster_solve(chains)
@@ -4630,13 +4648,14 @@ class _Planner:
                     data[n]['lo'] = np.where(data[n]['t'] >= UNDER_POLDER_M,
                                               np.maximum(data[n]['lo'], np.minimum(data[n]['t'], floor)),
                                               data[n]['lo'])
-        deadline = time.monotonic() + _cw.BUDGET_S
+        deadline = time.monotonic() + (min(_cw.BUDGET_S, CW_AUTO_BUDGET_S)
+                                      if not _xs.ON and CW_MODE == "auto" else _cw.BUDGET_S)
         cp = list(couplings) + [(nu, ju, nl, jl, "ge", clear) for nu, ju, nl, jl, clear in seps]
 
         def solve_network():
             workcancel.checkpoint()
             info = {}
-            result = _cw.solve(data, cp, deadline=deadline, diagnostics=info)
+            result = _cw.solve_components(data, cp, deadline=deadline, diagnostics=info)
             if not info["converged"]:
                 raise RuntimeError(f"carriageway network: {info['status']} (feasible={info['feasible']})")
             return result

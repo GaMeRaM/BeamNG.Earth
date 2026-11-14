@@ -9,6 +9,18 @@ import earthd  # noqa: E402
 
 
 class PrefetchChainTest(unittest.TestCase):
+    def test_unfinished_neighbour_cannot_replace_prefetch(self):
+        from types import SimpleNamespace
+        rule = earthd.FOLLOW_RULES[1024.0]
+        candidate = (3, 384., 0.)
+        server = SimpleNamespace(follow=rule, hm={}, hm_inflight={candidate: object()})
+        conn = SimpleNamespace(s=server, vel=(85., 0.), block=SimpleNamespace(cx=0., cy=0.))
+        anchor, target = SimpleNamespace(id=3), SimpleNamespace(cx=512., cy=0.)
+        probe = lambda: earthd.Connection.ready_will_do(conn, anchor, target, (256., 0.), {candidate})
+        self.assertFalse(probe(), 'unfinished neighbour is absent from the client ready set')
+        server.hm[candidate] = object()
+        self.assertTrue(probe(), 'a finished nearby block still avoids redundant speculative work')
+
     def test_chain(self):
         rule = earthd.FOLLOW_RULES[1024.0]                 # the 1 km block (by its width in metres)
         v = 223.0                                   # 500 mph, west

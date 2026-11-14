@@ -10972,7 +10972,9 @@ class Connection:
         _lead, reach, _ahead = rule.mode(*self.vel)
         lim = READY_STEPS * rule.grid
         cur = (self.block.cx, self.block.cy) if self.block is not None else None
-        keys = [k for k in list(self.s.hm) + list(self.s.hm_inflight) + list(busy) if k[0] == anchor.id]
+        # The client can substitute only centres advertised in terrain_ready_set, never work in flight.
+        # Treating a slow neighbouring build as ready delayed the exact request until the car hit the edge.
+        keys = [k for k in list(self.s.hm) if k[0] == anchor.id]
         for _a, kx, ky in keys:
             if (kx, ky) == (b.cx, b.cy) or (kx, ky) == cur:
                 continue

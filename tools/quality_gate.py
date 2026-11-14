@@ -20,7 +20,7 @@ MODULES = (
     "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
     "test_road_seams", "test_roadgeo", "test_fast", "test_restart",
     "test_revisit", "test_plancache", "test_bake_formats", "test_chunkcache",
-    "test_pools", "test_prefetch_chain", "test_demand", "test_roadwidth",
+    "test_pools", "test_prefetch_chain", "test_bridge_auto", "test_beach_prefix", "test_carriageway_components", "test_beaches", "test_demand", "test_roadwidth",
     "test_roadcorners", "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",
     "test_worldbundle", "test_world_cache", "test_peerwork", "test_host_package",
     "test_ru_infrastructure", "test_furniture", "test_buildings", "test_roads",

@@ -53,8 +53,18 @@ def sand_points(classes, sample):
 
 def _box_sum(m, r, edge=False):
     """Sum of m (2D) over the (2r + 1)^2 box round each cell (cells outside count 0, or as the nearest edge cell)."""
-    a = np.pad(m.astype(np.int32), ((r + 1, r), (r + 1, r)), mode="edge" if edge else "constant")
-    c = a.cumsum(0).cumsum(1)
+    # All production callers supply boolean masks. Bound the prefix total before using int32;
+    # accumulate the second axis in place instead of allocating two full int64 prefix grids.
+    m = np.asarray(m)
+    if m.dtype == np.bool_:
+        shape = (m.shape[0] + 2 * r + 1, m.shape[1] + 2 * r + 1)
+        dtype = np.int32 if shape[0] * shape[1] <= np.iinfo(np.int32).max else np.int64
+        a = np.pad(m, ((r + 1, r), (r + 1, r)), mode="edge" if edge else "constant")
+        c = np.cumsum(a, axis=0, dtype=dtype)
+        np.cumsum(c, axis=1, out=c)
+    else:
+        a = np.pad(m.astype(np.int32), ((r + 1, r), (r + 1, r)), mode="edge" if edge else "constant")
+        c = a.cumsum(0).cumsum(1)
     return c[2 * r + 1:, 2 * r + 1:] - c[:-2 * r - 1, 2 * r + 1:] - c[2 * r + 1:, :-2 * r - 1] + c[:-2 * r - 1, :-2 * r - 1]
 
 

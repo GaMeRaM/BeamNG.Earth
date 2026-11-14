@@ -437,3 +437,14 @@ time in milliseconds, not real elapsed wait time. Use `at`/`elapsedS` for the la
 
 After a freeze, send the in-game report or `beamng.log` together with `server.log` and the
 approximate incident time. Visible asphalt alone does not prove the terrain collision is ready.
+
+### Bounded bridge-network repair (fork .56)
+
+`BNE_BRIDGE_NETWORK=auto` is the default: the existing bridge-region selector is used,
+but regions exceeding 64 chains or 12,000 estimated profile samples retain the legacy rules.
+The native solves share at most eight seconds per region (or the smaller `BNE_CW_BUDGET_S`).
+Data loading/task preparation are outside that solver deadline. Disconnected components
+are solved separately; roads and bridges linked by constraints stay together. Failed or
+unconverged solutions are discarded. `on` retains the full opt-in network; `off` disables
+this repair. The M-12 underpass at 56.83318, 60.32128 is known to need the repair.
+Plans format 67 invalidates old geometry automatically; deleting the download cache is unnecessary.

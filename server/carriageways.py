@@ -212,6 +212,42 @@ def weights(br, from_end, trust=TRUST_M):
     return np.where(br, 0.0, w)
 
 
+def solve_components(chains, couplings=(), deadline=None, diagnostics=None):
+    """Solve disconnected networks separately; constraints and the objective have no terms between them.
+
+    Preserve chain order and one shared deadline. Connected bridge/road levels still form one QP.
+    """
+    n = len(chains)
+    parent = list(range(n))
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    cp = list(couplings)
+    for a, _i, b, _j, _kind, _value in cp:
+        ra, rb = root(a), root(b)
+        parent[rb] = ra
+    groups = {}
+    for i in range(n): groups.setdefault(root(i), []).append(i)
+    if len(groups) <= 1:
+        return solve(chains, cp, deadline=deadline, diagnostics=diagnostics)
+    deadline = time.monotonic() + BUDGET_S if deadline is None else deadline
+    out = [None] * n
+    for ids in groups.values():
+        remap = {old: new for new, old in enumerate(ids)}
+        constraints = [(remap[a], i, remap[b], j, kind, value)
+                       for a, i, b, j, kind, value in cp if a in remap]
+        info = {}
+        z = solve([chains[i] for i in ids], constraints, deadline=deadline, diagnostics=info)
+        if not info['converged']:
+            if diagnostics is not None: diagnostics.update(info)
+            raise RuntimeError(f"carriageway component: {info.get('status', 'not converged')}")
+        for i, values in zip(ids, z): out[i] = values
+    if diagnostics is not None: diagnostics.update(converged=True, feasible=True, status='SolvedComponents')
+    return out
+
+
 def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     """Profiles of coupled chains; the Rust kernel owns the numerical solve and releases the GIL.
 
