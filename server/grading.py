@@ -542,6 +542,7 @@ CW_AUTO_MAX_CHAINS = 64
 CW_AUTO_MAX_SAMPLES = 12000
 CW_AUTO_BUDGET_S = 8.0
 CW_AUTO_MAX_SPAN_M = 180.0
+CW_AUTO_STEP_M = 8.0
 
 
 def _cw_auto_allowed(chains):
@@ -4306,6 +4307,14 @@ class _Planner:
             active = False
             for key in [home] + list(home.neighbours()):
                 c = self._cell_enu(key, ground=False)
+                if CW_MODE == "auto" and not _xs.ON:
+                    candidate = any(cls in ("motorway", "trunk")
+                                    and UNDER_MAX_BRIDGE_M < roadsmod._length(line) <= CW_AUTO_MAX_SPAN_M
+                                    for line, cls in zip(c['bridges'], c.get('bridge_cls', ())))
+                    if candidate:
+                        active = True
+                        break
+                    continue
                 if any((((cls in APPROACH_SKIP and UNDER_MAX_BRIDGE_M < roadsmod._length(line) <= 1000.
                          or cls == "trunk" and 60. < roadsmod._length(line) <= UNDER_MAX_BRIDGE_M))
                         or (cls in ('primary', 'unclassified') and 60. < roadsmod._length(line) <= 1000.))
@@ -4405,7 +4414,8 @@ class _Planner:
         data, samples = [], []
         for ch in chains:
             parts, order = ch
-            xy, s, pi, br, fe = _cw.sample(parts, order)
+            xy, s, pi, br, fe = _cw.sample(parts, order, step=CW_AUTO_STEP_M
+                                         if not _xs.ON and CW_MODE == "auto" else _cw.STEP_M)
             step = float(s[-1] / max(len(s) - 1, 1))
             la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
             raw = np.asarray(self.elev(np.asarray(la, f64), np.asarray(lo, f64)), f64).ravel()
