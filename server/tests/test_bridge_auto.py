@@ -15,6 +15,19 @@ class AutoBridgeTest(unittest.TestCase):
             self.assertFalse(grading._cw_auto_allowed([([part], [(0,False)])]))
         with mock.patch.object(grading, 'CW_MODE', 'on'):
             self.assertTrue(grading._cw_auto_allowed([([], [])] * 65))
+    def test_auto_is_scoped_to_paired_short_highway_overpasses(self):
+        def part(fid, xy, bridge, cls='trunk'):
+            return ((fid,), np.array(xy, dtype=float), bridge, cls, fid, float(bridge), 5.)
+        upper=[part('a',[[0,0],[140,0]],True),part('b',[[0,12],[140,12]],True)]
+        lower=[part('c',[[60,-100],[60,100]],False),part('d',[[80,-100],[80,100]],False)]
+        pack=lambda ps: [([p],[(0,False)]) for p in ps]
+        with mock.patch.object(grading._xs,'ON',False), mock.patch.object(grading,'CW_MODE','auto'):
+            self.assertTrue(grading._cw_auto_allowed(pack(upper+lower)))
+            self.assertFalse(grading._cw_auto_allowed(pack(upper+lower[:1])))
+            self.assertFalse(grading._cw_auto_allowed(pack(upper+[part('c',[[60,-100],[60,100]],False,'secondary'),lower[1]])))
+            long=[part('a',[[0,0],[400,0]],True),part('b',[[0,12],[400,12]],True)]
+            self.assertFalse(grading._cw_auto_allowed(pack(long+lower)))
+
     def test_reported_m12_bridge_clears_traffic(self):
         site = load('m12_west_low', prefix='bridge')
         md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={'roads':site.cells.get(str(key))}))

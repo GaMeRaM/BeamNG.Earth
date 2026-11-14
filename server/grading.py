@@ -541,6 +541,7 @@ CW_AUTO = CW_MODE != "off"
 CW_AUTO_MAX_CHAINS = 64
 CW_AUTO_MAX_SAMPLES = 12000
 CW_AUTO_BUDGET_S = 8.0
+CW_AUTO_MAX_SPAN_M = 180.0
 
 
 def _cw_auto_allowed(chains):
@@ -551,7 +552,36 @@ def _cw_auto_allowed(chains):
         return False
     samples = sum(math.ceil(sum(roadsmod._length(p[1]) for p in parts) / _cw.STEP_M) + len(parts)
                   for parts, _order in chains)
-    return samples <= CW_AUTO_MAX_SAMPLES
+    if samples > CW_AUTO_MAX_SAMPLES:
+        return False
+    # Auto repairs only divided-highway overpasses over another divided highway.
+    # Other networks remain opt-in: enabling an entire city's profiles can change unrelated joins.
+    parts = [p for seq, _order in chains for p in seq]
+    bridges = [p for p in parts if p[2] and p[3] in ("motorway", "trunk")
+               and UNDER_MAX_BRIDGE_M < roadsmod._length(p[1]) <= CW_AUTO_MAX_SPAN_M]
+    ground = [p for p in parts if not p[2] and p[3] in ("motorway", "trunk")]
+    if len(bridges) < 2 or len(ground) < 2:
+        return False
+    spans = []
+    for p in bridges:
+        crossed = set()
+        for q in ground:
+            if p[4] == q[4]:
+                continue
+            if any(roadsmod.AT_GRADE_REACH_M < arc < roadsmod._length(p[1]) - roadsmod.AT_GRADE_REACH_M
+                   for _pi, arc, _xy in roadsmod._crossings([p[1]], [q[1]])):
+                crossed.add(q[4])
+        if len(crossed) >= 2:
+            spans.append(p)
+    for i, a in enumerate(spans):
+        for b in spans[i + 1:]:
+            ua, ub = a[1][-1, :2] - a[1][0, :2], b[1][-1, :2] - b[1][0, :2]
+            norm = float(dnp.hypot(*ua) * dnp.hypot(*ub))
+            if norm > 0 and abs(float(ua @ ub)) / norm > 0.96:
+                # Each already crosses the same two through carriageways; their decks must also be neighbours.
+                if float(dnp.hypot(*(np.mean(a[1][:, :2], axis=0) - np.mean(b[1][:, :2], axis=0)))) < 40.:
+                    return True
+    return False
 
 CW_ON = (_xs.ON or CW_AUTO) and os.environ.get("BNE_CARRIAGEWAYS", "on") != "off"
 CW_MAX_M = 8000.0       # m: a carriageway chain is cut here (a branch point or a loose end comes long before)
@@ -5970,7 +6000,7 @@ class _Planner:
         bridge = np.asarray(hc["bridges"][bi], np.float64)[:, :2]
         cls = (hc.get("bridge_cls") or [None] * len(hc["bridges"]))[bi]
         if cls is None or cls in APPROACH_SKIP or str(cls).endswith("_link") or (
-                CW_ON and _cw.family(cls) is not None):
+                CW_ON and _cw.family(cls) is not None and self._cw_z_at(bridge, bridge[:1]) is not None):
             return None
         lam, lom, _ = self.frame.enu_to_geodetic(bridge[:, 0], bridge[:, 1], 0.0)
         pad = 50.0 / 111320.0
