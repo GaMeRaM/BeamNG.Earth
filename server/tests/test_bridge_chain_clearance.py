@@ -80,6 +80,9 @@ class LongDividedOverpassTest(unittest.TestCase):
         patcher = mock.patch.object(grading, "CW_ON", True)
         patcher.start()
         self.addCleanup(patcher.stop)
+        mode = mock.patch.object(grading, "CW_MODE", "on")
+        mode.start()
+        self.addCleanup(mode.stop)
 
     def test_long_trunk_uses_one_continuous_road_and_deck_profile(self):
         from test_roads import features
@@ -118,6 +121,9 @@ class M12ServiceJoinTest(unittest.TestCase):
         patcher = mock.patch.object(grading, "CW_ON", True)
         patcher.start()
         self.addCleanup(patcher.stop)
+        mode = mock.patch.object(grading, "CW_MODE", "on")
+        mode.start()
+        self.addCleanup(mode.stop)
 
     def test_access_profile_keeps_headroom_and_does_not_punch_the_carriageway(self):
         fixture = Path(__file__).parent / 'fixtures'

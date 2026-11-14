@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -138,6 +139,9 @@ class StackTest(unittest.TestCase):
 
     def test_levels_stack_from_the_ground_up(self):
         import grading
+        mode = mock.patch.object(grading, "CW_MODE", "on")
+        mode.start()
+        self.addCleanup(mode.stop)
         d = 1 / np.sqrt(2)
         lines = [[(-700, 0), (700, 0)],                                      # 0 the motorway, on the ground
                  [(0, -700), (0, -70)], [(0, -70), (0, 70)], [(0, 70), (0, 700)],    # 1-3 a ramp, its bridge level 1

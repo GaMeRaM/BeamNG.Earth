@@ -577,7 +577,7 @@ def _cw_auto_allowed(chains):
         for b in spans[i + 1:]:
             ua, ub = a[1][-1, :2] - a[1][0, :2], b[1][-1, :2] - b[1][0, :2]
             norm = float(dnp.hypot(*ua) * dnp.hypot(*ub))
-            if norm > 0 and abs(float(ua @ ub)) / norm > 0.96:
+            if norm > 0 and abs(float(ua[0] * ub[0] + ua[1] * ub[1])) / norm > 0.96:
                 # Each already crosses the same two through carriageways; their decks must also be neighbours.
                 if float(dnp.hypot(*(np.mean(a[1][:, :2], axis=0) - np.mean(b[1][:, :2], axis=0)))) < 40.:
                     return True

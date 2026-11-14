@@ -10962,7 +10962,7 @@ class Connection:
             self.spawn(run())
 
     def ready_will_do(self, anchor, b, where, busy):
-        """Would the mod take a block built (or being built) already instead of predicted block b (follow.lua
+        """Would the mod take an already built block instead of predicted block b (follow.lua
         preferReady: within READY_STEPS grid steps of its target, the player within reach of it where it asks)? Then b
         is not built: each pose's prediction a grid step off the last built another block, 55 built for 24 asked for
         at 150 mph down Midtown (nyc_speed.py 2026-11-02)."""
