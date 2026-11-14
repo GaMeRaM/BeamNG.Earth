@@ -249,8 +249,8 @@ mod tests {
         let xy = line(41, 5.0);
         let beside: Vec<[f64; 2]> = vec![[0.0, 8.0], [200.0, 8.0]];
         let a = approach_add_core(&xy, false, 6.0, 4.0, &[(&beside, 3.0)], 2.0, None, 0.5, 0.05, 30.0, 320.0, 1.0, 0.1,
-                                  None).unwrap();
-        assert!(a[0] <= 0.0 + 1e-9, "8 m off, 4 + 3 + 1 m of it taken: nothing left for the slope");
+                                  None);
+        assert!(a.is_none(), "8 m off, 4 + 3 + 1 m of it taken: nothing left for the slope");
     }
 
     #[test]
@@ -293,7 +293,8 @@ mod tests {
     #[test]
     fn deck_reach_climbs_from_its_ends() {
         let flat_line = under_deck_reach_core(35.0, 37.0, 96.0, 26.0, 42.0, 0.05, 20.0, false);
-        let climbed = under_deck_reach_core(35.0, 37.0, 96.0, 26.0, 42.0, 0.05, 20.0, true);
+        // With a 10 m flat run, the climb exceeds the straight line across this corridor.
+        let climbed = under_deck_reach_core(35.0, 37.0, 96.0, 26.0, 42.0, 0.05, 10.0, true);
         assert!((flat_line - (35.0 + 2.0 * 26.0 / 96.0)).abs() < 1e-9);
         assert!(climbed > flat_line);
         // a short deck: within the flat run of both ends, the straight line

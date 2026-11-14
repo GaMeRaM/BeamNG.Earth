@@ -893,6 +893,11 @@
    "source": "levels/beamng_earth/art/shapes/beamngEarth/sign_speed_none.webp",
    "format": "BC7",
    "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_day_b.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_day_b.webp",
+   "format": "BC7",
+   "role": "color"
   }
  }
 }

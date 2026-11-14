@@ -60,7 +60,8 @@ class StagingTest(unittest.TestCase):
                 real(src, dst)
 
             with mock.patch.object(staging.os, "replace", side_effect=held), \
-                    mock.patch.object(staging, "REPLACE_WAITS", (0., 0.)):
+                    mock.patch.object(staging, "GAME_WAITS", (0., 0.)), \
+                    mock.patch.object(staging, "staging_dir", return_value=root):
                 staging.replace(str(tmp), str(path))
             self.assertEqual(path.read_bytes(), b"new")
             self.assertFalse(tmp.exists())
@@ -72,7 +73,8 @@ class StagingTest(unittest.TestCase):
             path.write_bytes(b"old")
             tmp.write_bytes(b"new")
             with mock.patch.object(staging.os, "replace", side_effect=PermissionError(13, "held")), \
-                    mock.patch.object(staging, "REPLACE_WAITS", (0.,)):
+                    mock.patch.object(staging, "GAME_WAITS", (0.,)), \
+                    mock.patch.object(staging, "staging_dir", return_value=root):
                 with self.assertRaises(PermissionError):
                     staging.replace(str(tmp), str(path))
             self.assertEqual(path.read_bytes(), b"old")
@@ -138,6 +140,52 @@ class StagingTest(unittest.TestCase):
         finally:
             staging.os.replace = real
             staging.REPLACE_WAITS = old_waits
+
+    def test_game_file_held_for_a_moment(self):
+        """Windows: a file in the game's folder the game (or a virus scanner) has open cannot be replaced for a moment;
+        a block's surface mask failed the whole block (PermissionError, 2026-11-13). Tried again, then the error."""
+        from unittest import mock
+        real, calls = os.replace, []
+
+        def held(n):
+            def fake(a, b):
+                calls.append(a)
+                if len(calls) <= n:
+                    raise PermissionError(13, "Access is denied")
+                real(a, b)
+            return fake
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(staging, "GAME_WAITS", (0.0, 0.0, 0.0)):
+            session = os.path.join(root, "BeamNG.drive", "current", "temp", "beamngEarth", "s1")
+            target = os.path.join(session, "hm_2_0_0_m8.png")
+            os.makedirs(session)
+            Path(target).write_bytes(b"old")
+            tmp = staging.tmp_for(target)
+            Path(tmp).write_bytes(b"new")
+            with mock.patch.object(staging.os, "replace", held(2)), self.assertLogs("earthd.staging", "INFO"):
+                staging.replace(tmp, target)                # freed after two tries: it goes in
+            self.assertEqual(Path(target).read_bytes(), b"new")
+            self.assertEqual(len(calls), 3)
+            calls.clear()
+            Path(tmp).write_bytes(b"newer")
+            with mock.patch.object(staging.os, "replace", held(99)), self.assertRaises(PermissionError):
+                staging.replace(tmp, target)                # held throughout: the error stands
+            self.assertEqual(len(calls), len(staging.GAME_WAITS) + 1)
+            self.assertEqual(Path(target).read_bytes(), b"new")
+            calls.clear()
+            cache, ctmp = os.path.join(root, "t.webp"), os.path.join(root, "t.webp.tmp")
+            Path(ctmp).write_bytes(b"x")
+            with mock.patch.object(staging.os, "replace", held(99)), self.assertRaises(PermissionError):
+                staging.replace(ctmp, cache)                # a cache file: one try (replace_cached has its own)
+            self.assertEqual(len(calls), 1)
+            calls.clear()
+            Path(tmp).write_bytes(b"newest")
+
+            async def on_loop():        # (the server's event loop, Server.reslot: one try, no sleep)
+                staging.replace(tmp, target)
+            import asyncio
+            with mock.patch.object(staging.os, "replace", held(99)), self.assertRaises(PermissionError):
+                asyncio.run(on_loop())
+            self.assertEqual(len(calls), 1)
 
 
 
