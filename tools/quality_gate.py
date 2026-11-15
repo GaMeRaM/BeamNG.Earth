@@ -20,7 +20,7 @@ MODULES = (
     "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
     "test_road_seams", "test_roadgeo", "test_fast", "test_restart",
     "test_revisit", "test_plancache", "test_bake_formats", "test_chunkcache",
-    "test_serverlist_pages", "test_terrainprefill", "test_tls_context", "test_osmfuel_tiles", "test_areas", "test_countrybounds", "test_credits", "test_graphics", "test_imagery", "test_lanesections", "test_navgraph", "test_railprofile", "test_railtags", "test_retex", "test_server", "test_bldhz", "test_geocode_categories", "test_osm_building_colours", "test_osm_building_years", "test_road_underpass_signs", "test_watchdog_cpu", "test_shared_gate", "test_building_parts_rules", "test_nycshards", "test_rail_underpass_metadata", "test_pools", "test_prefetch_chain", "test_bridge_auto", "test_beach_prefix", "test_carriageway_components", "test_beaches", "test_demand", "test_roadwidth",
+    "test_deckspans", "test_detail", "test_farglobal", "test_lidarz", "test_rail_yield", "test_veg_geo_jobs", "test_serverlist_pages", "test_terrainprefill", "test_tls_context", "test_osmfuel_tiles", "test_areas", "test_countrybounds", "test_credits", "test_graphics", "test_imagery", "test_lanesections", "test_navgraph", "test_railprofile", "test_railtags", "test_retex", "test_server", "test_bldhz", "test_geocode_categories", "test_osm_building_colours", "test_osm_building_years", "test_road_underpass_signs", "test_watchdog_cpu", "test_shared_gate", "test_building_parts_rules", "test_nycshards", "test_rail_underpass_metadata", "test_pools", "test_prefetch_chain", "test_bridge_auto", "test_beach_prefix", "test_carriageway_components", "test_beaches", "test_demand", "test_roadwidth",
     "test_roadcorners", "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",
     "test_worldbundle", "test_world_cache", "test_peerwork", "test_host_package",
     "test_ru_infrastructure", "test_furniture", "test_buildings", "test_roads",
@@ -68,8 +68,11 @@ def main():
     print(f"Python {sys.version.split()[0]}, earthfast {fast._ef.VERSION}, "
           f"DuckDB {duckdb.__version__}, fsspec {fsspec.__version__}", flush=True)
     commands = [
-        [sys.executable, "tools/run_tests.py", *MODULES, "--par", str(args.par),
+        [sys.executable, "tools/run_tests.py", *(n for n in MODULES if n != "test_credits"), "--par", str(args.par),
          "--timeout", str(args.timeout), "--logs", "build/quality-tests"],
+        # The moving far-field credits session has a fixed deadline; isolate it from other test servers.
+        [sys.executable, "tools/run_tests.py", "test_credits", "--par", "1",
+         "--timeout", str(args.timeout), "--logs", "build/quality-credits-tests"],
         [sys.executable, "tools/run_lua_tests.py"],
         ["node", "--test", "mod/tests/test_mapmath.mjs", "mod/tests/test_mapsearch.mjs", "mod/tests/test_paste.mjs", "server/tests/test_mapmath.mjs"],
         ["cargo", "test", "--locked", "--manifest-path", "native/serverlist/Cargo.toml"],

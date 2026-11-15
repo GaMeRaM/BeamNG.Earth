@@ -231,6 +231,7 @@ local function resetState()
     serverNoteDetail = nil,
     terrainErrorAt = nil,    -- clock of the last terrain_error since the last terrain arrived
     guard = edgeguard.new(), -- the edge guard's state (mode 'off' while the block can follow)
+    deck = require('beamngEarth/deckguard').new(),   -- the deck guard's (bridges whose road tile has not come)
     guardBox = {},           -- the collidable area it guards (reused)
   }
 end
@@ -611,6 +612,7 @@ local function commitTeleport(msg)
   M._apiRebased(oldAnchor, 'teleport')
   st.block, st.terrainPending, st.terrainErrorAt = { cx = tr.cx, cy = tr.cy }, nil, nil
   edgeguard.newFrame(st.guard)
+  M._deckguard.newFrame(st.deck)
   sendCommits(msg.anchorId, tr.cx, tr.cy)
   activateWorld()
   st.skyTimer, st.poseTimer = SKY_INTERVAL, POSE_INTERVAL -- refresh both right away
@@ -669,6 +671,7 @@ local function finishRebase()
   M._apiRebased(oldAnchor, rb.purpose)
   st.block, st.terrainPending, st.terrainErrorAt = tr and { cx = tr.cx, cy = tr.cy } or nil, nil, nil
   edgeguard.newFrame(st.guard)
+  M._deckguard.newFrame(st.deck)
   if tr then sendCommits(msg.anchorId, tr.cx, tr.cy)
   else net.send({ type = 'commit_anchor', anchorId = msg.anchorId }) end
   activateWorld()
@@ -1108,7 +1111,7 @@ M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 
   -- (and a generation swap's own messages: its terrain_refresh is handled at once, so its swap_begin must be before it)
   urgent = { terrain_ready = true, terrain_ready_set = true, terrain_refresh = true, terrain_error = true,
     swap_begin = true, swap_end = true, swap_abort = true,
-    block_base = true, terrain_patch = true, ground_ahead = true, status = true, load_progress = true, where_result = true, geocode_result = true, stations_result = true,
+    block_base = true, terrain_patch = true, ground_ahead = true, deck_spans = true, status = true, load_progress = true, where_result = true, geocode_result = true, stations_result = true,
     route_result = true, random_place_result = true, runtime_profiler_pong = true } }
 -- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
 -- is slower than BASE_NOW_MS, if that block is still the one in use (a later block brings its own photo)
@@ -1185,6 +1188,7 @@ local function onMessage(msg)
       trafficVisuals = M._trafficvisuals.PROTO,
       -- (the game's own user folder: the server checks it writes its files there, GitHub #770)
       userPath = (FS and FS.getUserPath) and FS:getUserPath() or nil,
+      deckGuard = M._deckguard.PROTO,  -- (it slows the car before a bridge whose road tile is late: 'deck_spans')
       readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
@@ -1530,6 +1534,9 @@ local function onMessage(msg)
       end
       if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base = msg.base end
     end
+  elseif t == 'deck_spans' then
+    -- the bridges round the car (server deckspans.py): the deck guard slows the car before one whose tile is late
+    M._deckguard.onSpans(st.deck, msg, st.anchorId)
   elseif t == 'ground_ahead' then
     -- the highest ground near the player's path (server groundahead.py): the altitude rule (follow.lua)
     if tonumber(msg.z) then st.groundAhead = { anchorId = msg.anchorId, z = tonumber(msg.z), at = st.clock } end
@@ -1970,7 +1977,10 @@ local function updateWorld(dt)
       slotsGone = slotsGoneNow(), -- pooled shape slots let go (server/matslots.py)
       foci = poseFoci(),          -- other vehicles' collision islands (collisionfoci.lua; earthd parse_foci)
       -- the edge guard holds the car for its ground: the server takes every core meanwhile (earthd hold_boost)
-      guardHold = st.guard.mode == 'hold' or nil,
+      -- (and while the deck guard holds the car, or has it at rest, before a bridge whose road tile is late: that tile
+      -- built first, deckWait)
+      guardHold = (st.guard.mode == 'hold' or M._deckguard.waiting(st.deck)) or nil,
+      deckWait = M._deckguard.waitKeys(st.deck),
       cam = c and { x = c.x, y = c.y, z = c.z, fx = c.fx, fy = c.fy, fz = c.fz, fovDeg = c.fovDeg, h = c.h } or nil })
   end
 
@@ -2168,10 +2178,7 @@ local function updateGuard()
     g.mode = 'off'
     return
   end
-  local ok, err = pcall(edgeguard.update, g, veh, box, st.clock, function(x, y)
-    return not net.isConnected() or st.viewFrame or dropHold.active or st.swap
-      or roads.readyDriving(st.anchorId, x, y)
-  end)
+  local ok, err = pcall(edgeguard.update, g, veh, box, st.clock)
   if not ok then
     guardFailed, g.mode = true, 'off'
     pcall(edgeguard.release, g)
@@ -2188,7 +2195,7 @@ end
 -- The banner alone cannot distinguish a terrain-edge hold from a drop's nearby-road wait.
 -- Keep these snapshots in core.status() too, so an in-game report captures a hold that already ended.
 function M._traceCollisionHold()
-  local kind = st.inOurLevel and (st.guard.pausedByUs and 'edge' or (dropHold.active and 'drop')) or nil
+  local kind = st.inOurLevel and (st.guard.pausedByUs and 'edge' or (dropHold.active and 'drop') or (st.deck.held and 'deck')) or nil
   if not kind and not st.collisionTrace.kind then return end
   M._collisiontrace.update(st.collisionTrace, kind, st.clock, function()
     local tp, p, pl, b = st.terrainPending, st.pending, st.player, st.block
@@ -2198,7 +2205,7 @@ function M._traceCollisionHold()
     elseif not st.sessionId then reason = 'server_hello'
     elseif st.followHeld then reason = 'altitude_rule'
     elseif windowMinimized() then reason = 'window_minimized'
-    elseif st.guard.roadBlocked then reason = 'road_collision'
+    elseif kind == 'deck' then reason = 'bridge_collision'
     elseif tp then reason = not tp.ready and 'server_terrain' or (st.followBlocked or 'terrain_commit')
     elseif p and (p.ready or p.purpose == 'teleport' or p.purpose == 'resync') then
       reason = p.ready and 'anchor_commit' or 'server_anchor'
@@ -2206,17 +2213,12 @@ function M._traceCollisionHold()
     else reason = 'no_next_terrain_request' end
     local box = guardBox()
     local ready, road
-    if pl and st.anchorId then
-      if st.guard.roadBlocked and st.guard.roadPoint then
-        ready, road = roads.readyAround(st.anchorId, st.guard.roadPoint.x, st.guard.roadPoint.y, 8, true)
-      else
-        ready, road = roads.readyAround(st.anchorId, pl.x, pl.y, drophold.NEAR_M, true)
-      end
-    end
+    if pl and st.anchorId then ready, road = roads.readyAround(st.anchorId, pl.x, pl.y, drophold.NEAR_M, true) end
     if kind == 'drop' and connected and st.sessionId and not tp and not p then reason = ready == false and 'ground_or_nearby_colliders' or 'ground_settling' end
     local reloads = roads.reloadLog()
     local w = st.followWait
     return { reason = reason, connected = connected, anchor = st.anchorId,
+      deck = { mode = st.deck.mode, waitKeys = M._deckguard.waitKeys(st.deck) },
       guardMode = st.guard.mode, serverHealthy = st.guard.healthy,
       terrainRetryInS = math.max(0, (st.terrainRetryAt or 0) - st.clock),
       terrainLatency = st.terrainLatency, followBlocked = st.followBlocked,
@@ -2236,6 +2238,58 @@ function M._traceCollisionHold()
   end, function(e) log('I', 'beamngEarth', 'collision wait: ' .. jsonEncode(e)) end)
 end
 
+-- The deck guard (deckguard.lua): after the edge guard, never while it holds the car, the game is paused by someone
+-- else or the car is being placed. Its engine calls (the vehicle, the velocity scale) only with a gap ahead.
+M._deckguard = require('beamngEarth/deckguard')
+M._deckFailed = false
+M._deckCtx = {
+  -- (our own car only: in BeamMP the camera may be on another player's, MPVehicleGE.isOwn)
+  getVeh = function()
+    local veh = getPlayerVehicle(0)
+    local mp = rawget(_G, 'MPVehicleGE')
+    if veh and type(mp) == 'table' and type(mp.isOwn) == 'function' then
+      local ok, own = pcall(mp.isOwn, veh:getID())
+      if not (ok and own == true) then return nil end
+    end
+    return veh
+  end,
+  grid = roads.deckGrid,          -- (the road tiles, walked along a span: roads.lua)
+  -- the block's ground (the terrain's height), nil off its collidable area (getTerrainHeight answers the base there)
+  groundAt = function(x, y)
+    local b = st.block
+    local ct = rawget(_G, 'core_terrain')
+    if not b or not ct or not ct.getTerrainHeight then return nil end
+    local x0, y0, x1, y1 = lattice.groundBox(b.cx, b.cy)
+    if x < x0 + 4 or x > x1 - 4 or y < y0 + 4 or y > y1 - 4 then return nil end
+    local h = ct.getTerrainHeight(vec3(x, y, 0))
+    if type(h) ~= 'number' or h ~= h then return nil end
+    return h
+  end,
+  hold = require('beamngEarth/simhold'),
+}
+function M._deckGuardStep(dtReal, dtSim)
+  local g, c = st.deck, M._deckCtx
+  if M._deckFailed then return end
+  local others = st.guard.pausedByUs or st.placeFrames or st.swap ~= nil
+    or (st.paused and not g.held) or not roads.enabled
+  if others then
+    if g.mode ~= 'off' then
+      -- (the edge guard's pause took over: it is theirs to end now, one pause for both)
+      if st.guard.pausedByUs then g.held = nil else pcall(M._deckguard.release, g, c.hold) end
+      g.mode, g.danger = 'off', nil
+    end
+    return
+  end
+  c.clock, c.dtReal, c.dtSim, c.pl, c.anchorId = st.clock, dtReal, dtSim or dtReal, st.player, st.anchorId
+  local ok, err = pcall(M._deckguard.update, g, c)
+  if not ok then
+    M._deckFailed = true
+    pcall(M._deckguard.release, g, c.hold)
+    g.mode = 'off'
+    log('E', 'beamngEarth', 'deck guard turned off: ' .. tostring(err))
+  end
+end
+
 local function updateBanner(dt)
   local i = bannerInfo
   i.net, i.session = net.state(), st.sessionId ~= nil
@@ -2245,6 +2299,8 @@ local function updateBanner(dt)
   -- (healthy: no warning, the block follows; a pause there waits for the late block like a drop hold)
   i.edge = (not st.guard.healthy and (m == 'warn' or m == 'hold')) and m or nil
   i.dropHold = (dropHold.active or (st.guard.healthy and st.guard.pausedByUs)) or nil
+  local dm = st.deck.mode       -- (the deck guard slowing the car for, or holding it before, a bridge not loaded yet)
+  i.deck = (dm == 'slow' or dm == 'wait' or dm == 'hold') and dm or nil
   -- connected and said hello, yet the guard runs: the server does not (yet) build the terrain
   i.stuck = (i.session and net.isConnected()) and true or false
   local lp = st.loadProgress
@@ -2481,6 +2537,20 @@ local function updateBeamMP(dt)
   if not mpsessionBroken and st.inOurLevel and net.isConnected() and beammp.inSession() then
     local ok, err = pcall(mpsession.update, dt, st.anchor, st.player or st.cam)
     if not ok then mpsessionBroken = true; log('E', 'beamngEarth', 'BeamMP session: ' .. tostring(err)) end
+  end
+  -- far players' cars not spawned here (mpdefer.lua; from the level's start, before the world server is up: the cars
+  -- already on the server come as we join). An error: everything kept handed back, BeamMP's own behaviour again.
+  if st.inOurLevel and beammp.inSession() then
+    local md = require('beamngEarth/mpdefer')
+    if not md.broken then
+      local ok, err = pcall(md.update, dt)
+      if not ok then
+        md.broken = true
+        log('E', 'beamngEarth', 'BeamMP far cars: ' .. tostring(err))
+        pcall(md.reset)
+        pcall(md.handBack, 'handed back (an error)')
+      end
+    end
   end
 end
 
@@ -3118,6 +3188,7 @@ local function onUpdate(dtReal, dtSim)
     t = mark('trafficvisuals', t)
     updateSky(dtReal)
     updateGuard()
+    M._deckGuardStep(dtReal, dtSim)
     t = mark('sky', t)
   end
   if not M._collisionTraceBroken then

@@ -15,6 +15,19 @@ import tilepublish
 
 
 class PublicationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_preloaded_json_is_reused_without_reopening_file(self):
+        import staging, protocol
+        with tempfile.TemporaryDirectory() as directory:
+            server = SimpleNamespace(out_dir=directory, vfs_dir='/vfs', far_format='none', slot_serial=itertools.count())
+            conn = SimpleNamespace(s=server, closing=False, sent=[])
+            conn.send = conn.sent.append
+            raw = protocol.RawJson('{"ready":true}')
+            pre = staging.Inlined(None, raw, files={'one.json': raw})
+            with patch('staging.inline_json', side_effect=AssertionError('file reopened')):
+                tilepublish.send(conn, {'type':'tile', 'path':'one.json'}, inline=pre)
+                await asyncio.wait_for(conn._tile_publication, 2)
+            self.assertIs(conn.sent[0]['data'], raw)
+
     async def test_slow_io_keeps_loop_live_and_messages_ordered(self):
         with tempfile.TemporaryDirectory() as directory:
             entered, release = threading.Event(), threading.Event()

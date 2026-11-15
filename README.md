@@ -182,6 +182,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   edges, ditches and the ground at walls follow the map closely (the Low and Medium presets use a lighter 2 m grid).
 - Buildings, sidewalks, curbs and bridge decks are solid (lean collision meshes near the car keep the
   physics' collision rebuilds cheap).
+- A bridge ahead that has not loaded yet (its road piece comes after the ground under it): the car slows down smoothly
+  and stops short of it until it has, instead of driving into the gap; also in BeamMP, where only your own car is
+  slowed (on by default; Settings > World > Slow down before bridges still loading).
 - Real bridge and tunnel heights where open data measures them: in the US, bridge decks follow the USGS 3DEP lidar
   measured along each bridge, and so do the roads leading onto them up to where they are back on the ground
   (`BNE_APPROACH_LIDAR=off` turns that part off); in France (IGN BD TOPO) and Norway (NVDB), bridges and tunnels follow the national road
@@ -557,7 +560,9 @@ BeamNG.Earth runs on [BeamMP](https://beammp.com/) servers (in testing): drive t
 Leaving a server turns BeamNG.Earth back on (joining one switches your other mods off).
 
 You are sent to where the others are. Cars show in the right place in everyone's world; other players show on the
-world map (**M**) as green arrows; players far away (another country) are hidden until you meet. Crash damage: a crash
+world map (**M**) as green arrows; players far away (another country) are hidden until you meet. A far player's car
+isn't even loaded on your computer until it comes within about 15 miles (then it appears with its latest parts and
+paint, by BeamMP's own spawn queue settings), so far players spawning or changing cars don't freeze your game. Crash damage: a crash
 you watch keeps the damage your own game worked out; a car that crashed out of your sight takes on its owner's damage
 (broken parts and dents) once it comes within about 0.6 miles.
 

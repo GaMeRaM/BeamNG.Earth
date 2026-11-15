@@ -9,13 +9,13 @@ import staging
 log = logging.getLogger('earthd.tilepublish')
 
 
-def send(conn, message, files=None, valid=None):
+def send(conn, message, files=None, valid=None, inline=None):
     server = getattr(conn, 's', None)
     # Small protocol-only callers/test doubles have no live session pool.
     if server is None or not hasattr(server, 'slot_serial'):
         directory = getattr(server, 'out_dir', None)
         if directory and message.get('path'):
-            data = staging.inline_json(directory, message['path'])
+            data = staging.inline_from(inline, directory, message['path'])
             if data is not None:
                 message['data'] = data
         pool = getattr(server, 'pool_shapes', None)
@@ -50,7 +50,7 @@ def send(conn, message, files=None, valid=None):
                     owners.add(owner)
                     reserved.append((what, filename, owner, name, next(server.slot_serial)))
             def prepare():
-                data = staging.inline_json(server.out_dir, message['path']) if message.get('path') else None
+                data = staging.inline_from(inline, server.out_dir, message['path']) if message.get('path') else None
                 placed = []
                 for what, filename, owner, name, serial in reserved:
                     slot = matslots.MatSlots.file(name)

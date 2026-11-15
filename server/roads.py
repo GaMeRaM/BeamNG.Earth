@@ -20,6 +20,7 @@ Not yet: grading the ground under roads, markings, junction shapes, bridges and 
 flagged as bridge / tunnel or off ground level are left out), the navgraph.
 """
 import json
+import functools
 import logging
 import math
 import types
@@ -12442,7 +12443,11 @@ class Tracker:
         for tx, ty in want[:max(0, BUILD_PER_POSE - len(self.building))]:   # in flight at most (vegetation.Tracker)
             self.building.add((tx, ty))
             self.started[(tx, ty)] = now
-            fut = self.futs[(tx, ty)] = asyncsubmit.submit(loop, self.pool, build, aid, tx, ty, owned=True)
+            # (the tile's file read in the worker, not on the event loop: staging.build_inline; the build's own
+            # arguments as before)
+            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                                    False)
+            fut = self.futs[(tx, ty)] = asyncsubmit.submit(loop, self.pool, job, aid, tx, ty, owned=True)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
         # a build that never ends leaves the loading line at "roads & buildings 0/36" with nothing in the log (GitHub
         # #241, a Discord report): said once per tile, with how many are in flight
@@ -12487,6 +12492,9 @@ class Tracker:
             self.retry[key] = time.monotonic() + TILE_RETRY_S
             return
         self.fails.pop(key, None)
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
         if res is None:                     # no roads there: not built again while it stays within reach
             self.empty.add(key)
             return
@@ -12494,7 +12502,7 @@ class Tracker:
         self.sent.add(key)
         m = {"type": "roads_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
         import tilepublish
-        tilepublish.send(conn, m, shape_files(aid, *key), valid=lambda: key in self.sent and aid == self.aid)
+        tilepublish.send(conn, m, shape_files(aid, *key), valid=lambda: key in self.sent and aid == self.aid, inline=pre)
 
 
 
@@ -12802,8 +12810,12 @@ class GeoTracker:
 
         build_s = getattr(self, "build_s", None) or reach_build_est()
 
+        deck_first = getattr(self, "deck_first", None) or ()
+
         def order(job):
             k = job[0]
+            if k in deck_first:         # (a bridge's tile the mod's deck guard slows the car for: first, deckguard.lua)
+                return (-1, 0.0)
             if k in car:
                 d = car[k]
                 if tree is not None:    # (by time to reach: reach.order_key; in m at the car's speed)
@@ -12841,7 +12853,10 @@ class GeoTracker:
         for k, content, skin, make in jobs[:max(0, BUILD_PER_POSE - len(self.building))]:
             self.building.add(k)
             self.started[k] = now
-            fut = self.futs[k] = asyncsubmit.submit(loop, self.pool, build, aid, k[0], k[1], content, skin, make, owned=True)
+            # (the content's and the skin's files read in the worker, not on the event loop)
+            job = functools.partial(staging.build_inline_paths, build,
+                                    getattr(getattr(conn, "s", None), "out_dir", None), _geo_inline_paths)
+            fut = self.futs[k] = asyncsubmit.submit(loop, self.pool, job, aid, k[0], k[1], content, skin, make, owned=True)
             fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
                                   self._built(conn, a, kk, f, c, sk, m))
         for k in self.building:
@@ -12874,7 +12889,7 @@ class GeoTracker:
             self.futs.pop(key, None)
             t0 = self.started.pop(key, None)
             if t0 is not None and fut.done() and not fut.cancelled() and fut.exception() is None \
-                    and fut.result() is not None:
+                    and _unwrap(fut.result()) is not None:
                 # (the order's build time, queue included: reach.order_key)
                 took = getattr(self, "clock", time.monotonic)() - t0
                 old = getattr(self, "build_s", None)
@@ -12896,6 +12911,9 @@ class GeoTracker:
             if aid == self.aid:
                 self.retry[key] = time.monotonic() + TILE_RETRY_S
             return
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
         if res is None:
             self.retry[key] = time.monotonic() + TILE_RETRY_S
             return
@@ -12928,7 +12946,7 @@ class GeoTracker:
             self.stats["content"] += 1
             m = {"type": "roads_tile", "anchorId": aid, "key": gkey, "path": path, "n": n,
                  "frame": list(geotiles.centre(*key)), "h": info.get("h")}
-            if ex:
+            if ex:                      # (the parts this anchor needs exact: the mod loads those, not the base)
                 m["exact"] = dict(ex)
             import blockworker
             names = blockworker.geo_names(gkey)
@@ -12948,7 +12966,7 @@ class GeoTracker:
                 else:
                     conn.send(m)
             else:
-                tilepublish.send(conn, m, files, valid=lambda: key in self.sent and self.info.get(key) is info)
+                tilepublish.send(conn, m, files, valid=lambda: key in self.sent and self.info.get(key) is info, inline=pre)
         if aid != self.aid:             # (an old anchor's skin and variants: the new anchor's come on their own)
             return
         sk = sk0 = res.get("skin")
@@ -12963,7 +12981,7 @@ class GeoTracker:
             m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": path}
             if token is not None:       # (staged by the mod, committed with the swap's terrain)
                 m["swap"] = token
-            data = staging.inline_json(out_dir, path) if out_dir else None
+            data = staging.inline_from(pre, out_dir, path)
             if data is not None:
                 m["data"] = data
             if pool is not None:
@@ -12985,7 +13003,7 @@ class GeoTracker:
                 names = blockworker.geo_names(gkey, aid)
                 m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": sk[0]}
                 tilepublish.send(conn, m, {w: n_ for w, n_ in names.items() if w != "json"},
-                                 valid=lambda: key in self.sent and aid == self.aid)
+                                 valid=lambda: key in self.sent and aid == self.aid, inline=pre)
         if held_content and skin and sk0 is not None:
             # (the mod makes a tile anew for new content, its skin gone with the old one, roads.lua onGeoTile: this
             # version's skin again right after the held content; the same skin the swap committed, or the one the mod
@@ -13003,6 +13021,18 @@ class GeoTracker:
                              valid=lambda: key in self.sent and aid == self.aid)
         if make and c is None:
             self.need[(key, aid)] = {w: v for w, v in (self.need.get((key, aid)) or {}).items() if w not in ex}
+
+
+def _geo_inline_paths(res):
+    """The session files a road geotile build made that go inside their messages: its content's and its skin's."""
+    if not isinstance(res, dict):
+        return []
+    c, sk = res.get("content"), res.get("skin")
+    return [c[0] if c else None, sk[0] if sk else None]
+
+
+def _unwrap(res):
+    return res.res if isinstance(res, staging.Inlined) else res
 
 
 def geo_exact_auto(tile_frame, frame, parts):
