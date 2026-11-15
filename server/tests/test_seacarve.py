@@ -464,11 +464,18 @@ class BathyKeptTest(unittest.TestCase):
         import time
         with tempfile.TemporaryDirectory() as d:
             sc = seacarve.SeaCarver(BathyMapData(), d)
-            self.assertEqual(sc.prefetch_points(np.array([south(100), south(120)]), np.array([LON0, LON0])), 1)
-            t0 = time.monotonic()
-            while sc.md.fetcher.calls == 0 and time.monotonic() - t0 < 10:
-                time.sleep(0.05)
-            self.assertEqual(sc.md.fetcher.calls, 1, "fetched in the background")
+            try:
+                self.assertEqual(sc.prefetch_points(np.array([south(100), south(120)]), np.array([LON0, LON0])), 1)
+                t0 = time.monotonic()
+                while sc.md.fetcher.calls == 0 and time.monotonic() - t0 < 10:
+                    time.sleep(0.05)
+                self.assertEqual(sc.md.fetcher.calls, 1, "fetched in the background")
+            finally:
+                # Fetch started is not write finished: join before TemporaryDirectory removes its cache.
+                if sc._prefetch_ex is not None:
+                    sc._prefetch_ex.shutdown(wait=True)
+            mx, my = seacarve._merc(np.array([south(100)]), np.array([LON0]))
+            self.assertTrue(sc.ready(int(mx[0] // seacarve.CELL_PX), int(my[0] // seacarve.CELL_PX)))
 
 
 class LakeTest(unittest.TestCase):

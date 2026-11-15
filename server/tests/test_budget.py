@@ -291,10 +291,6 @@ class RaiseThreadTest(unittest.TestCase):
         self.assertEqual(got, [("thread above normal", 1)])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PeakResidentTest(unittest.TestCase):
     def test_peak_is_positive(self):
         self.assertGreater(budget.peak_resident_mb(), 0)
@@ -304,3 +300,7 @@ class PeakResidentTest(unittest.TestCase):
                 budget, '_win_memory', return_value=(16 * 2**20, 0)) as counter:
             self.assertEqual(budget.peak_resident_mb(), 16)
             counter.assert_called_once_with(peak=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
