@@ -492,8 +492,7 @@ ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roa
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
 # up at 2 min would be built and given up again for good; BNGE_ROAD_TILE_TIMEOUT=<s> to change it
 ROAD_GEO_SLOW_S = 3.0           # a road geotile slower than this is logged (queue and build)
-VEG_GEO_BATCH = 32              # trees geotiles one road-process job builds at most (_veg_geo_job): its nearest wait
-                                # for the rest of it
+VEG_GEO_BATCH = 32              # at most this many trees geotiles of ONE source cell per road-process job
 VEG_GEO_PER_POSE = 64           # trees geotiles asked for at once when the road processes build them: two jobs' worth
 SLOW_SELECT_S = 0.25            # a far-tile selection (update_far, on the event loop) slower than this is logged
 SELECT_SLACK_EPS = 1e-3          # m: a pose skips the far selection only when it moved less than its slack by this much
@@ -2179,7 +2178,7 @@ class Server:
 
     def _veg_geo_job(self, anchor, zoom, gx, gy, flat):
         """(future, index): the road processes' job (blockworker.veg_geo_many) that builds geotile (gx, gy), its result
-        the index'th of the job's list. The tiles asked for while a job waits for its turn join it (VEG_GEO_BATCH at
+        the index'th of the job's list. Siblings of the same source cell asked for while a job waits join it (VEG_GEO_BATCH at
         most): one at a time, after the road tiles (RespawningPool.submit_low), each waited out the whole queue of
         road tiles for its ~10 ms of work, and the trees fell behind the car (533 tree tiles pending, 22 s each,
         2026-11-08)."""
@@ -2189,7 +2188,10 @@ class Server:
         if submit is None:                  # (a plain executor: one tile a job)
             return self.road_pool.submit(vfn, anchor.id, anchor.lat, anchor.lon, zoom,
                                          [(gx, gy)], self.out_dir, self.vfs_dir, flat), 0
-        key = (anchor.id, zoom, bool(flat), bool(st))
+        # A warm tile must not wait for another cell's cold CHM/masks/DEM in the same batch. Keep batching
+        # siblings (one shared cell build), and keep submit_low_lazy's road-first scheduling unchanged.
+        import geotiles
+        key = (anchor.id, zoom, bool(flat), bool(st), tuple(geotiles.tile_cell(gx, gy)))
         with self._veg_job_lock:
             job = self._veg_jobs.get(key)
             if job is None or len(job[1]) >= VEG_GEO_BATCH or job[0].done():

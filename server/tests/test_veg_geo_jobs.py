@@ -64,11 +64,26 @@ class VegGeoJobTest(unittest.TestCase):
         pool = FakePool()
         s = server(pool)
         n = earthd.VEG_GEO_BATCH + 3
-        got = [earthd.Server._veg_geo_job(s, ANCHOR, 15, gx, 0, False) for gx in range(n)]
+        # A z14 source cell has 8x8 z17 tiles: fill one cell, not a row across several cells.
+        tiles = [(i % 8, i // 8) for i in range(n)]
+        got = [earthd.Server._veg_geo_job(s, ANCHOR, 15, gx, gy, False) for gx, gy in tiles]
         self.assertEqual(len(pool.queued), 2)
         self.assertEqual(len(pool.hand_over()[4]), earthd.VEG_GEO_BATCH)
-        self.assertEqual(pool.hand_over()[4], [(gx, 0) for gx in range(earthd.VEG_GEO_BATCH, n)])
+        self.assertEqual(pool.hand_over()[4], tiles[earthd.VEG_GEO_BATCH:])
         self.assertEqual(got[-1][1], 2)
+
+    def test_ready_cell_is_delivered_before_an_unrelated_cold_cell(self):
+        pool = FakePool()
+        s = server(pool)
+        near, i = earthd.Server._veg_geo_job(s, ANCHOR, 15, 7, 7, False)
+        cold, _ = earthd.Server._veg_geo_job(s, ANCHOR, 15, 8, 7, False)
+        sibling, j = earthd.Server._veg_geo_job(s, ANCHOR, 15, 6, 7, False)
+        self.assertIs(near, sibling)
+        self.assertIsNot(near, cold)
+        self.assertEqual(pool.hand_over()[4], [(7, 7), (6, 7)])
+        self.assertEqual(near.result()[i], ("tile", 7, 7))
+        self.assertEqual(near.result()[j], ("tile", 6, 7))
+        self.assertFalse(cold.done(), "near cell already delivered while the other cell has not started")
 
     def test_other_anchor_or_zoom_or_format_not_mixed(self):
         pool = FakePool()

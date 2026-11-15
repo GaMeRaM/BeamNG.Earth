@@ -39,8 +39,12 @@ import dnp
 import mapcells
 import pacer
 import staging
+import xproc
 
 log = logging.getLogger("earthd.vegetation")
+
+CELL_WAIT_S = 30.0          # another process's cold cell; bounded while we hold other cache claims
+CELL_LIVE_S = 120.0         # a live producer can be waited for longer when this thread holds no other claim
 
 VERSION = 29          # 29: upstream latitude scaling plus fork road-clearance masks; (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
@@ -367,23 +371,47 @@ class Vegetation:
     def _load(self, x, y):
         p = self._path(x, y)
         fields = ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")
-        if p and os.path.exists(p):
-            # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
-            got = staging.read_npz(p, lambda f: Items(*(f[n] for n in fields)), "trees cell")
+
+        def ready():
+            if p and os.path.exists(p):
+                # A damaged file is removed, not shared with the waiting processes.
+                return staging.read_npz(p, lambda f: Items(*(f[n] for n in fields)), "trees cell")
+            return None
+
+        t0 = time.perf_counter()
+        if p:
+            got, owned = xproc.once(p + ".lock", ready, CELL_WAIT_S, live_s=CELL_LIVE_S,
+                                    live_note=f"trees cell {x}/{y}")
             if got is not None:
+                dt = time.perf_counter() - t0
+                if dt >= 0.5:
+                    log.info("trees cell %d/%d: shared/cache %.2f s, %d items", x, y, dt, len(got))
                 return got
-        self._tl.dem_failed = False
-        items = self._build(x, y)
-        # (a cell built while the DEM could not answer, offline or no tile, lacks its slope rocks: it serves this
-        # session but is not kept, so the next one builds it whole. From cristivasile's PR #295. No DEM at all,
-        # self.dem None, is a setting, not a failure)
-        if p and not self._tl.dem_failed:
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
-            with open(tmp, "wb") as fh:
-                np.savez_compressed(fh, **{n: getattr(items, n) for n in fields})
-            staging.replace_cached(tmp, p)
-        return items
+        else:
+            owned = False
+        waited = time.perf_counter() - t0
+        try:
+            self._tl.dem_failed = False
+            tb = time.perf_counter()
+            items = self._build(x, y)
+            built = time.perf_counter() - tb
+            tw = time.perf_counter()
+            # A failed DEM leaves slope rocks out: serve this session, but don't publish an incomplete cell.
+            # No DEM at all (self.dem None) is a setting, not a failure. The cache claim is always released.
+            if p and not self._tl.dem_failed:
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+                with open(tmp, "wb") as fh:
+                    np.savez_compressed(fh, **{n: getattr(items, n) for n in fields})
+                staging.replace_cached(tmp, p)
+            if time.perf_counter() - t0 >= 0.5:
+                log.info("trees cell %d/%d: wait %.2f s, build %.2f s, write %.2f s, %d items%s", x, y,
+                         waited, built, time.perf_counter() - tw, len(items),
+                         " (DEM incomplete, not cached)" if self._tl.dem_failed else "")
+            return items
+        finally:
+            if owned:
+                xproc.release(p + ".lock")
 
     # --- the build ------------------------------------------------------------------------------
     def _specs(self, f):
