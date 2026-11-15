@@ -520,8 +520,8 @@ def memory_mb(private=False):
     return win[1] / 2 ** 20 if win else None
 
 
-def _win_memory():
-    """(working set, private bytes) of this process in bytes (Windows), or None."""
+def _win_memory(peak=False):
+    """(working set, private bytes) in bytes (Windows), or None. peak selects the peak working set."""
     if sys.platform != "win32":
         return None
     try:
@@ -544,10 +544,21 @@ def _win_memory():
         k32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD)
         k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
         if k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
-            return c.WorkingSetSize, c.PrivateUsage
+            return (c.PeakWorkingSetSize if peak else c.WorkingSetSize), c.PrivateUsage
     except Exception:
         pass
     return None
+
+
+def peak_resident_mb():
+    """Peak resident memory in MiB, including short-lived native allocations (POSIX and Windows)."""
+    try:
+        import resource
+    except ImportError:
+        win = _win_memory(peak=True)
+        return win[0] / 2 ** 20 if win else None
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return rss / (2 ** 20 if sys.platform == "darwin" else 1024.)
 
 
 def resident_mb():

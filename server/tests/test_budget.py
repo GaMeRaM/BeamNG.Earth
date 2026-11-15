@@ -293,3 +293,14 @@ class RaiseThreadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PeakResidentTest(unittest.TestCase):
+    def test_peak_is_positive(self):
+        self.assertGreater(budget.peak_resident_mb(), 0)
+
+    def test_windows_fallback_uses_peak(self):
+        with mock.patch.dict(sys.modules, {'resource': None}), mock.patch.object(
+                budget, '_win_memory', return_value=(16 * 2**20, 0)) as counter:
+            self.assertEqual(budget.peak_resident_mb(), 16)
+            counter.assert_called_once_with(peak=True)

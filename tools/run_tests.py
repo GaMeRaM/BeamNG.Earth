@@ -82,7 +82,8 @@ class Runner:
                 ".result.wasSuccessful())" % (max(1, self.timeout - 10), m))
         with open(os.path.join(self.logs, f"{m}.log"), "w", encoding="utf-8") as log:
             p = st["proc"] = subprocess.Popen(
-                [sys.executable, "-B", "-u", "-c", code], cwd=TESTS, env=dict(os.environ, PYTHONUNBUFFERED="1"),
+                [sys.executable, "-B", "-u", "-c", code], cwd=TESTS,
+                env=dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", PYTHONUTF8="1"),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                 start_new_session=os.name != "nt")      # its own process group: killpg reaches its children
             timer = threading.Timer(self.timeout, self.timed_out, (st,))
@@ -194,6 +195,11 @@ class Runner:
 
 
 def main():
+    # The log files and child pipes are UTF-8. A Windows cp1252 console must not crash while
+    # printing their failure tails, hiding the actual assertion behind UnicodeEncodeError.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     ap = argparse.ArgumentParser(description="Run the server tests module by module, with live progress.")
     ap.add_argument("modules", nargs="*", help="test modules (default: every server/tests/test_*.py)")
     ap.add_argument("--par", type=int, default=6)
