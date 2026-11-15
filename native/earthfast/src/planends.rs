@@ -106,7 +106,12 @@ fn pts2(a: &numpy::ndarray::ArrayView2<f64>) -> Vec<[f64; 2]> {
     (0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect()
 }
 
-/// np.array_equal of two lines: their first two columns (cols2), or the whole arrays (shape and every value).
+// The same source span in neighboring map cells can acquire a few micrometres of ENU rounding.
+// Exact equality made its copy an adjoining bridge at BOTH ends, suppressing its approach ramps.
+// Absolute metres, never a relative tolerance (planning coordinates can be tens of kilometres).
+const COPY_XY_M: f64 = 1e-4;
+
+/// Equal sampled lines, allowing sub-millimetre reprojection noise in XY only. Other columns stay exact.
 fn same(a: &numpy::ndarray::ArrayView2<f64>, b: &numpy::ndarray::ArrayView2<f64>, cols2: bool) -> bool {
     if a.nrows() != b.nrows() {
         return false;
@@ -115,9 +120,47 @@ fn same(a: &numpy::ndarray::ArrayView2<f64>, b: &numpy::ndarray::ArrayView2<f64>
         if a.ncols() < 2 || b.ncols() < 2 {
             return a.ncols().min(2) == b.ncols().min(2) && a.iter().zip(b.iter()).all(|(x, y)| x == y);
         }
-        (0..a.nrows()).all(|i| a[[i, 0]] == b[[i, 0]] && a[[i, 1]] == b[[i, 1]])
+        (0..a.nrows()).all(|i| (0..2).all(|j| coord_same(a[[i, j]], b[[i, j]])))
     } else {
-        a.ncols() == b.ncols() && a.iter().zip(b.iter()).all(|(x, y)| x == y)
+        a.ncols() == b.ncols() && (0..a.nrows()).all(|i| (0..a.ncols()).all(|j| {
+            if j < 2 { coord_same(a[[i, j]], b[[i, j]]) } else { a[[i, j]] == b[[i, j]] }
+        }))
+    }
+}
+
+fn coord_same(a: f64, b: f64) -> bool {
+    a == b || (a - b).abs() <= COPY_XY_M
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+    use numpy::ndarray::array;
+
+    #[test]
+    fn enu_rounding_is_not_a_second_span() {
+        let own = array![[-10305.0, 1325.0], [-10297.0, 1337.0], [-10280.0, 1363.0]];
+        let mut copy = own.clone();
+        copy[[0, 0]] += 0.000009;
+        copy[[1, 1]] -= 0.000005;
+        assert!(same(&own.view(), &copy.view(), true));
+        assert!(same(&own.view(), &copy.view(), false));
+        copy[[0, 0]] += 0.001;
+        assert!(!same(&own.view(), &copy.view(), true));
+    }
+
+    #[test]
+    fn absolute_xy_tolerance_preserves_other_columns_and_real_joins() {
+        let own = array![[1000000.0, 0.0, 1.0], [1000010.0, 0.0, 1.0]];
+        let other = array![[1000010.0, 0.0, 1.0], [1000020.0, 0.0, 1.0]];
+        assert!(!same(&own.view(), &other.view(), true));
+        let mut shifted = own.clone();
+        shifted[[0, 0]] += 0.01;
+        assert!(!same(&own.view(), &shifted.view(), true));
+        let mut level = own.clone();
+        level[[0, 2]] += 0.000001;
+        assert!(same(&own.view(), &level.view(), true));
+        assert!(!same(&own.view(), &level.view(), false));
     }
 }
 
