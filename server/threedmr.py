@@ -51,6 +51,7 @@ from PIL import Image
 import cdae
 import netfetch
 import staging
+import xproc
 
 log = logging.getLogger("earthd.threedmr")
 
@@ -257,6 +258,7 @@ def search_ids(lat, lon, range_m, cache_dir, iface=None, timeout=30.0):
 # central Paris), so a region's list is short. Kept REGION_TTL_S, then asked again (a failed refresh keeps the old).
 REGION_DEG = 0.5
 REGION_TTL_S = 14 * 86400.0
+REGION_RETRY_S = 60.0          # shared across processes: an unavailable optional catalog must not delay every tile
 REGION_PAGES = 20               # (the search is paged: /<page>, from 1, until an empty page)
 
 
@@ -269,6 +271,43 @@ def region_ids(lat, lon, cache_dir, iface=None, timeout=30.0):
 
     if not enabled() or not cache_dir:
         return []
+    i, j = math.floor(float(lat) / REGION_DEG), math.floor(float(lon) / REGION_DEG)
+    path = os.path.join(cache_dir, "threedmr_cache", f"region_{i}_{j}.json")
+    retry = path + ".retry"
+
+    def ready():
+        try:
+            with open(path) as f:
+                ids = [int(v) for v in json.load(f)]
+            if time.time() - os.path.getmtime(path) < REGION_TTL_S:
+                return ids
+        except (OSError, ValueError, TypeError):
+            ids = None
+        try:
+            if 0 <= time.time() - os.path.getmtime(retry) < REGION_RETRY_S:
+                if ids is None:
+                    revisit.fault()       # don't permanently cache the missing optional models
+                return ids or []
+        except OSError:
+            pass
+        return None
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lock = path + ".lock"
+    got, owned = xproc.once(lock, ready, wait_s=timeout + 2)
+    if got is not None:
+        return got
+    if not owned:
+        revisit.fault()                  # another request is still running: don't start a duplicate
+        return []
+    try:
+        return _region_ids_fetch(lat, lon, cache_dir, iface, timeout)
+    finally:
+        xproc.release(lock)
+
+
+def _region_ids_fetch(lat, lon, cache_dir, iface, timeout):
+    import revisit
     i, j = math.floor(float(lat) / REGION_DEG), math.floor(float(lon) / REGION_DEG)
     clat, clon = (i + 0.5) * REGION_DEG, (j + 0.5) * REGION_DEG
     half = math.hypot(REGION_DEG / 2 * 111320.0 * dmath.cos(math.radians(min(abs(clat) + REGION_DEG / 2, 89.9))),
@@ -295,6 +334,9 @@ def region_ids(lat, lon, cache_dir, iface=None, timeout=30.0):
             ids += [int(v) for v in got]
         ids = sorted(set(ids))
     except (ValueError, OSError, TypeError) as e:
+        # A retry marker is separate from the successful list: outages never become a cached empty region.
+        with open(path + ".retry", "w"):
+            pass
         if old is not None:
             log.warning("3dmr search %s,%s: %s (the cached list kept)", i, j, e)
             return [int(v) for v in old]
@@ -306,6 +348,8 @@ def region_ids(lat, lon, cache_dir, iface=None, timeout=30.0):
     with open(tmp, "w") as f:
         json.dump(ids, f)
     staging.replace(tmp, path)
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(path + ".retry")
     log.info("3dmr search %s,%s: %d models", i, j, len(ids))
     return ids
 

@@ -16,7 +16,7 @@ MODULES = (
     "test_budget", "test_class_grid", "test_install", "test_updates",
     "test_selfupdate", "test_bmplaunch", "test_launcher_linux", "test_launcher_lifecycle",
     "test_process_lifecycle", "test_connection_cleanup", "test_initial_loading", "test_tile_ownership",
-    "test_matslots", "test_stream_reconnect", "test_netfetch", "test_mapdata",
+    "test_matslots", "test_stream_reconnect", "test_netfetch", "test_threedmr", "test_mapdata",
     "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
     "test_road_seams", "test_roadgeo", "test_fast", "test_restart",
     "test_revisit", "test_plancache", "test_bake_formats", "test_chunkcache",

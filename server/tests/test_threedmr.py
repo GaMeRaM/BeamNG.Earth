@@ -996,6 +996,57 @@ class RegionIdsTest(unittest.TestCase):
             self.assertEqual(threedmr.region_ids(1.0, 2.0, d), [])
         self.assertEqual(faults, [1])
 
+    def test_parallel_region_requests_share_one_search(self):
+        import concurrent.futures
+        import threading
+        entered, release = threading.Event(), threading.Event()
+
+        def fetch(url, timeout):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            raise OSError("reset")
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch("threedmr._urllib_fetch", side_effect=fetch) as request, \
+                concurrent.futures.ThreadPoolExecutor(2) as pool:
+            first = pool.submit(threedmr.region_ids, 1.0, 2.0, d)
+            self.assertTrue(entered.wait(5))
+            second = pool.submit(threedmr.region_ids, 1.1, 2.1, d)
+            release.set()
+            self.assertEqual(first.result(5), [])
+            self.assertEqual(second.result(5), [])
+            self.assertEqual(request.call_count, 1)
+
+    def test_failed_region_cools_down_across_callers_then_recovers(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch("threedmr._urllib_fetch", side_effect=OSError("reset")) as fetch, \
+                mock.patch("revisit.fault") as fault:
+            self.assertEqual(threedmr.region_ids(1.0, 2.0, d), [])
+            self.assertEqual(threedmr.region_ids(1.1, 2.1, d), [])
+            self.assertEqual(fetch.call_count, 1, "neighboring tiles share failure cooldown")
+            self.assertEqual(fault.call_count, 2, "neither incomplete tile may be cached as complete")
+            path = Path(d) / "threedmr_cache" / "region_2_4.json"
+            self.assertFalse(path.exists(), "outage is not a permanent empty model list")
+            retry = Path(str(path) + ".retry")
+            expired = time.time() - threedmr.REGION_RETRY_S - 1
+            os.utime(retry, (expired, expired))
+            _urls, good = self.pages([42], [])
+            fetch.side_effect = good
+            self.assertEqual(threedmr.region_ids(1.0, 2.0, d), [42])
+            self.assertFalse(retry.exists())
+
+    def test_stale_region_failure_cools_down_and_keeps_models(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "threedmr_cache" / "region_2_4.json"
+            path.parent.mkdir()
+            path.write_text("[7]")
+            expired = time.time() - threedmr.REGION_TTL_S - 1
+            os.utime(path, (expired, expired))
+            with mock.patch("threedmr._urllib_fetch", side_effect=OSError("reset")) as fetch:
+                self.assertEqual(threedmr.region_ids(1.0, 2.0, d), [7])
+                self.assertEqual(threedmr.region_ids(1.1, 2.1, d), [7])
+                self.assertEqual(fetch.call_count, 1)
+
     def test_off_no_request(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"BNE_3DMR": "off"}), \
                 mock.patch("threedmr._urllib_fetch", side_effect=AssertionError("no request")):

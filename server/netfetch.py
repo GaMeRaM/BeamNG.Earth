@@ -832,6 +832,9 @@ class HttpsTransport:
         self._idle = {}             # (scheme, netloc, proxy...) -> [(connection, monotonic time it was given back)]
         self._idle_lock = threading.Lock()
         self._tls_context = windows_ssl_context() or default_ssl_context()
+        self._tls12_context = None
+        self._tls12_hosts = set()
+        self._tls_lock = threading.Lock()
 
     def _take(self, key):
         """An idle connection to key's host (the most recently used), or None; older ones are closed."""
@@ -952,6 +955,29 @@ class HttpsTransport:
             return got
 
     def _request_once(self, url, headers, timeout, proxy):
+        host = urlsplit(url).netloc.lower()
+        with self._tls_lock:
+            tls12 = host in self._tls12_hosts
+        try:
+            return self._request_connection(url, headers, timeout, proxy, tls12)
+        except ssl.SSLError as e:
+            # TLS 1.3 ServerHello did not echo our session id. Some broken servers / network
+            # intermediaries do this; a new socket alone repeats the same failed handshake.
+            # Retry this host once with verified TLS 1.2, never certificate failures or other SSL errors.
+            if tls12 or getattr(e, "reason", None) != "INVALID_SESSION_ID":
+                raise
+            with self._tls_lock:
+                if self._tls12_context is None:
+                    ctx = windows_ssl_context() or default_ssl_context()
+                    if ctx is None:
+                        raise
+                    ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+                    self._tls12_context = ctx
+                self._tls12_hosts.add(host)
+            log.warning("net: %s: invalid TLS 1.3 session id; retrying with verified TLS 1.2", host)
+            return self._request_connection(url, headers, timeout, proxy, True)
+
+    def _request_connection(self, url, headers, timeout, proxy, tls12=False):
         """request's one connection: url as given (proxy: _resolve_proxy's for it, or None). timeout: s, or (s to
         connect, s for each read after)."""
         connect_timeout, timeout = timeout if isinstance(timeout, tuple) else (timeout, timeout)
@@ -962,6 +988,9 @@ class HttpsTransport:
         else:
             log.debug("net: %s -> proxy %s:%d", url, proxy[0], proxy[1])
             key = (u.scheme, u.netloc, proxy[0], proxy[1])
+        context = self._tls12_context if tls12 else self._tls_context
+        if tls12:
+            key += ("tls12",)            # never reuse the socket from the failed TLS 1.3 attempt
         fresh = False                   # (once a reused connection failed: a new one)
         while True:
             conn = None if fresh else self._take(key)
@@ -978,8 +1007,8 @@ class HttpsTransport:
                 if proxy is not None and u.scheme == "https":
                     phost, pport, puser, ppass = proxy
                     kwargs = {"timeout": connect_timeout}
-                    if self._tls_context is not None:
-                        kwargs["context"] = self._tls_context
+                    if context is not None:
+                        kwargs["context"] = context
                     conn = http.client.HTTPSConnection(phost, pport, **kwargs)
                     if puser is not None:
                         creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
@@ -996,8 +1025,8 @@ class HttpsTransport:
                 else:
                     if u.scheme == "https":
                         kwargs = {"timeout": connect_timeout}
-                        if self._tls_context is not None:
-                            kwargs["context"] = self._tls_context
+                        if context is not None:
+                            kwargs["context"] = context
                         conn = http.client.HTTPSConnection(u.netloc, **kwargs)
                     else:
                         conn = http.client.HTTPConnection(u.netloc, timeout=connect_timeout)

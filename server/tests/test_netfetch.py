@@ -383,6 +383,30 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(tr.request(url(), {}, 20.0)[0], 200)
         self.assertIs(made[0].context, context)
 
+    def test_invalid_tls13_session_retries_only_affected_host_with_verified_tls12(self):
+        error = nf.ssl.SSLError("invalid session id")
+        error.reason = "INVALID_SESSION_ID"
+        original, ctx = nf.ssl.create_default_context(), nf.ssl.create_default_context()
+        with mock.patch.object(nf, "windows_ssl_context", side_effect=[original, ctx]):
+            tr, made = self.transport([error, None, None])
+            self.assertEqual(tr.request(url(), {}, 20)[0], 200)
+            self.assertEqual(tr.request(url(), {}, 20)[0], 200)
+        self.assertEqual(len(made), 2, "TLS 1.2 connection is reused after the bounded retry")
+        self.assertIs(made[0].context, original)
+        self.assertIs(made[1].context, ctx)
+        self.assertNotEqual(original.maximum_version, nf.ssl.TLSVersion.TLSv1_2)
+        self.assertEqual(ctx.maximum_version, nf.ssl.TLSVersion.TLSv1_2)
+        self.assertEqual(ctx.verify_mode, nf.ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+        self.assertEqual(tr._tls12_hosts, {nf.host_of(url())})
+
+    def test_certificate_failure_never_enables_tls_compatibility_retry(self):
+        tr, made = self.transport([nf.ssl.SSLCertVerificationError("bad certificate")])
+        with self.assertRaises(nf.ssl.SSLCertVerificationError):
+            tr.request(url(), {}, 20)
+        self.assertEqual(len(made), 1)
+        self.assertEqual(tr._tls12_hosts, set())
+
     def test_public_s3_dualstack_only_after_no_ipv4_route(self):
         """GitHub #763 / PR #808: an IPv6-only network (no NAT64) finds no route to a public S3 host's IPv4 address:
         that request goes to the bucket's dual-stack endpoint, and so does every later one this run. A network where
