@@ -20,7 +20,7 @@ MODULES = (
     "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
     "test_road_seams", "test_roadgeo", "test_fast", "test_restart",
     "test_revisit", "test_plancache", "test_bake_formats", "test_chunkcache",
-    "test_areas", "test_countrybounds", "test_credits", "test_graphics", "test_imagery", "test_lanesections", "test_navgraph", "test_railprofile", "test_railtags", "test_retex", "test_server", "test_bldhz", "test_geocode_categories", "test_osm_building_colours", "test_osm_building_years", "test_road_underpass_signs", "test_watchdog_cpu", "test_shared_gate", "test_building_parts_rules", "test_nycshards", "test_rail_underpass_metadata", "test_pools", "test_prefetch_chain", "test_bridge_auto", "test_beach_prefix", "test_carriageway_components", "test_beaches", "test_demand", "test_roadwidth",
+    "test_serverlist_pages", "test_terrainprefill", "test_tls_context", "test_osmfuel_tiles", "test_areas", "test_countrybounds", "test_credits", "test_graphics", "test_imagery", "test_lanesections", "test_navgraph", "test_railprofile", "test_railtags", "test_retex", "test_server", "test_bldhz", "test_geocode_categories", "test_osm_building_colours", "test_osm_building_years", "test_road_underpass_signs", "test_watchdog_cpu", "test_shared_gate", "test_building_parts_rules", "test_nycshards", "test_rail_underpass_metadata", "test_pools", "test_prefetch_chain", "test_bridge_auto", "test_beach_prefix", "test_carriageway_components", "test_beaches", "test_demand", "test_roadwidth",
     "test_roadcorners", "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",
     "test_worldbundle", "test_world_cache", "test_peerwork", "test_host_package",
     "test_ru_infrastructure", "test_furniture", "test_buildings", "test_roads",
@@ -71,7 +71,7 @@ def main():
         [sys.executable, "tools/run_tests.py", *MODULES, "--par", str(args.par),
          "--timeout", str(args.timeout), "--logs", "build/quality-tests"],
         [sys.executable, "tools/run_lua_tests.py"],
-        ["node", "--test", "mod/tests/test_mapmath.mjs", "mod/tests/test_mapsearch.mjs", "server/tests/test_mapmath.mjs"],
+        ["node", "--test", "mod/tests/test_mapmath.mjs", "mod/tests/test_mapsearch.mjs", "mod/tests/test_paste.mjs", "server/tests/test_mapmath.mjs"],
         ["cargo", "test", "--locked", "--manifest-path", "native/serverlist/Cargo.toml"],
         [sys.executable, "tools/package.py", "--beammp", "--out", "build/quality-packages"],
     ]
