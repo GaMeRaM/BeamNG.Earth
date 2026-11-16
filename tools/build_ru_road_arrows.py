@@ -19,13 +19,29 @@ def dimensions(kind, high=False):
     return length + .3, 2.4  # transparent border; glyph dimensions exclude it
 
 
+def turn_outline(high=False):
+    """GOST angled head and a constant-width 45-degree branch.
+
+    Both branch edges rise exactly as far as they run. The head's neck
+    is vertical; its two neck points are separated by 2*b from table B.1.
+    """
+    L, a2, b, d2 = (7.5, 1.3, .5, 4.6) if high else (5., .8, .5, 2.6)
+    neck_x, outer_x, stem_x = .675, .975, -.075
+    upper = L - a2
+    lower = upper - 2*b
+    run = neck_x - stem_x
+    return [(stem_x, upper-run), (neck_x, upper), (neck_x, L),
+            (outer_x, (L+d2)/2), (neck_x, d2), (neck_x, lower),
+            (stem_x, lower-run)]
+
+
 def build():
     scale = 4
     atlas = Image.new('L', (CELL * 4 * scale, CELL * 4 * scale))
     d = ImageDraw.Draw(atlas)
     for high in (False, True):
         L = 7.5 if high else 5.0
-        a1, a2, b, d2 = (1.2, 1.3, .5, 4.6) if high else (.7, .8, .5, 2.6)
+        d2 = 4.6 if high else 2.6
         for i, kind in enumerate(KINDS):
             index = i + 7 * high
             x, y = index % 4 * CELL * scale, index // 4 * CELL * scale
@@ -44,8 +60,7 @@ def build():
                          (.375, tip-2.05), (0, tip), (-.375, tip-2.05), (-.075, tip-2.05)])
             # Angled turn head (45 degrees), lateral extent 1.05 m from
             # the stem's outer edge; shared stem for combined directions.
-            turn = [(-.075,d2+a1+b), (.675,L-a2), (.675,L),
-                    (.975,d2+a1+b), (.675,d2), (.675,d2+a1), (.075,d2), (-.075,d2)]
+            turn = turn_outline(high)
             if 'through' in kind and not triple:
                 turn = [(px, py-2.05) for px,py in turn]
             if 'left' in kind:

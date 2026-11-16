@@ -288,7 +288,7 @@ not a change to the profile's `verified: false` status. The repeated ordinary-ju
   The PDF drawing was visually inspected. Masks are deterministically generated
   by `tools/build_ru_road_arrows.py` and packed as lossless opacity sources.
   Straight head length 2.05 m, width 0.75 m, shaft width 0.15 m; transparent
-  quad margins are not part of the painted dimensions. Turn branches approximate
+  quad margins are not part of the painted dimensions. Turn branches have parallel 45-degree edges; the head contour approximates
   the diagram; this does not change the profile's `verified: false` status.
 
 Missing artwork can be generated, as the new combined arrows demonstrate. Missing

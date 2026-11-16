@@ -452,6 +452,13 @@ class RussianAuditMarkingsTest(unittest.TestCase):
         module = importlib.util.spec_from_file_location('ru_arrows', root/'tools/build_ru_road_arrows.py')
         generator = importlib.util.module_from_spec(module)
         module.loader.exec_module(generator)
+        for high in (False, True):
+            outline = np.array(generator.turn_outline(high))
+            upper = outline[1] - outline[0]
+            lower = outline[-2] - outline[-1]
+            np.testing.assert_allclose(upper, lower)
+            self.assertAlmostEqual(upper[0], upper[1])  # 45 degrees, constant width
+            self.assertGreater(outline[0,1] - outline[-1,1], 0)
         generated = generator.build()
         with Image.open(root/'mod/texture_sources/levels/beamng_earth/art/roadmarkings/bne_ru_arrows.data.webp') as source:
             np.testing.assert_array_equal(np.asarray(generated), np.asarray(source.convert('L')))
