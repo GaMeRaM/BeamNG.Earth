@@ -507,12 +507,12 @@ def _arrow_kind(token, strict=False):
     return None
 
 
-def _point_back(line, d):
+def _point_back(line, d, min_start=2.0):
     """(point (3,), unit direction (2,) of travel) d m before the end of line (k, 3), or None (shorter)."""
     seg = dnp.hypot(*np.diff(line[:, :2], axis=0).T)
     s = np.r_[0.0, np.cumsum(seg)]
     at = s[-1] - d
-    if at < 2.0:
+    if at < min_start:
         return None
     j = int(np.clip(np.searchsorted(s, at) - 1, 0, len(seg) - 1))
     f = (at - s[j]) / max(seg[j], 1e-9)
@@ -564,7 +564,9 @@ def arrows(osm, pts, two_way, drive, lanes, left_hand=False, country=None):
                 continue
             line = roadsmod.offset_polyline(pts, off) if along else roadsmod.offset_polyline(pts, off)[::-1].copy()
             for d in ARROW_AT_M:
-                got = _point_back(line, d)
+                # The longest RU quad is 9.85 m (high-speed triple arrow).
+                # Keep its centre at least 5 m from the lane start.
+                got = _point_back(line, d, 5.0 if str(country or "").upper() == "RU" else 2.0)
                 if got is not None:
                     out.append((got[0], got[1], kind_))
     return out

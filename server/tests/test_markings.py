@@ -444,6 +444,19 @@ class RussianAuditMarkingsTest(unittest.TestCase):
         self.assertEqual({k for _,_,k in got}, {'left_through', 'right_through'})
         self.assertIsNone(markings._arrow_kind('through;reverse', strict=True))
 
+    def test_long_russian_arrow_is_not_drawn_past_a_short_lane_start(self):
+        line = np.array([[0.,0.,0.],[15.,0.,0.]])
+        tags = {'turn:lanes': 'left;right;through'}
+        self.assertFalse(markings.arrows(tags, line, False, 3.3, 1, country='RU'))
+        self.assertTrue(markings.arrows({'turn:lanes': 'left'}, line, False, 3.3, 1, country='US'))
+        line[-1,0] = 17.
+        placed = markings.arrows(tags, line, False, 3.3, 1, country='RU')
+        self.assertEqual(len(placed), 1)
+        centre, tangent, kind = placed[0]
+        quad, _ = markings.arrow_quad(centre, tangent, kind, country='RU', speed_kmh=90)
+        self.assertGreaterEqual(quad[:,0].min(), 0.)
+        self.assertLessEqual(quad[:,0].max(), 17.)
+
     def test_generated_arrow_atlas_matches_packaged_lossless_source(self):
         import importlib.util
         from pathlib import Path
