@@ -87,9 +87,9 @@ imported town generator's other supported countries. `BNE_ROADSIGNS=off` disable
 ordinary signs globally. These environment changes require restarting the local
 companion application. No remote server restart is performed by this change.
 
-The country gate follows the existing companion country detection (nearest airport).
-If its airport database is unavailable and the country is unknown, Russian-specific
-scenery/ordinary signs will not be selected. Accurate polygon country selection is
+The current country gate uses country borders with a nearest-airport fallback
+(`earthd.BuildContext.country_at`). When country selection returns unknown, Russian-specific
+scenery/ordinary signs are not selected. The original polygon-selection note is
 not included. Traffic-light housings, AI priorities and unposted speed defaults
 remain the existing implementation; the pack does not claim a complete Russian
 traffic-rules simulation.
@@ -294,3 +294,5 @@ not a change to the profile's `verified: false` status. The repeated ordinary-ju
 Missing artwork can be generated, as the new combined arrows demonstrate. Missing
 posted traffic rules, reversible-lane control state or surveyed board placement
 cannot be established from road class alone. Keep these separate in future work.
+
+The broader, maintained task list is [Russian world localization](RUSSIAN_WORLD_LOCALIZATION.md).
