@@ -88,9 +88,8 @@ ordinary signs globally. These environment changes require restarting the local
 companion application. No remote server restart is performed by this change.
 
 The current country gate uses country borders with a nearest-airport fallback
-(`earthd.BuildContext.country_at`). When country selection returns unknown, Russian-specific
-scenery/ordinary signs are not selected. The original polygon-selection note is
-not included. Traffic-light housings, AI priorities and unposted speed defaults
+(`earthd.Server.country_at`). When country selection returns unknown, Russian-specific
+scenery/ordinary signs are not selected. Traffic-light housings, AI priorities and unposted speed defaults
 remain the existing implementation; the pack does not claim a complete Russian
 traffic-rules simulation.
 
