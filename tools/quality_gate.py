@@ -44,6 +44,7 @@ MODULES = (
     "test_memwatch", "test_portals", "test_road_clearance", "test_roadlayercache", "test_speed242", "test_tilecuts", "test_deckjoins", "test_deckpad_levels", "test_warm_queue",
     "test_determinism",
     "test_native_threads","test_paintlist","test_ground_rules","test_chain_short","test_chainview_prefer","test_subsea_final","test_stale_revisit","test_build_decisions","test_server_list","test_preload_place","test_enu_ahead","test_regional_geotiles", "test_decisions", "test_latework", "test_enginepatch_terfast", "test_aerialpacks", "test_base_photo_revisit", "test_blockcache", "test_bnwt", "test_farrestore", "test_photo_lawns_in_use", "test_revisit_scopes", "test_world_reset",
+    "test_srvrestart", "test_build_mt_bindings", "test_experimental", "test_gameinstall", "test_ground_lines_near", "test_launcher_packaging", "test_mtarchive", "test_ramp_envelope", "test_telemetry",
 )
 
 
@@ -74,7 +75,7 @@ def main():
         [sys.executable, "tools/run_tests.py", "test_credits", "--par", "1",
          "--timeout", str(args.timeout), "--logs", "build/quality-credits-tests"],
         [sys.executable, "tools/run_lua_tests.py"],
-        ["node", "--test", "mod/tests/test_mapmath.mjs", "mod/tests/test_mapsearch.mjs", "mod/tests/test_paste.mjs", "server/tests/test_mapmath.mjs"],
+        ["node", "--test", "mod/tests/test_mapmath.mjs", "mod/tests/test_mapsearch.mjs", "mod/tests/test_paste.mjs", "server/tests/test_mapmath.mjs", "mod/tests/test_ui_lifecycle.mjs", "mod/tests/test_restart_box.mjs"],
         ["cargo", "test", "--locked", "--manifest-path", "native/serverlist/Cargo.toml"],
         [sys.executable, "tools/package.py", "--beammp", "--out", "build/quality-packages"],
     ]

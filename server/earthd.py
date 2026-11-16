@@ -118,6 +118,7 @@ import runtimeprofiler
 import streamleases
 import pools as poolsmod  # noqa: E402
 import memwatch as memwatchmod  # noqa: E402
+import srvrestart as srvrestartmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
 import grading as gradingmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
@@ -1566,6 +1567,15 @@ class Server:
         self.make_fast_pool = None      # n -> such a pool (main_async: the road pool's initializer), or None
         self.late = None                # latework.LateWork (start_late: road content built short, built again later)
         self.late_pool = None
+        # the settings page's "Restart world server" (srvrestart.py): the start-time values of the settings read only
+        # at a start (hello.startSettings; main), whether a supervisor starts this server again (hello.restartable), and
+        # main_async's stop (set by request_restart)
+        self.start_settings = None
+        self.start_fixed = []           # (ids set by hand: the page cannot change them, hello.startFixed)
+        self.restartable = False
+        self.restart_key = None         # (the capability in the game's folder: srvrestart.write_key)
+        self.stop_future = None
+        self.restart_wanted = False
         self._fast_lock = threading.Lock()
         if cache is not None:
             for producer in (self.dem, self.imagery, self.deshadow, self.colormatch):
@@ -5542,6 +5552,34 @@ class Server:
         parts = [weathermod.CREDIT] if self.weather is not None else []
         return "; ".join(parts + [ELEVATION_CREDIT])
 
+    def restart_refusal(self, conn, msg):
+        """Why the settings page's "Restart world server" asked on connection conn with message msg cannot be done now
+        (srvrestart.py), or None. Only the game asks: the connection that said its hello (it holds the game's stream
+        lease) with the key this server wrote in the game's own folder (a stray local client knows neither); never when
+        the supervisor's limit is reached (the server would stay stopped: the request is refused instead)."""
+        if not self.restartable:
+            return ("this world server was not started by the BeamNG.Earth app (its launcher or start.py), so it "
+                    "cannot start itself again: stop it and start it again by hand")
+        lease = getattr(conn, "lease", None)
+        if lease is None or lease.connection is not conn:
+            return "only the game's own connection may restart the world server (no hello on this one)"
+        if not srvrestartmod.key_ok(self.restart_key, msg.get("key")):
+            return ("the request did not carry this world server's restart key (the game reads it from its "
+                    "temp/beamngEarth folder: does the server write to another user folder?)")
+        if self.stop_future is None:
+            return "the world server is still starting"
+        return srvrestartmod.budget_refusal()
+
+    def request_restart(self, delay_s=0.5):
+        """Stop serving (main_async's stop) after delay_s, so the answers sent before go out first; main() then exits
+        with srvrestart.EXIT_CODE and the supervisor starts this server again. Idempotent."""
+        if self.restart_wanted:
+            return
+        self.restart_wanted = True
+        fut = self.stop_future
+        if fut is not None and not fut.done():
+            asyncio.get_running_loop().call_later(delay_s, lambda: fut.done() or fut.set_result("restart"))
+
     def attribution(self):
         """The credit line the mod shows: imagery (if on) and elevation sources."""
         parts = [self.imagery.attribution()] if self.imagery is not None else []
@@ -5571,6 +5609,9 @@ class Server:
             # (a full drive fails far tiles, blocks and caches with "No space left on device": the first week's most
             # frequent errors; the cache is cut back to its reserve, but other files may fill the drive)
             parts.append("your drive is nearly full: free some space (the download cache is cut back)")
+        mem = memwatchmod.too_low()     # (the server over its Max RAM for minutes: memwatch.TOO_LOW_S)
+        if mem:
+            parts.append(mem)
         return "Degraded: " + "; ".join(parts) if parts else ""
 
     def level_summary(self):
@@ -8916,6 +8957,14 @@ class Connection:
                 m["season"] = season_mode
             if self.s.map_port:                 # the world map's tiles (maptiles.py; --map-tiles on)
                 m["mapPort"] = self.s.map_port
+            # the start-time values of the settings read only at a start, and whether a supervisor starts this server
+            # again: the settings page's "Restart world server" (srvrestart.py, srvrestart.lua)
+            if self.s.start_settings is not None:
+                m["startSettings"] = self.s.start_settings
+                if self.s.start_fixed:
+                    m["startFixed"] = list(self.s.start_fixed)
+            if self.s.restartable:
+                m["restartable"] = True
             if self.s.mapdata is not None:      # our shapes' materials, set up by the mod now (prewarm.py)
                 if self.s.prewarm_vfs is None:
                     try:
@@ -9110,6 +9159,16 @@ class Connection:
             if "limitGb" in msg:
                 memwatchmod.set_setting(msg.get("limitGb"))
             self.send(dict(memwatchmod.status(), type="memory"))
+        elif kind == "server_restart":          # the settings page's "Restart world server" (srvrestart.py)
+            why = self.s.restart_refusal(self, msg)
+            if why:
+                log.info("restart: refused (%s)", why)
+                self.send({"type": "server_restart", "ok": False, "error": why})
+            else:
+                log.warning("restart: asked from the game's settings page; the server stops cleanly and its launcher "
+                            "starts it again")
+                self.send({"type": "server_restart", "ok": True})
+                self.s.request_restart()
         elif kind == "app_path":                # the settings page's folders: the cache's, the BeamMP launcher's
             self.spawn(self.app_path(msg))
         elif kind == "runtime_profiler":
@@ -12179,7 +12238,35 @@ class Connection:
                     self.status(f"Far field loading: {self.batch[1]}/{left + self.batch[1]} tiles")
 
 
-async def main_async(args):
+async def serve(srv, server, restart=None):
+    """The game's connections served (srv: the listening asyncio server) until the settings page's "Restart world
+    server" resolves server.stop_future (Server.request_restart): then the listener and every connection are closed (the
+    game reconnects to the next server), True is appended to restart and this returns, for main_async's clean-up and
+    main's exit for the supervisor (srvrestart.py)."""
+    server.stop_future = asyncio.get_running_loop().create_future()
+    async with srv:
+        serving = asyncio.ensure_future(srv.serve_forever())
+        try:
+            await asyncio.wait((serving, server.stop_future), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            if not serving.done():
+                serving.cancel()
+        if serving.done() and not serving.cancelled() and serving.exception() is not None:
+            raise serving.exception()
+        if server.stop_future.done():
+            if restart is not None:
+                restart.append(True)
+            srvrestartmod.finish_soon()     # (a stop that hangs still ends, with the restart's exit code)
+            log.warning("restart: closing %d connections, the network and the download cache", len(server.connections))
+            srv.close()
+            for c in list(server.connections):
+                c.abort_stream("the world server restarts")
+            await asyncio.sleep(0.2)
+
+
+async def main_async(args, restart=None):
+    """The server's run. restart: a list main() reads after it returns: True appended when it stopped for the settings
+    page's "Restart world server" (srvrestart.py)."""
     log.info("startup: initializing data services")
     if os.environ.get("BNGE_WORLD_BUNDLE") and (args.roads != "on" or args.grading != "on"):
         from worldbundle import BundleError
@@ -12255,7 +12342,12 @@ async def main_async(args):
     telemetry_on = args.telemetry == "on" and not args.offline and not os.environ.get("CI") \
         and os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
     if telemetry_on:
-        proc_dir = os.path.join(args.cache_dir, "netstats", "proc")
+        import telemetry
+        # (this run's own folder: a restart's telemetry never counts the files an older run left again)
+        try:
+            proc_dir = telemetry.run_proc_dir(os.path.join(args.cache_dir, "netstats", "proc"))
+        except OSError:
+            proc_dir = os.path.join(args.cache_dir, "netstats", "proc", f"r{os.getpid()}")
         os.environ["BNE_NETSTATS_PROC"] = proc_dir
         netfetch._PROC_DIR = proc_dir
     # (the one-at-a-time export hosts admitted across every process of the server, netfetch.SharedGate: set before the
@@ -12448,6 +12540,15 @@ async def main_async(args):
 
     server.game_cpus = getattr(args, "game_cpus", None)    # (cpupin.py: the game pinned at each hello)
     server.server_cpus = getattr(args, "server_cpus", None)
+    # (the settings page's "Restart world server", srvrestart.py: main's start-time view, the supervisor's mark)
+    server.start_settings = getattr(args, "start_settings", None)
+    server.start_fixed = getattr(args, "start_fixed", None) or []
+    server.restartable = srvrestartmod.restartable()
+    if server.restartable:          # (the capability only the game can read: its own temp/beamngEarth folder)
+        server.restart_key = srvrestartmod.write_key(server.root)
+        if server.restart_key is None:
+            log.warning("restart: the restart key could not be written in %s: the settings page cannot restart this "
+                        "server", server.root)
     server.photo_pool = photo_pool
     # the whole server held to its RAM limit (memwatch.py: caches dropped, a pool's processes replaced)
     memwatchmod.register(*[p for p, _q in block_pools], photo_pool, far_pool, road_pool, far_bld_pool)
@@ -12638,8 +12739,7 @@ async def main_async(args):
         # its files read on the preloader's thread once the server listens)
         asyncio.get_running_loop().create_task(server.preloader().start_place(args.user_dir))
     try:
-        async with srv:
-            await srv.serve_forever()
+        await serve(srv, server, restart)
     finally:
         pl = server.__dict__.get("_preloader")
         if pl is not None:          # (before the network and the disk cache close: its running part ends first)
@@ -13185,6 +13285,13 @@ def main():
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log.info("download cache: %s", args.cache_dir)
+    try:                # (the settings page's Experimental switches, put in this environment before the start)
+        import experimental
+        on = sorted({k for _sid, env, _n in experimental.FEATURES for k in env if os.environ.get(k)})
+        if on:
+            log.info("experimental switches: %s", ", ".join(f"{k}={os.environ[k]}" for k in on))
+    except Exception:
+        pass
     if args.max_ram_gb is not None:     # (the settings page's choice otherwise: cpupin.apply_player_settings)
         import budget as _b
         os.environ[_b.SETTING_ENV] = str(args.max_ram_gb) if args.max_ram_gb > 0 else "auto"
@@ -13198,14 +13305,24 @@ def main():
     import sampler
     sampler.maybe_start()           # BNGE_SAMPLE=<path>: a sampling profile of this process's threads (debugging)
     import budget
+    hand = []
     try:                            # the settings page's Performance choices (GitHub #529): before the priority and
         if args.user_dir:               # (aerialpacks.consent in every process: the player's statistics choice)
             os.environ.setdefault("BNGE_USER_DIR", os.path.abspath(args.user_dir))
+        # (set by hand, so the page's value cannot change them: the restart button leaves them out, srvrestart.py)
+        hand = [k for k, on in (("serverCores", os.environ.get("BNGE_SERVER_CORES")),
+                                ("models3dmr", os.environ.get("BNE_3DMR")), ("serverPriority", args.nice != NICE)) if on]
         args.nice, chosen = cpupin.apply_player_settings(args.user_dir, args.nice, NICE)    # the cores' split below
         if chosen:
             log.info("the settings page: the server on %s", ", ".join(chosen))
     except Exception as e:          # (the defaults then)
         log.warning("could not read the settings page's server choices: %s", e)
+    try:            # (the same moment's start-time values for the settings page's restart button: srvrestart.py)
+        args.start_settings, args.start_fixed = (srvrestartmod.start_view(
+            args.user_dir, square=heightmap.SQUARE, hand=hand) if args.user_dir else (None, []))
+    except Exception as e:
+        log.warning("could not read the settings for the restart button: %s", e)
+        args.start_settings, args.start_fixed = None, []
     global BELOW_GAME
     BELOW_GAME = bool(args.nice and args.nice > 0)     # (Connection.catch_up: no game cores lent at the game's priority)
     if args.nice:
@@ -13261,12 +13378,19 @@ def main():
     args.server_cpus = server_cpus if game_cpus else None
     import logqueue
     stop_logging = logqueue.start()
+    restart = []
     try:
-        asyncio.run(main_async(args))
+        asyncio.run(main_async(args, restart))
     except KeyboardInterrupt:
         pass
+    except Exception:
+        if not restart:
+            raise
+        log.exception("restart: the clean stop failed part way; the server is started again all the same")
     finally:
         stop_logging()
+    if restart:         # the settings page's "Restart world server": the workers stopped, exit for the supervisor
+        srvrestartmod.finish(log)
 
 
 if __name__ == "__main__":

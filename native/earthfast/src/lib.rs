@@ -6463,6 +6463,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // (304 also) far_select_nodes and far_global_select return the selection's slack (the move under which it stays the
     // same: earthd's selection gate skips only selections that could not change)
     // 305: sub-millimetre XY copies of a span do not suppress its approach ramps.
-    m.add("VERSION", 305)?;
+    // 305: pmt_find_many / pmt_ranges (Mapterhorn's regional elevation archives read by range reads instead of its
+    // tile endpoint: server/mtarchive.py)
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_find_many, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_ranges, m)?)?;
+    m.add("VERSION", 306)?;
     Ok(())
 }

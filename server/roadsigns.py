@@ -23,7 +23,7 @@ import signroads
 import speedsigns
 
 KERNEL = 175                    # earthfast VERSION with road_sign_place / road_sign_mesh
-ON = os.environ.get("BNE_ROADSIGNS", "on") == "on"
+ON = os.environ.get("BNE_ROADSIGNS", "off") == "on"
 NL_ON = os.environ.get("BNE_NL_ROADSIGNS", "off") == "on"
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5, "rect": 6}
