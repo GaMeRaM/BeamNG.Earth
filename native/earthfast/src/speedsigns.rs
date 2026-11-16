@@ -349,7 +349,8 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
         if rd.rank < 1 || rd.link { continue; }
         let len = net.len(e);
         let v = net.limit_at(e, 0.0);
-        if v <= 0.0 { continue; }
+        // Unknown at the start must not hide a mapped limit farther along this piece.
+        // Candidate filtering below already rejects positions with no known limit.
         let arms = *ends.get(&ed.from).unwrap_or(&0);
         let p = pred(&net, e);
         let mut changed = false;

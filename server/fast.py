@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 310 # upstream generated ground plus fork road-sign kernels
+MIN_VERSION = 311 # mapped speed ranges may start after an unknown part
 
 
 class NativeMissing(RuntimeError):

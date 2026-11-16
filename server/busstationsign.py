@@ -45,14 +45,15 @@ SLAB_H_M = 0.18                 # the platform slab's height (busstationmesh.PLA
 MAX_PLATES = 40                 # plates a tile makes at most (a Material per label)
 
 
-def _face(out_dir, vfs_dir, name):
+def _face(out_dir, vfs_dir, name, country=None):
     """(material, vfs path of its picture, width m, height m): drawn once (named by its hash)."""
+    subtitle = "Автовокзал" if str(country or "").upper() == "RU" else SUBTITLE
     flat = [*BG, *INK, *EDGE, *BAR, CAP_M, EN_SHARE, MIN_W_M, MAX_W_M, INSET_M, LINE_W_M, BAR_W_M, 0.0, 0.0]
-    h = hashlib.sha1(json.dumps([FACE_VERSION, flat, name, SUBTITLE, PX_PER_M], ensure_ascii=False)
+    h = hashlib.sha1(json.dumps([FACE_VERSION, flat, name, subtitle, PX_PER_M], ensure_ascii=False)
                      .encode("utf-8")).hexdigest()[:12]
     material = f"bne_bsign_{h}"
     png = os.path.join(out_dir, material + ".color.dds")
-    data, w_m, h_m = fast._ef.dirsign_town_face(name, SUBTITLE, False, flat, PX_PER_M)
+    data, w_m, h_m = fast._ef.dirsign_town_face(name, subtitle, False, flat, PX_PER_M)
     if not os.path.exists(png):
         imagery.write_picture_dds(png, data)      # (a DDS, never a PNG the engine cooks: imagery.write_picture_dds)
     return material, f"{vfs_dir}/{material}.color.dds", w_m, h_m
@@ -88,7 +89,7 @@ BOARD_W_M = 1.5                # the departures board's width (every row the sam
 BOARD_CAP_M = 0.13
 BOARD_ROWS = 5
 BOARD_TITLE = {"CZ": "Odjezdy", "SK": "Odchody", "PL": "Odjazdy", "DE": "Abfahrt", "AT": "Abfahrt", "CH": "Abfahrt",
-               "HU": "Indulás", "UA": "Відправлення", "SI": "Odhodi", "HR": "Polasci", "NL": "Vertrek"}
+               "RU": "Отправление", "HU": "Indulás", "UA": "Відправлення", "SI": "Odhodi", "HR": "Polasci", "NL": "Vertrek"}
 FACADE_CAP_M = 0.55            # the name on the hall's wall
 FACADE_MOUNT_M = 3.4           # its bottom over the ground (over the door)
 
@@ -111,7 +112,7 @@ def board_rows(st, country=None):
     import busbays
     code = str(country or "").upper()
     title = BOARD_TITLE.get(code, "Departures")
-    rows = [(title, "Departures" if title != "Departures" else "")]
+    rows = [(title, "Departures" if code != "RU" and title != "Departures" else "")]
     labels = [b.label for b in busbays.layout_bays(st) if b.label] or ["1"]
     seed = int(hashlib.sha1(str(st.fid).encode()).hexdigest()[:8], 16)
     minute = 6 * 60 + seed % 50
@@ -170,7 +171,7 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, country=None):
     hz = np.asarray(elev(la, lo), np.float64).ravel()
     z = np.asarray(frame.geodetic_to_enu(la, lo, hz)[2], np.float64).ravel()
     for i, (st, (x, y, ux, uy)) in enumerate(keep):
-        name, tex, w, h = _face(out_dir, vfs_dir, st.name)
+        name, tex, w, h = _face(out_dir, vfs_dir, st.name, country)
         if name not in faces:
             faces[name] = tex
             materials.append(name)
@@ -202,7 +203,7 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, country=None):
     for j, (st, (x, y, ux, uy, ln)) in enumerate(facades):
         zz = z[base + j]
         w_max = min(ln - 1.0, 9.0)
-        name, tex, w, h = _face(out_dir, vfs_dir, st.name)
+        name, tex, w, h = _face(out_dir, vfs_dir, st.name, country)
         if w > w_max:
             continue
         if name not in faces:

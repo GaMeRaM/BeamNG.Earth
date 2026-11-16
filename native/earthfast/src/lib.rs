@@ -6480,6 +6480,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
     // 310: fork build combines upstream generated ground with Russian sign rule masks / divided carriageways.
-    m.add("VERSION", 310)?;
+    m.add("VERSION", 311)?;
     Ok(())
 }

@@ -198,7 +198,7 @@ def _beds(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
         else:
             new = railprofile.beds(frame, ("beds-dem", lat0, lon0), load, raw, rails)
     if new is None or any(np.isnan(z).any() for z in new):
-        old = profile(rails, ground, underpasses)
+        old = profile(rails, ground, underpasses, crossings=railxing.enabled(frame=frame))
         if new is None:
             return old
         return [(np.where(np.isfinite(z), z, zb), zg) for z, (zb, zg) in zip(new, old)]
@@ -243,7 +243,7 @@ def grade_plans(frame, cells, box, elev, load=None):
     out = []
     tunnels = tunnels + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
     prof = _beds(frame, rails, ground, tunnels, load, elev, raw=ground)
-    if railxing.ENABLED:        # (the bed flush with the road at a level crossing: the ground is graded to it, else the
+    if railxing.enabled(frame=frame):        # (the bed flush with the road at a level crossing: the ground is graded to it, else the
         prof = _flushed(frame, cells, box, rails, prof, ground, tunnels)     # ballast and sleepers lay under the ground)
     for (fid, _c, kind, xy), (zb, _zg) in zip(rails, prof):
         if kind != "ground" or fid in ungraded:
@@ -254,10 +254,12 @@ def grade_plans(frame, cells, box, elev, load=None):
     return out
 
 
-def gauge(cls, sign_style=None):
+def gauge(cls, sign_style=None, country=None):
     if cls == "narrow_gauge":
         return NARROW_GAUGE_M
-    return FI_GAUGE_M if sign_style == "fi" else GAUGE_M
+    if sign_style == "fi":
+        return FI_GAUGE_M
+    return 1.520 if cls == "standard_gauge" and country == "RU" else GAUGE_M
 
 
 def _box_hit(b, box):
@@ -1252,7 +1254,7 @@ def approach_levels_many(xys, ground, grades=None):
     return [(found[2 * j], found[2 * j + 1]) for j in range(len(xys))]
 
 
-def profile(rails, ground, underpasses=(), fixed_decks=None):
+def profile(rails, ground, underpasses=(), fixed_decks=None, crossings=None):
     """Per part: bed and ground heights. Underpasses reserve clearance above their lower road mouths.
     ground(xy (n, 2)) -> z. The resulting deck heights propagate along connected approach ramps.
     """
@@ -1277,7 +1279,7 @@ def profile(rails, ground, underpasses=(), fixed_decks=None):
                 level[node] = got
     zb = []
     shared = {}                                 # (a double track's beds are smoothed from one profile: railxing.py)
-    if railxing.ENABLED:
+    if (railxing.ENABLED if crossings is None else crossings):
         gi = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "ground"]
         if len(gi) > 1:
             shared = dict(zip(gi, railxing.corridor_ground([rails[n][3] for n in gi], [zgs[n] for n in gi])))
@@ -1852,7 +1854,7 @@ def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None, cou
     if not roads:
         return []
     americas = float(frame.lon0 if hasattr(frame, "lon0") else 0.0) < AMERICAS_LON
-    if railxing.ENABLED:        # (a crossing of several tracks is one: railxing.py, BNE_RAIL_XING)
+    if railxing.enabled(country, frame):        # (a crossing of several tracks is one: railxing.py, BNE_RAIL_XING)
         usage = {str(f.ids[i]): str(u) for f in cells if f is not None and len(f)
                  for u, i in ((f.attrs.get("osm_usage", [None] * len(f))[i], i) for i in range(len(f))) if u}
         return railxing.crossing_rows(box, rails, roads, ground, worn=worn, usage=usage,
@@ -2535,7 +2537,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         s = _arc(xy)
         w = worn.get(fid, 0)
         ballast_w, steel_w = mesh.mat(BALLAST_WORN[w]), mesh.mat(STEEL_WORN[w])
-        half_g = gauges.get(fid, gauge(cls, sign_style)) / 2 + RAIL_HEAD / 2
+        half_g = gauges.get(fid, gauge(cls, sign_style, railxing.country_at(frame))) / 2 + RAIL_HEAD / 2
         top = zb + BALLAST_H
         if kind == "ground":
             blk = _blocked(xy, zb, crossers)
@@ -2572,7 +2574,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             p, uu, t, v = xy[sl], u[sl], top[sl], s[sl] / 3.0
             if kind == "ground":
                 (fl, zl), (fr, zr) = feet
-                if railxing.ENABLED and w == 0:         # (a track in use: crushed stone, its own scale)
+                if railxing.enabled(frame=frame) and w == 0:         # (a track in use: crushed stone, its own scale)
                     _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], mesh.mat(BALLAST_STONE),
                                  BALLAST_TILE_M)
                 else:

@@ -6,15 +6,40 @@ that track's axis, so N tracks gave N kits per approach and the inner ones stood
 of one road with tracks lying within CLUSTER_M of each other along it are one crossing: a kit at each approach, before
 the outermost track, at the distance the country's rules give, and the gate where the crossing is a big one.
 
-Opt-in: BNE_RAIL_XING=1 (railways.crossing_props calls crossing_rows then). Pure given its inputs."""
+Enabled by default in Russia; elsewhere opt-in: BNE_RAIL_XING=1 (railways.crossing_props calls crossing_rows then). Pure given its inputs."""
 import math
+from functools import lru_cache
 import os
 
 import numpy as np
 import dmath
 import dnp
 
-ENABLED = os.environ.get("BNE_RAIL_XING", "") not in ("", "0", "off", "false")
+_ENV = os.environ.get("BNE_RAIL_XING", "").strip().lower()
+ENABLED = _ENV not in ("", "0", "off", "false")
+
+
+@lru_cache(maxsize=128)
+def _country_at(lat, lon, signature):
+    import countrybounds
+    return countrybounds.bundled().at(lat, lon)
+
+
+def country_at(frame):
+    import countrybounds
+    lat, lon = getattr(frame, "lat0", None), getattr(frame, "lon0", None)
+    if lat is None or lon is None:
+        return None
+    return _country_at(float(lat), float(lon), countrybounds.signature())
+
+
+def enabled(country=None, frame=None):
+    if _ENV or ENABLED:
+        return ENABLED
+    # Geometry, grading and equipment must agree even when the border index is absent.
+    if frame is not None:
+        country = country_at(frame)
+    return str(country or "").upper() == "RU"
 
 CLUSTER_M = 30.0        # m along a road between crossings of tracks that are one crossing (a four-track line: ~25 m)
 MAX_SPAN_M = 50.0       # m a crossing spans at most (a yard's chain of tracks is cut here: every tile must agree)

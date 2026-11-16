@@ -76,6 +76,9 @@ jobs:
       - name: Russian signs and native rendering checks
         run: |
           python -m unittest discover -s server/tests -p test_ru_stop_lines.py
+          python -m unittest discover -s server/tests -p test_ru_localization.py
+          python -m unittest discover -s server/tests -p test_speed_signs.py
+          python -m unittest discover -s server/tests -p test_railxing.py
           python -m unittest discover -s server/tests -p test_secrossings.py
           python -m unittest discover -s server/tests -p test_ru_signs.py
           python -m unittest discover -s server/tests -p test_ru_infrastructure.py

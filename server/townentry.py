@@ -22,7 +22,7 @@ together, each kerb has the sign of the town its traffic enters, the other town'
 The state is a function of the point alone, never of the road segment or the tile, so every segment and every tile
 puts a road's signs at the same places (ROADMAP "deterministic generation"). Pure given its inputs.
 
-In the game (Settings > World > Town signs, off by default for now; BNE_TOWNSIGNS=on / off forces it): Towns.rows
+In the game (Settings > World > Town signs, on by default; BNE_TOWNSIGNS=on / off forces it): Towns.rows
 gives a road tile its signs (roads.build_tile's towns), each sign two Forest items of its commune's own faces
 (write_face: the name drawn on the sign, a textured quad, written once per session next to the tile): the entry face
 with the body every
@@ -59,7 +59,7 @@ ENV = os.environ.get("BNE_TOWNSIGNS", "")
 
 def enabled(server_flag):
     """Whether the town signs are built: BNE_TOWNSIGNS=on / off forces it, anything else follows server_flag (the
-    settings page's Town signs, earthd.Server.towns_on: off unless the player turns it on)."""
+    settings page's Town signs, enabled by default)."""
     if ENV == "on":
         return True
     if ENV == "off":

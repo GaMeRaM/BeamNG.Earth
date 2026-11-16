@@ -352,11 +352,11 @@ def pole_params(sys_row):
     return ranks + [float(sys_row.get("max_on_pole", 3)), float(systems["pole"]["join_m"])]
 
 
-def speed_signs(frame, box, context, left_hand, mph):
+def speed_signs(frame, box, context, left_hand, mph, country=None):
     """(n, 4) x, y, travel x, travel y of the speed-limit signs in box and 10 m round it: the road signs keep off them."""
     x0, y0, x1, y1 = box
     try:
-        rows = speedsigns.place(frame, (x0 - 10.0, y0 - 10.0, x1 + 10.0, y1 + 10.0), context, left_hand, mph)
+        rows = speedsigns.place(frame, (x0 - 10.0, y0 - 10.0, x1 + 10.0, y1 + 10.0), context, left_hand, mph, country=country)
     except Exception:       # (optional scenery: the road signs go on without it)
         return np.zeros((0, 4))
     # (speed_sign_place's rows are 9 or, since the German town signs (#892), 12 wide: the first 4 columns whatever the
@@ -412,7 +412,7 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
     got = fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra, sys_row.get("atlas") == "vienna_ru"),
                                     signals(frame, infra), open_ends(frame, cells), poly, poly_off, [float(v) for v in box],
                                     bool(left_hand), [float(v) for v in sys_row["lateral"]], float(widest(sizes)),
-                                    params(sys_row), speed_signs(frame, box, context, left_hand, mph), pole_params(sys_row),
+                                    params(sys_row), speed_signs(frame, box, context, left_hand, mph, "RU" if sys_row.get("atlas") == "vienna_ru" else None), pole_params(sys_row),
                                     np.ascontiguousarray(poi, np.float64))
     import roundabouts
     return roundabouts.drop_on_islands(got, list(rows.values()))      # (none on a roundabout's island, plan 038)

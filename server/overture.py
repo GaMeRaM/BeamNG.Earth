@@ -170,7 +170,7 @@ _OWN = "coalesce(list_filter(sources, lambda s: coalesce(s.property, '') = '')[1
 _SRC_OWN = f"{_OWN}.dataset AS src_dataset, {_OWN}.record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
-DIVISION_LANGS = ("en", "de", "fr", "it")
+DIVISION_LANGS = ("en", "de", "fr", "it", "ru")
 # the regional languages of France whose names a town sign may add under the French one (townsigns.REGIONAL: Catalan,
 # Occitan, Basque, Breton, Corsican, Alsatian, West Flemish), each a column name_<code> (names.common's, by its
 # language code)

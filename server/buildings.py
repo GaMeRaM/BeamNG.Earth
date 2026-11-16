@@ -3787,7 +3787,7 @@ def rail_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
     """Polylines (k, 2) relative to (x0, y0) of the railway tracks on the ground near the tile (railways.drawn's, the
     ground pieces); none unless BNE_RAIL_XING is on."""
     import railxing
-    if not railxing.ENABLED:
+    if not railxing.enabled(frame=frame):
         return []
     import railways
     import roads as roadsmod

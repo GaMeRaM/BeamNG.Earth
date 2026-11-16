@@ -21,7 +21,7 @@ population (REACH_*: a city's reach covers its districts and the hamlets beside 
 classed towns first (a locality without a class is a city's district in Overture, e.g. Köln's "Nippes": only when no
 classed town reaches), ties by id; none within reach: no place. Region and country by the chosen town's codes (none
 chosen: the region / country whose bbox holds the point, the nearest town's codes deciding between overlapping
-boxes; no town in the cells read: nothing, the open sea). Names in geocode.lang_for(country)'s language where Overture has it, else the primary name.
+boxes; no town in the cells read: nothing, the open sea). Names in local_lang(country)'s language where Overture has it, else the primary name.
 """
 import json
 import logging
@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.placenames")
 
-PLACES_FORMAT = 2               # the cell files' format (bump when what a cell holds or how it is read changes); 2: borders
+PLACES_FORMAT = 3               # the cell files' format (bump when what a cell holds or how it is read changes); 3: Russian names; 2: borders
 ZOOM = 9                        # the cells' Web-Mercator zoom up to 60 degrees of latitude (zoom_at)
 SEARCH_M = 25000.0              # towns this far around the player are read (the cells under that box)
 MEM_CELLS = 64                  # decoded cells kept in memory
@@ -92,6 +92,15 @@ def reach_km(population, klass):
     dflt = np.array([CLASS_POP.get(c, UNCLASSED_POP) for c in klass], np.float64)
     pop = np.where(np.isfinite(pop) & (pop > 0), pop, dflt)
     return np.clip(REACH_K * REACH_R_KM * dnp.power(pop / 1000.0, REACH_EXP), REACH_MIN_KM, REACH_MAX_KM)
+
+
+def local_lang(country):
+    """Prefer Russian names in RU, falling back to the local primary name.
+
+    Russian names are stored independently of Photon request languages.
+    This does not change the languages accepted by the external Photon search.
+    """
+    return "ru" if str(country or "").upper() == "RU" else geocode.lang_for(country)
 
 
 def _name(table, i, lang):
@@ -179,7 +188,7 @@ def pick(towns, areas, lat, lon, borders=None):
         rc = one(a_rc, ("region",), hint_rc)
         if rc and not cc:
             cc = rc.split("-", 1)[0]
-    lang = geocode.lang_for(cc)
+    lang = local_lang(cc)
     if best is not None:
         out["place"] = _name(towns, best, lang)
     if m and rc:
@@ -294,7 +303,7 @@ class PlaceNames:
                 cls = str(t["class"][i])
                 if str(t["subtype"][i]) not in ("locality", "localadmin"):
                     continue
-                name = _name(t, i, geocode.lang_for(str(t["country"][i])))
+                name = _name(t, i, local_lang(str(t["country"][i])))
                 if name:
                     out.append((name, float(t["lat"][i]), float(t["lon"][i]), cls, float(t["population"][i])))
         rank = {"megacity": 0, "city": 1, "town": 2, "village": 3, "hamlet": 4}

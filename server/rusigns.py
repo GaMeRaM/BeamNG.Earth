@@ -58,6 +58,17 @@ def join_meshes(meshes):
     return np.vstack(points), np.vstack(tris), np.vstack(uvs), materials, np.concatenate(indices)
 
 
+def board_kind(sign, pavements):
+    """Share the computed-board alignment test; a crossing motorway is not our road."""
+    import dirsigns
+    rows = {str(i): (None, np.asarray(line)[:, :2],
+                    (sp.width / 2, (sp.dir or 1) if sp.oneway else 0,
+                     7 if sp.cls == 'motorway' else 0, sp.urban, sp.link))
+            for i, (_fid, sp, line, _lon) in enumerate(pavements)}
+    board = [0., 0., *sign['travel'], *sign['road_point']]
+    return dirsigns.board_kind({'country': 'RU'}, 'freeway', board, rows)
+
+
 def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, out_dir, vfs_dir):
     source = getattr(md, 'highway_signs', None)
     if source is None:
@@ -71,8 +82,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, out_dir, vfs_
         pavements, mains = exitsigns.source_pavements(frame, obj, context, left_hand)
         for sign in exitsigns.place(frame, [obj], (), box, elev, decks, left_hand, False,
                                     pavements=pavements, ramp_mains=mains):
-            near = exitsigns._nearest(np.asarray(sign['road_point']), pavements)
-            sign['board_kind'] = 'freeway' if near is not None and near[2].cls == 'motorway' else 'road'
+            sign['board_kind'] = board_kind(sign, pavements)
             placed.append(sign)
     return render(placed, box, out_dir, vfs_dir)
 
