@@ -253,3 +253,44 @@ Validation for this update: 568 local tests in 28 modules, including the capture
 road/building fixtures and package/world-bundle format checks. The experimental
 Windows build runs the same selection before packaging, then boots the packaged
 server. Both deployment and in-game acceptance remain separate checks.
+
+## Profile audit (2026-11-16)
+
+Ordinary signs, painted lane boundaries and direction boards are separate generators;
+none changes the lane graph or makes a carriageway two-way.
+
+| Area | Result of this pass | Remaining limit |
+| --- | --- | --- |
+| One-way signs | Suppress inferred 5.5 on paired carriageways identified by the renderer; no automatic repeats at every ordinary junction. | Pairing needs sufficient map context; no visibility survey or complex-junction classification. |
+| Priority and zones | Keep mapped STOP/give-way and living-street rules. Suppress Russian side-road priority claims inferred only from class, and pedestrian-zone claims inferred only from a pedestrian street. | No complete source of posted Russian zone/priority boundaries. |
+| Tunnels | Suppress the generic blue European tunnel information plate in RU. | Proper Russian warning-sign selection and placement need additional evidence; this does not add a new tunnel sign. |
+| Centre lines | Keep both white centre lines continuous on four-plus-lane two-way roads with asymmetric overtaking tags. No US shared-turn-lane paint for RU. | A complete reversible-lane scheme is not implemented; no guessed replacement paint. |
+| Lane arrows | Seven dedicated RU masks preserve all supported combinations and lane offsets in both travel directions. Two speed profiles use 5/7.5 m stems, with a further 2.05 m for the triple arrow, from GOST R 51256 fig. B.5/table B.1. | Speed comes from the road model, unknown speed uses the short profile. Angled branches remain approximate; reverse/unknown movements are omitted. Placement still uses the existing 12/45 m before lane-end heuristic, not a surveyed intersection layout. Other countries retain their artwork. |
+| Direction boards | Inferred green boards require a nearby motorway aligned with the signed direction, excluding links and opposite carriageways. Normalize Latin A/K/H in numeric regional references. | Road-level/elevation ambiguity and inferred destinations remain approximate. Posted exit destinations still come from mapped labels. |
+| Other placement | Existing mounting heights, right-side clearance, dash periods, lane counts, posted exits and Cyrillic faces remain covered by regression tests. | Crosswalk far-side pairs/overhead duplicates and complete regulatory sign coverage are not implemented. |
+
+Reference: [GOST R 52289-2019 published by Moscow](https://www.mos.ru/upload/documents/files/6980/GOSTR52289-2019TehnicheskiesredstvaorganizaciidorojnogodvijeniyaP_.pdf),
+clauses 5.6.6, 5.3.4, 5.6.41, 5.2.33 and 6.2.5. This is an implementation audit,
+not a change to the profile's `verified: false` status. The repeated ordinary-junction
+5.5 rule and the four-lane centreline rule have dedicated regression cases.
+
+### Standards used in this audit
+
+- Application: [GOST R 52289-2019, official register](https://protect.gost.ru/gost/details/94160176-3252-4e7d-8534-2d172e6aa0de).
+  The linked Moscow application PDF above includes 2023 changes, not a consolidated
+  2026 edition. The register also lists amendments effective in 2026; this pass does
+  not claim to have validated every amended clause.
+- Sign appearance: [GOST R 52290-2024, official register](https://protect.gost.ru/gost/details/39b75217-29bd-492b-94f4-c0dccb72b299),
+  effective 2026-01-01. This is the current design reference, not a claim that every
+  existing face or board has been redrawn to it.
+- Arrow drawing: GOST R 51256-2018 with amendment 1, figure B.5/table B.1,
+  [published PDF](https://www.mos.ru/upload/documents/files/1106/GOSTR51256-2018TehnicheskiesredstvaorganizaciidorojnogodvijeniyaR_.pdf).
+  The PDF drawing was visually inspected. Masks are deterministically generated
+  by `tools/build_ru_road_arrows.py` and packed as lossless opacity sources.
+  Straight head length 2.05 m, width 0.75 m, shaft width 0.15 m; transparent
+  quad margins are not part of the painted dimensions. Turn branches approximate
+  the diagram; this does not change the profile's `verified: false` status.
+
+Missing artwork can be generated, as the new combined arrows demonstrate. Missing
+posted traffic rules, reversible-lane control state or surveyed board placement
+cannot be established from road class alone. Keep these separate in future work.

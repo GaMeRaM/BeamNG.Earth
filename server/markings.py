@@ -478,12 +478,26 @@ def m20(tip, t):
 # row 0 left, right and straight arrows; cell rows from the top: arrow_quad turns them into the shape's V)
 ARROW_MATERIAL = "roadmarkings1"
 ARROW_CELLS = {"left": (0.0, 0.0), "right": (0.25, 0.0), "through": (0.5, 0.0)}
+RU_ARROW_MATERIAL = "bne_ru_lane_arrows"
+RU_ARROW_CELLS = {k: ((i % 4) / 4., (i // 4) / 4.) for i, k in enumerate(
+    ("left", "right", "through", "left_through", "right_through", "left_right", "left_right_through"))}
+
+
+def arrow_material(country=None):
+    return RU_ARROW_MATERIAL if str(country or "").upper() == "RU" else ARROW_MATERIAL
+
+
 ARROW_CELL_M = (4.0, 3.0)           # the cell's quad: m along, across (the arrow ~2.8 m by 0.8 m in it)
 ARROW_AT_M = (12.0, 45.0)           # m before the lane's end (the stop line, then one further back)
 
 
-def _arrow_kind(token):
+def _arrow_kind(token, strict=False):
     vals = set(str(token).split(";"))
+    if strict:
+        aliases = {"through": "through", "left": "left", "slight_left": "left", "sharp_left": "left",
+                   "right": "right", "slight_right": "right", "sharp_right": "right"}
+        kinds = {aliases.get(v.strip()) for v in vals}
+        return "_".join(k for k in ("left", "right", "through") if k in kinds) if kinds and None not in kinds else None
     if "through" in vals:
         return "through"
     if vals & {"left", "slight_left", "sharp_left"}:
@@ -507,7 +521,7 @@ def _point_back(line, d):
     return p, t
 
 
-def arrows(osm, pts, two_way, drive, lanes, left_hand=False):
+def arrows(osm, pts, two_way, drive, lanes, left_hand=False, country=None):
     """[(centre (3,), travel direction (2,), "left" | "right" | "through")] of the turn arrows of a road (pts its
     centreline (k, 3)) from its turn:lanes tags (osm); none without a turn lane. Pure."""
     osm = osm or {}
@@ -542,8 +556,8 @@ def arrows(osm, pts, two_way, drive, lanes, left_hand=False):
                 plan.append((bw, [-drive / 2 + (k + 0.5) * lw for k in range(b_)], False))
     for value, offs, along in plan:
         toks = str(value).split("|")
-        kinds = [_arrow_kind(t) for t in toks]
-        if len(toks) != len(offs) or not any(k in ("left", "right") for k in kinds):
+        kinds = [_arrow_kind(t, strict=str(country or "").upper() == "RU") for t in toks]
+        if len(toks) != len(offs) or not any(k is not None and ("left" in k or "right" in k) for k in kinds):
             continue
         for kind_, off in zip(kinds, offs):
             if kind_ is None:
@@ -556,14 +570,23 @@ def arrows(osm, pts, two_way, drive, lanes, left_hand=False):
     return out
 
 
-def arrow_quad(centre, t, kind_):
+def arrow_quad(centre, t, kind_, country=None, speed_kmh=None):
     """(corners (4, 3), uvs (4, 2)) of an arrow's quad: tip ahead (travel direction t)."""
+    russian = str(country or "").upper() == "RU"
+    high = russian and speed_kmh is not None and speed_kmh > 60
     L, W = ARROW_CELL_M
+    if russian:
+        L, W = (7.5 if high else 5.) + .3, 2.4
+        if kind_ == "left_right_through":
+            L += 2.05
     n = np.array([-t[1], t[0]])
     c = np.asarray(centre, np.float64)
     fwd, side = np.r_[t * L / 2, 0.0], np.r_[n * W / 2, 0.0]
     corners = np.stack([c + fwd + side, c + fwd - side, c - fwd - side, c - fwd + side])
-    u0, v0 = ARROW_CELLS[kind_]
+    u0, v0 = (RU_ARROW_CELLS if russian else ARROW_CELLS)[kind_]
+    if high:
+        index = list(RU_ARROW_CELLS).index(kind_) + 7
+        u0, v0 = (index % 4) / 4., (index // 4) / 4.
     # (the shape's V runs up from the sheet's bottom: the cell's top (1 - v0) at the arrow's tip. Read from the top
     # down, every arrow showed the bottom row upside down: blank in the old sheet, game 0.40's "EXIT" for the
     # straight ones, Baltimore 2026-10-29)

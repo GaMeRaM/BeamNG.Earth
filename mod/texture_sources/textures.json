@@ -1,6 +1,11 @@
 {
  "_": "The mod's DDS textures made at install time (modtextures.py, tools/mod_textures_dds.py): DDS path in the mod -> its lossless source under mod/texture_sources, DXGI format, mip role, and for a normal / roughness map computed from a colour map how (native texdds.rs derive_map).",
  "textures": {
+  "levels/beamng_earth/art/roadmarkings/bne_ru_arrows.data.dds": {
+   "source": "levels/beamng_earth/art/roadmarkings/bne_ru_arrows.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
   "levels/beamng_earth/art/runway/t_paint_white_b.color.dds": {
    "source": "levels/beamng_earth/art/runway/t_paint_white_b.color.webp",
    "format": "BC7_SRGB",
@@ -267,6 +272,11 @@
   "levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_ru.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_ru.color.webp",
    "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_day_b.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_day_b.webp",
+   "format": "BC7",
    "role": "color"
   },
   "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_night_e.dds": {
@@ -891,11 +901,6 @@
   },
   "levels/beamng_earth/art/shapes/beamngEarth/sign_speed_none.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/sign_speed_none.webp",
-   "format": "BC7",
-   "role": "color"
-  },
-  "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_day_b.dds": {
-   "source": "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_day_b.webp",
    "format": "BC7",
    "role": "color"
   }

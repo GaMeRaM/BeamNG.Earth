@@ -282,12 +282,19 @@ def board_kind(style, kind, board, rows):
         return kind
     q = np.asarray(board[4:6])
     for _ll, pts, meta, *_ in rows.values():
-        if int(meta[2]) != 7:
+        if int(meta[2]) != 7 or bool(meta[4]):
             continue
         a, delta = pts[:-1], np.diff(pts, axis=0)
         length2 = np.sum(delta * delta, axis=1)
         frac = np.clip(np.sum((q - a) * delta, axis=1) / np.maximum(length2, 1e-9), 0., 1.)
-        if np.any(np.sum(dnp.sq(a + frac[:, None] * delta - q), axis=1) < 0.25):
+        tangent = delta / np.sqrt(np.maximum(length2, 1e-12))[:, None]
+        direction = np.asarray(board[2:4], float)
+        norm = float(dnp.norm(direction))
+        if norm < 1e-9:
+            continue
+        dot = tangent @ (direction / norm)
+        aligned = dot * int(meta[1]) > 0.8 if int(meta[1]) else np.abs(dot) > 0.8
+        if np.any(aligned & (np.sum(dnp.sq(a + frac[:, None] * delta - q), axis=1) < 0.25)):
             return 'freeway'
     return 'road'
 

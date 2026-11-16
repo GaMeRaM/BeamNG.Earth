@@ -15,6 +15,9 @@ def route_ref(ref):
     ref = str(ref).strip()
     if re.match(r'^[MPA]\s*-?\s*\d', ref, re.I):
         ref = ref[0].upper().translate(str.maketrans('MPA', 'МРА')) + ref[1:]
+    m = re.fullmatch(r"(\d{2})\s*([AKH])([\s-]*\d[\d-]*)", ref, re.I)
+    if m:
+        return m[1] + m[2].upper().translate(str.maketrans("AKH", "АКН")) + m[3]
     return ref
 
 

@@ -6467,6 +6467,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // tile endpoint: server/mtarchive.py)
     m.add_function(wrap_pyfunction!(pmtiles::pmt_find_many, m)?)?;
     m.add_function(wrap_pyfunction!(pmtiles::pmt_ranges, m)?)?;
-    m.add("VERSION", 306)?;
+    m.add("VERSION", 307)?;
     Ok(())
 }

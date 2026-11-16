@@ -80,6 +80,7 @@ mod more;
 pub const FLAG_RING: i64 = 1;
 pub const FLAG_LIVING: i64 = 2;
 pub const FLAG_FOOT: i64 = 4;       // a pedestrian zone
+pub const FLAG_DIVIDED: i64 = 32; // Paired carriageways are not a standalone one-way street.
 pub const FLAG_REPEAT_ONEWAY: i64 = 16; // Repeat after junctions on Russian one-way streets.
 pub const FLAG_CYCLE: i64 = 8;      // a cycle path
 
@@ -141,6 +142,8 @@ struct Road {
     foot: bool,
     cycle: bool,
     repeat_oneway: bool,
+    divided: bool,
+    disabled: i64,
 }
 
 struct Edge {
@@ -530,7 +533,7 @@ fn one_ways(net: &Net, ends: &HashMap<i64, usize>, incoming: &HashMap<i64, Vec<u
     for e in 0..net.edges.len() {
         let ed = &net.edges[e];
         let rd = &net.roads[ed.road];
-        if rd.dir == 0 || rd.link || rd.ring || rd.living || !rd.urban || rd.rank < 1 || rd.rank > SECONDARY { continue; }
+        if rd.divided || rd.dir == 0 || rd.link || rd.ring || rd.living || !rd.urban || rd.rank < 1 || rd.rank > SECONDARY { continue; }
         if *ends.get(&ed.from).unwrap_or(&0) < 3 { continue; }
         let inn = incoming.get(&ed.from).unwrap_or(&none);
         let d = net.start_dir(e);
@@ -614,7 +617,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
         let flags = if a.meta.ncols() > 5 { a.meta[[r, 5]] as i64 } else { 0 };
         let road = Road { a: p, b: q, s, hw: a.meta[[r, 0]], dir: a.meta[[r, 1]] as i64, rank: a.meta[[r, 2]] as i64,
                           urban: a.meta[[r, 3]] != 0.0, link: a.meta[[r, 4]] != 0.0, ring: flags & FLAG_RING != 0,
-                          living: flags & FLAG_LIVING != 0, foot: flags & FLAG_FOOT != 0, cycle: flags & FLAG_CYCLE != 0, repeat_oneway: flags & FLAG_REPEAT_ONEWAY != 0 };
+                          living: flags & FLAG_LIVING != 0, foot: flags & FLAG_FOOT != 0, cycle: flags & FLAG_CYCLE != 0, disabled: flags >> 6, divided: flags & FLAG_DIVIDED != 0, repeat_oneway: flags & FLAG_REPEAT_ONEWAY != 0 };
         let total = if q >= p + 2 { road.s[q - p - 1] } else { 0.0 };
         net.roads.push(road);
         if total < 1.0 { continue; }
@@ -659,6 +662,8 @@ pub fn plan(a: &Input) -> Vec<Sign> {
     living_streets(&net, &incoming, &outgoing, &a.params, &mut cands);
     one_ways(&net, &ends, &incoming, &mut cands);
     more::all(&net, &ends, &incoming, &outgoing, a, &mut cands);
+    // Country exclusions must precede spacing and pole grouping, not leave invisible blockers.
+    cands.retain(|c| net.roads[c.road].disabled & (1_i64 << c.rule) == 0);
     cands.sort_by(|x, y| (x.rule, x.key).cmp(&(y.rule, y.key)));
 
     // one a place, per rule and direction, in a fixed order
@@ -1192,6 +1197,24 @@ mod tests {
     }
 
     #[test]
+    fn divided_carriageway_keeps_prohibitions_but_not_oneway_information() {
+        let mut rows = vec![
+            (&[[-100.0, 0.0], [0.0, 0.0]][..], 0.0, 2.0, [1, 2], 1.0, 0, 0.0),
+            (&[[0.0, 0.0], [100.0, 0.0]][..], 0.0, 2.0, [2, 3], 1.0, 0, 0.0),
+            (&[[0.0, 0.0], [0.0, 100.0]][..], 1.0, 2.0, [2, 4], 1.0, FLAG_REPEAT_ONEWAY, 0.0),
+            (&[[-100.0, 100.0], [0.0, 100.0]][..], 0.0, 2.0, [5, 4], 1.0, 0, 0.0),
+            (&[[0.0, 100.0], [100.0, 100.0]][..], 0.0, 2.0, [4, 6], 1.0, 0, 0.0),
+        ];
+        let street = run(&roads_x(&rows), none(), none(), false);
+        assert!(!of(&street, ONEWAY).is_empty());
+        assert!(!of(&street, NO_ENTRY).is_empty());
+        rows[2].5 |= FLAG_DIVIDED;
+        let divided = run(&roads_x(&rows), none(), none(), false);
+        assert!(of(&divided, ONEWAY).is_empty());
+        assert_eq!(of(&street, NO_ENTRY).len(), of(&divided, NO_ENTRY).len());
+    }
+
+    #[test]
     fn a_one_way_street_is_signed_where_it_starts_but_not_where_one_way_runs_on() {
         let cross = [(&[[-200.0, 0.0], [0.0, 0.0]][..], 0.0, 2.0, [1, 2], 1.0, 0, 0.0),
                      (&[[0.0, 0.0], [200.0, 0.0]][..], 0.0, 2.0, [2, 3], 1.0, 0, 0.0),
@@ -1364,6 +1387,19 @@ mod tests {
         assert!(n[0].dir[0] > 0.99 && n[0].xy[0] < -100.0, "{:?}", n[0]);
         t.meta[[1, 0]] = 3.8;
         assert!(of(&run(&t, none(), none(), false), NARROW).is_empty(), "a hair narrower is the same road");
+    }
+
+    #[test]
+    fn disabled_rules_are_removed_before_placement_without_dropping_other_pois() {
+        let mut road = road800();
+        let points = arr2(&[[300.0, 0.0, POI_STOP as f64, 1.0, 0.0],
+                            [500.0, 0.0, POI_TUNNEL as f64, 1.0, 0.0]]);
+        let base = with_pois(&road, points.clone(), false);
+        assert!(!of(&base, STOP).is_empty() && !of(&base, TUNNEL).is_empty());
+        road.meta[[0, 5]] = (1_i64 << (6 + TUNNEL)) as f64;
+        let filtered = with_pois(&road, points, false);
+        assert!(of(&filtered, TUNNEL).is_empty());
+        assert_eq!(of(&filtered, STOP).len(), of(&base, STOP).len());
     }
 
     #[test]

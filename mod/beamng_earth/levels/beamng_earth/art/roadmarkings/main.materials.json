@@ -1,0 +1,31 @@
+{
+  "bne_ru_lane_arrows": {
+    "name": "bne_ru_lane_arrows",
+    "mapTo": "bne_ru_lane_arrows",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "450d20fc-7dea-599b-8510-6484c0db5d84",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.9,
+          0.9,
+          0.9,
+          1
+        ],
+        "opacityMap": "/levels/beamng_earth/art/roadmarkings/bne_ru_arrows.data.dds",
+        "roughnessFactor": 0.65
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 128,
+    "annotation": "ROAD_MARKING",
+    "castShadows": false,
+    "translucent": true,
+    "translucentZWrite": true,
+    "materialTag0": "RoadAndPath",
+    "materialTag1": "beamng_earth"
+  }
+}

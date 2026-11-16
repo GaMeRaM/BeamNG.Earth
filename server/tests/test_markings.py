@@ -287,8 +287,6 @@ class M20Test(unittest.TestCase):
         self.assertAlmostEqual(np.ptp(tail[:, 0]), 0.30, 6, "0.30 m wide")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class GoreTest(unittest.TestCase):
@@ -392,3 +390,74 @@ class RussianDoubleCentreTest(unittest.TestCase):
                        for a, b in zip(line[:-1], line[1:])
                        for x in np.arange(max(0., a[0]), min(256., b[0]), 1.)}
             self.assertGreater(len(covered), 245)
+
+
+class RussianAuditMarkingsTest(unittest.TestCase):
+    LINE = np.array([[0., 0., 0.], [200., 0., 0.]])
+
+    def test_four_lane_road_keeps_double_solid_when_only_one_overtaking_direction_is_tagged(self):
+        spec = roads.Spec(13.2, 'paved', True, 'primary', False)._replace(lanes=4)
+        for key in ('overtaking:forward', 'overtaking:backward'):
+            centre = [(look, points) for look, _, points in roads.extras(
+                spec, self.LINE, 60., country='RU', osm={key: 'no'}) if look.get('kind') == 'centre']
+            self.assertEqual(len(centre), 2)
+            self.assertTrue(all(not look.get('dash') for look, _ in centre))
+
+    def test_shared_turn_lane_is_not_painted_as_an_american_twltl(self):
+        spec = roads.Spec(9.9, 'paved', True, 'primary', False)._replace(lanes=3)
+        tags = {'lanes': '3', 'lanes:forward': '1', 'lanes:backward': '1', 'lanes:both_ways': '1'}
+        for country, want in [('RU', False), ('US', True)]:
+            centre = [look for look, _, _ in roads.extras(spec, self.LINE, 60., country=country, osm=tags)
+                      if look.get('kind') == 'centre']
+            self.assertEqual(bool(centre), want)
+
+    def test_combined_turn_has_its_own_glyph_and_preserves_lane_offsets(self):
+        tags = {'turn:lanes': 'left|through|through;right'}
+        ru = markings.arrows(tags, self.LINE, False, 9.9, 3, country='RU')
+        self.assertEqual(len(ru), 6)
+        right = [(c,t,k) for c,t,k in ru if c[1] < -1e-6]
+        self.assertEqual(len(right), 2)
+        self.assertTrue(all(k == "right_through" for c,t,k in right))
+        self.assertEqual(len(markings.arrows(tags, self.LINE, False, 9.9, 3, country='US')), 6)
+        self.assertEqual(markings._arrow_kind('left;slight_left', strict=True), 'left')
+        self.assertEqual(markings._arrow_kind('left;through', strict=True), 'left_through')
+        self.assertEqual(markings._arrow_kind('right;left;through', strict=True), 'left_right_through')
+        self.assertEqual(markings.arrow_material('RU'), 'bne_ru_lane_arrows')
+        self.assertEqual(markings.arrow_material('US'), markings.ARROW_MATERIAL)
+
+    def test_ru_speed_profiles_have_distinct_cells_and_physical_lengths(self):
+        for kind in markings.RU_ARROW_CELLS:
+            low, uv_low = markings.arrow_quad([0,0,0], np.array([1.,0.]), kind, country='RU')
+            high, uv_high = markings.arrow_quad([0,0,0], np.array([1.,0.]), kind, country='RU', speed_kmh=90)
+            extra = 2.05 if kind == 'left_right_through' else 0
+            self.assertAlmostEqual(np.ptp(low[:,0]), 5.3 + extra)
+            self.assertAlmostEqual(np.ptp(high[:,0]), 7.8 + extra)
+            self.assertFalse(np.array_equal(uv_low, uv_high))
+            self.assertTrue(np.all((uv_high >= 0) & (uv_high <= 1)))
+            reverse, _ = markings.arrow_quad([0,0,0], np.array([-1.,0.]), kind, country='RU')
+            np.testing.assert_allclose(reverse, -low)
+
+    def test_combined_only_lanes_and_unknown_direction(self):
+        got = markings.arrows({'turn:lanes': 'left;through|through;right'}, self.LINE,
+                              False, 6.6, 2, country='RU')
+        self.assertEqual(len(got), 4)
+        self.assertEqual({k for _,_,k in got}, {'left_through', 'right_through'})
+        self.assertIsNone(markings._arrow_kind('through;reverse', strict=True))
+
+    def test_generated_arrow_atlas_matches_packaged_lossless_source(self):
+        import importlib.util
+        from pathlib import Path
+        from PIL import Image
+        root = Path(__file__).resolve().parents[2]
+        module = importlib.util.spec_from_file_location('ru_arrows', root/'tools/build_ru_road_arrows.py')
+        generator = importlib.util.module_from_spec(module)
+        module.loader.exec_module(generator)
+        generated = generator.build()
+        with Image.open(root/'mod/texture_sources/levels/beamng_earth/art/roadmarkings/bne_ru_arrows.data.webp') as source:
+            np.testing.assert_array_equal(np.asarray(generated), np.asarray(source.convert('L')))
+        cells = [generated.crop(((i%4)*128,(i//4)*128,(i%4+1)*128,(i//4+1)*128)).tobytes() for i in range(14)]
+        self.assertEqual(len(set(cells)), 14)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -6468,10 +6468,13 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                 for piece, before in _lane_runs(along, from_edge - missing):
                     mark("lane", "line_white", lw_ * (2 if auxiliary else 1), piece, pattern,
                          dash_phase=phase + before)
+            elif role == "twltl" and st is markings.STYLES["RU"]:
+                # Shared turn-lane tags do not establish a Russian reversible-lane marking scheme.
+                continue
             elif role == "twltl":           # solid on the through side, broken on the turn lane's (MUTCD 3B.05)
                 mark("centre", st.centre, lw_, at(off + how * d))
                 mark("centre", st.centre, lw_, at(off - how * d), cpat)
-            elif how == "double" or ((sweden or russian_double) and lanes >= 4 and how is None):
+            elif how == "double" or (role == "centre" and russian_double) or (sweden and lanes >= 4 and how is None):
                 if st.warning and w < markings.WARNING_BELOW_M:
                     mark("centre", st.centre, lw_, at(off), st.warning)
                 elif st.centre == "line_yellow" or sweden or russian_double or st is markings.STYLES.get("GB"):
@@ -11829,11 +11832,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             continue
         drv, nl = lane_layout(spec)
         lane_pts = offset_polyline(pts, driving_offset(spec)) if highway_shoulders(spec) else pts
-        for centre, t, kind_ in markings.arrows(tags, lane_pts, not spec.oneway, drv, nl, left_hand):
-            corners, uv = markings.arrow_quad(centre, t, kind_)
+        for centre, t, kind_ in markings.arrows(tags, lane_pts, not spec.oneway, drv, nl, left_hand, country=line_country):
+            corners, uv = markings.arrow_quad(centre, t, kind_, country=line_country, speed_kmh=spec.kmh)
             if (corners[:, 0].max() >= wexact[0] and corners[:, 0].min() < wexact[2]
                     and corners[:, 1].max() >= wexact[1] and corners[:, 1].min() < wexact[3]):
-                chunks.append({"m": markings.ARROW_MATERIAL, "w": 0.0, "tl": 4.0, "p": CENTRE["p"], "layer": "mark",
+                chunks.append({"m": markings.arrow_material(line_country), "w": 0.0, "tl": 4.0, "p": CENTRE["p"], "layer": "mark",
                                "poly": [[round(float(v), 3) for v in q] for q in corners],
                                "uvq": uv.tolist(), "n": []})
     for tri in teeth:

@@ -22,13 +22,14 @@ import roads
 import signroads
 import speedsigns
 
-KERNEL = 175                    # earthfast VERSION with road_sign_place / road_sign_mesh
+KERNEL = 307                    # earthfast VERSION with road_sign_place / road_sign_mesh
 ON = os.environ.get("BNE_ROADSIGNS", "off") == "on"
 NL_ON = os.environ.get("BNE_NL_ROADSIGNS", "off") == "on"
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5, "rect": 6}
 METAL = "bne_exit_metal"
 FLAG_RING, FLAG_LIVING, FLAG_FOOT, FLAG_CYCLE = 1, 2, 4, 8     # roadsigns.rs
+FLAG_DIVIDED = 32             # suppress only synthetic one-way information signs
 POI_GIVE_WAY, POI_STOP, POI_BUS_STOP, POI_PARKING, POI_TUNNEL = 0, 1, 2, 3, 4
 POI_CLASSES = {"give_way": POI_GIVE_WAY, "stop": POI_STOP, "bus_stop": POI_BUS_STOP, "parking_entrance": POI_PARKING}
 PATH_CLASSES = {"pedestrian": FLAG_FOOT, "cycleway": FLAG_CYCLE}     # roads cars do not drive, kept for the signs that enter them
@@ -270,13 +271,23 @@ def cell_rings(feats, frame, urban, widths, left_hand, mph, rows):
     return got
 
 
-def with_flags(rows, living, ring, repeat_oneway=False):
+def divided_ids(feats, urban, widths, left_hand):
+    """Reuse the renderer's paired-carriageway evidence, not oneway alone."""
+    specs = signroads.cell_specs(feats, urban, widths, left_hand)
+    return {str(feats.ids[i]) for i, sp in enumerate(specs)
+            if sp is not None and sp.oneway and sp.median is not None
+            and np.isfinite(sp.median) and sp.median > 0.0}
+
+
+def with_flags(rows, living, ring, repeat_oneway=False, divided=(), disabled=0):
     """[(row, meta, flags)] of {fid: speedsigns row}: the roundabout rings (ring: {fid: way round}) and the living streets, a
     living street ranked as a street."""
     out = []
     for fid, row in rows.items():
         meta = list(row[2])
-        flags = 16 if repeat_oneway else 0
+        flags = (16 if repeat_oneway else 0) | (int(disabled) << 6)
+        if fid in divided:
+            flags |= FLAG_DIVIDED
         if fid in ring:
             flags |= FLAG_RING
             meta[1] = float(ring[fid])
@@ -356,11 +367,14 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
     m = speedsigns.MARGIN_M
     la, lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m]), np.array([y0 - m, y1 + m]), 0.0)
     rows, cells, living, ring, paths, portals = {}, [], set(), {}, {}, []
+    divided = set()
     for key in mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max())):
         feats = context.cell(key)
         if feats is None or not len(feats):
             continue
         cells.append(feats)
+        if sys_row.get("atlas") == "vienna_ru":
+            divided |= divided_ids(feats, context.urban, context.widths, left_hand)
         living |= living_ids(feats, frame, context.urban, context.widths, left_hand)
         own = speedsigns._cell_rows(feats, frame, context.urban, context.widths, left_hand, mph)
         for fid, row in own.items():
@@ -368,7 +382,10 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
         ring.update(cell_rings(feats, frame, context.urban, context.widths, left_hand, mph, own))
         paths.update(path_rows(feats, frame))
         portals.append(tunnel_portals(feats, own))
-    got = arrays(with_flags(rows, living, ring, sys_row.get("repeat_oneway", False)) + [v for k, v in paths.items() if k not in rows], box)
+    disabled = sum(1 << i for i, name in enumerate(tables()[1]["rules"])
+                   if name in sys_row.get("off", ())) if sys_row.get("atlas") == "vienna_ru" else 0
+    path_flags = [(row, meta, flags | (disabled << 6)) for k, (row, meta, flags) in paths.items() if k not in rows]
+    got = arrays(with_flags(rows, living, ring, sys_row.get("repeat_oneway", False), divided, disabled) + path_flags, box)
     if got is None:
         return np.zeros((0, 11))
     pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off = got

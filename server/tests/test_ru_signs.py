@@ -83,3 +83,24 @@ class RussianSignsTest(TestCase):
             inferred.assert_not_called()
             self.assertIs(result,mesh)
             self.assertEqual(pictures,{'face':'face.dds'})
+
+    def test_motorway_crossing_ramp_and_opposite_carriageway_do_not_colour_a_board_green(self):
+        style = dirsigns.styles()['countries']['RU']
+        board = [0, 0, 1, 0, 10, 0, 0, 2]
+        for line, direction, link in [(np.array([[10., -50.], [10., 50.]]), 1, 0),
+                                      (np.array([[0., 0.], [100., 0.]]), 1, 1),
+                                      (np.array([[0., 0.], [100., 0.]]), -1, 0)]:
+            with self.subTest(direction=direction, link=link, line=line.tolist()):
+                rows = {'r': (line, line, (5, direction, 7, 0, link), [], [], [])}
+                self.assertEqual(dirsigns.board_kind(style, 'freeway', board, rows), 'road')
+        line = np.array([[0., 0.], [100., 0.]])
+        self.assertEqual(dirsigns.board_kind(style, 'freeway', board,
+                         {'r': (line, line, (5, 1, 7, 0, 0), [], [], [])}), 'freeway')
+
+    def test_regional_reference_normalization_does_not_rewrite_destination_names(self):
+        for raw, want in [('65K-001', '65К-001'), ('65H-123', '65Н-123'), ('65А-001', '65А-001'),
+                          ('E22', 'E22'), ('I-65', 'I-65'), ('Kazan', 'Kazan')]:
+            self.assertEqual(rusigns.route_ref(raw), want)
+        value = rusigns.content({'kind': 'advance', 'side': 1,
+                                 'label': {'names': ['Kazan'], 'routes': ['65K-001']}})
+        self.assertEqual(value[2], [('Kazan', '', '')])

@@ -139,13 +139,63 @@ class Rules(unittest.TestCase):
         (row, meta, flags), = roadsigns.with_flags(rows, set(), {})
         self.assertEqual((flags, meta[2]), (0, 0.0))
 
-    def test_russian_oneway_repetition_reaches_the_native_flags(self):
+    def test_russian_oneway_does_not_repeat_at_every_ordinary_junction(self):
         rows = {'x': self.row([[0., 0.], [100., 0.]], 1.)}
         (_, _, flags), = roadsigns.with_flags(rows, set(), {},
                                              repeat_oneway=roadsigns.system('RU')['repeat_oneway'])
-        self.assertEqual(flags, 16)
+        self.assertEqual(flags, 0)
         (_, _, flags), = roadsigns.with_flags(rows, set(), {})
         self.assertEqual(flags, 0)
+
+
+    def test_divided_carriageways_reuse_road_model_without_changing_direction(self):
+        from test_roads import FRAME, features
+        f = features([[(0, 0), (300, 0)], [(300, 20), (0, 20)]], ['primary'] * 2)
+        f.attrs['name'] = np.array(['Проспект', 'Проспект'])
+        divided = roadsigns.divided_ids(f, None, None, False)
+        self.assertEqual(divided, set(map(str, f.ids)))
+        import speedsigns
+        rows = speedsigns._cell_rows(f, FRAME, None, None, False, False)
+        flagged = roadsigns.with_flags(rows, set(), {}, True, divided)
+        for row, meta, flags in flagged:
+            self.assertEqual(meta[1], row[2][1], 'traffic direction remains unchanged')
+            self.assertTrue(flags & roadsigns.FLAG_DIVIDED)
+            self.assertTrue(flags & 16)
+
+    def test_width_and_oneway_alone_do_not_make_a_divided_road(self):
+        from test_roads import features, rules
+        f = features([[(0, 0), (300, 0)], [(300, 20), (0, 20)]], ['primary'] * 2,
+                     widths=[(0, 16.), (1, 16.)])
+        f.attrs['name'] = np.array(['Улица А', 'Улица Б'])
+        f.rules['oneway'] = rules([(0, 1.), (1, 1.)], 'float')
+        self.assertEqual(roadsigns.divided_ids(f, None, None, False), set())
+        flagged = roadsigns.with_flags({'x': self.row([[0., 0.], [300., 0.]], 1.)}, set(), {}, True)
+        self.assertEqual(flagged[0][2], 16, 'a standalone wide one-way street keeps its signs')
+
+    def test_divided_suppression_is_scoped_to_russian_signs(self):
+        from test_roads import FRAME, features
+        from unittest import mock
+        f = features([[(-400., 0.), (400., 0.)]], ['residential'])
+        context = types.SimpleNamespace(urban=None, widths=None, cell=lambda key: f,
+                                       pavements=lambda *args: types.SimpleNamespace(plans={}, outlines=[]))
+        md = types.SimpleNamespace(cell=lambda *args, **kwargs: types.SimpleNamespace(layers={}))
+        for country in ('RU', 'DE', 'UA'):
+            with self.subTest(country=country), mock.patch.object(roadsigns, 'divided_ids', return_value={'id000'}) as identify, \
+                    mock.patch.object(roadsigns.fast._ef, 'road_sign_place', wraps=roadsigns.fast._ef.road_sign_place) as native:
+                roadsigns.place(md, FRAME, (-450., -50., 450., 50.), context, False, False, roadsigns.system(country))
+                flags = native.call_args.args[3][:, -1].astype(int)
+                self.assertEqual(bool((flags & roadsigns.FLAG_DIVIDED).any()), country == 'RU')
+                self.assertEqual(identify.called, country == 'RU')
+
+    def test_russian_profile_rejects_unproven_zone_and_priority_claims(self):
+        rules = roadsigns.tables()[1]['rules']
+        signs = np.zeros((len(rules), 11)); signs[:, 4] = np.arange(len(rules))
+        ru = roadsigns.supported(signs, roadsigns.system('RU'))
+        shown = {rules[int(v)] for v in ru[:, 4]}
+        self.assertTrue({'prio.stop', 'prio.give_way', 'info.crossing_right', 'info.living_street'} <= shown)
+        self.assertTrue({'warn.side_right', 'warn.side_left', 'info.pedestrian_zone', 'info.tunnel'}.isdisjoint(shown))
+        de = roadsigns.supported(signs, roadsigns.system('DE'))
+        self.assertEqual(len(de), len(signs), 'other countries retain their existing rules')
 
 
 class Poles(unittest.TestCase):
