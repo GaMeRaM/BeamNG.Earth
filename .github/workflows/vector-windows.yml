@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       build_native:
-        description: Rebuild native kernels (disable only for Python-only hotfixes using the checked-in module)
+        description: Rebuild native kernels (disable only when checked-in modules match the current native sources)
         type: boolean
         default: true
       worker_check_run:
@@ -92,6 +92,8 @@ jobs:
         run: python tools/run_tests.py test_native_threads test_paintlist test_ground_rules test_chain_short test_chainview_prefer test_subsea_final test_stale_revisit test_build_decisions test_server_list test_preload_place test_enu_ahead test_regional_geotiles test_decisions test_latework test_enginepatch_terfast test_aerialpacks test_base_photo_revisit test_blockcache test_bnwt test_farrestore test_photo_lawns_in_use test_revisit_scopes test_world_reset test_border_welcomes test_determinism test_drivability test_laned_streets test_launcher_lifecycle test_launcher_linux test_launcher_update test_mapdata_singleflight test_median_noses test_navgraph test_osmwelcomes test_photo_sources test_places_api test_plan_order test_pmtiles test_poles_on_roads test_protocol_agreement test_rail_underpass_signs test_rails test_recreation_expansion test_reportsend test_restart test_revisit test_roadwidth test_route_retry test_routing test_rural_lighting test_selfupdate test_travelboards test_v131_default test_memwatch test_portals test_road_clearance test_roadlayercache test_speed242 test_tilecuts test_deckjoins test_deckpad_levels test_warm_queue test_abandon test_reach test_revisit_side test_revisitpack test_grade_binned test_farpvs test_ground_standin test_ground_square test_far_first test_halo_reads test_enginepatch test_prov_refresh test_veg_geo_jobs test_netfetch test_threedmr test_netstate test_imagery test_osm_tag_shards test_lod2roofs test_nycmassing test_railtags --par 2 --timeout 600 --logs build/road-integration-tests
       - name: Imported search, horizon and imagery recovery checks
         run: python tools/run_tests.py test_areas test_countrybounds test_credits test_graphics test_retex --par 2 --timeout 600 --logs build/road-integration-tests
+      - name: Generated ground and roofs regression checks
+        run: python tools/run_tests.py test_genground test_genground_roofs test_genground_v2 --par 2 --timeout 180 --logs build/road-integration-tests
       - name: Synthetic server sessions
         run: python tools/run_tests.py test_server --par 1 --timeout 600 --logs build/road-integration-tests
       - name: Reported world geometry regressions
@@ -130,6 +132,7 @@ jobs:
           head -3 help.txt
           "$f" --world-cache --help > world-cache-help.txt
           "$f" --run-addon tools/check_worker_pools.py
+          BNE_GEN_GROUND=on "$f" --run-addon tools/check_generated_ground.py
       - name: Package source and BeamMP mod
         run: python tools/package.py --out dist --beammp
       - uses: actions/upload-artifact@v4

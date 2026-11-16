@@ -116,6 +116,8 @@ mod par;
 mod bc1fast;
 mod l0roads;
 mod groundphoto;
+mod genground;
+mod ggshapes;
 mod layerfold;
 mod roadsurf;
 mod levelways;
@@ -6467,6 +6469,17 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // tile endpoint: server/mtarchive.py)
     m.add_function(wrap_pyfunction!(pmtiles::pmt_find_many, m)?)?;
     m.add_function(wrap_pyfunction!(pmtiles::pmt_ranges, m)?)?;
-    m.add("VERSION", 307)?;
+    // 306: genground::gg_fill_polys / gg_regions / gen_ground (the generated ground, BNE_GEN_GROUND: a block's 1 m base
+    // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
+    genground::register(m)?;
+    // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
+    // (Codex review of 306: overlapping blocks drew the same ground in other colours)
+    // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
+    // gen_ground(..., poly, pdir, pphase, ...), ggshapes::gg_fill_lines / gg_poly_axes
+    ggshapes::register(m)?;
+    // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
+    // out (Codex review of 308)
+    // 310: fork build combines upstream generated ground with Russian sign rule masks / divided carriageways.
+    m.add("VERSION", 310)?;
     Ok(())
 }
