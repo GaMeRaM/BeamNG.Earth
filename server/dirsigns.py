@@ -292,7 +292,7 @@ def board_kind(style, kind, board, rows):
         norm = float(dnp.norm(direction))
         if norm < 1e-9:
             continue
-        dot = tangent @ (direction / norm)
+        dot = dnp.dot(tangent, direction / norm)
         aligned = dot * int(meta[1]) > 0.8 if int(meta[1]) else np.abs(dot) > 0.8
         if np.any(aligned & (np.sum(dnp.sq(a + frac[:, None] * delta - q), axis=1) < 0.25)):
             return 'freeway'
