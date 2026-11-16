@@ -254,7 +254,7 @@ class ResolveTest(Tmp):
     def test_one_steam_copy_nothing_chosen_is_as_before(self):
         self.copies = [GI.Install(self.steam_copy, "steam", "steam")]
         la = launcher.resolve_launch(args(), "/u/BeamNG.drive/current", "native", ask=self.no_ask)
-        self.assertEqual((la.mode, la.chosen, la.exe, la.user_base), ("steam", "auto", None, "/u/BeamNG.drive"))
+        self.assertEqual((la.mode, la.chosen, la.exe, la.user_base), ("steam", "auto", None, os.path.normpath("/u/BeamNG.drive")))
         self.assertEqual(apppaths.app_settings(), {})        # (nothing written)
 
     def test_several_copies_the_player_picks(self):
@@ -329,7 +329,7 @@ class ResolveTest(Tmp):
     def test_game_mode_keeps_its_start(self):
         apppaths.set_launch_mode("direct")
         self.copies = [GI.Install(self.steam_copy, "steam", "ini"), GI.Install(self.epic_copy, "epic", "epic")]
-        with mock.patch.object(launcher, "under_gamescope", return_value=True):
+        with mock.patch.object(launcher, "IS_WIN", False), mock.patch.object(launcher, "under_gamescope", return_value=True):
             la = launcher.resolve_launch(args(), "/u/current", "native", ask=self.no_ask)
         self.assertEqual(la.mode, "steam")
 
