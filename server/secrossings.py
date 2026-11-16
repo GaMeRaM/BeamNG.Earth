@@ -43,10 +43,10 @@ M16_SIDE, M16_GAP, M16_RIDE = 0.50, 0.50, 2.5
 
 def wanted(country, de=False):
     """Whether a place's road tiles and road graph read the map's crossing, stop and give-way nodes (read): Sweden's
-    always (its paint and signs are the map's), Germany's when its junction signs are on (de: the setting on and the
+    always (its paint and signs are the map's), Russia's mapped crossings too, Germany's when its junction signs are on (de: the setting on and the
     junctions the tile decides, or the graph's window, reaching into Germany: designs.reads_here; the country code
-    alone is the nearest airport's). Nowhere else: no read, the guesses as before."""
-    return str(country or "").upper() == "SE" or bool(de)
+    comes from the country selector). Nowhere else: no read, the guesses as before."""
+    return str(country or "").upper() in {"SE", "RU"} or bool(de)
 
 
 def _marks(tags):
@@ -123,10 +123,14 @@ def nodes(frame, infra_list):
         ll = np.array([q[1] for q in found], np.float64)
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([np.asarray(e), np.asarray(n)])
-    crossings, lines, priority, zebras, signals, de, refuges = [], [], [], [], [], [], []
+    crossings, lines, priority, zebras, signals, de, refuges, ru = [], [], [], [], [], [], [], []
     for (cls, _, tag), p in zip(found, xy if found else ()):
         if cls == "crossing":
             crossings.append((float(p[0]), float(p[1]), paint(tag)))
+            import roadsigns
+            ru.append((float(p[0]), float(p[1]), M15 if roadsigns.is_marked_crossing(
+                json.dumps(tag), include_signals=True) and tag.get("crossing:markings") not in
+                {"no", "surface", "lines", "dots", "dashes"} else 0))
             de.append((float(p[0]), float(p[1]), de_paint(tag)))
             if str(tag.get("crossing:island", "")).lower() == "yes":      # (a refuge in the road: a splitter island, plan 038)
                 refuges.append((float(p[0]), float(p[1])))
@@ -143,7 +147,7 @@ def nodes(frame, infra_list):
         return any(math.hypot(z[0] - q[0], z[1] - q[1]) < SIGNALS_NEAR_M for q in signals)
     zebras = [z for z in zebras if not lit(z)]
     de = [(x, y, 0 if w and lit((x, y)) else w) for x, y, w in de]
-    return {"crossings": crossings, "zebras": zebras, "de_crossings": de, "islands": refuges,
+    return {"crossings": crossings, "ru_crossings": ru, "zebras": zebras, "de_crossings": de, "islands": refuges,
             "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
             "priority": np.array(priority, np.float64).reshape(-1, 3)}
 
@@ -170,7 +174,7 @@ def _squares(mid, u, n, half, z):
     return out
 
 
-def place(roads, found, on=None):
+def place(roads, found, on=None, min_width=None):
     """(crosswalks [{"a", "b", "w"[, "paint": False]}], squares [(4, 3)], ramps {(fid, side): [(point, u, t0, t1)]}) of the
     crossing nodes in found (nodes) on the paved roads in roads [(fid, spec, centreline (k, 3), lon)]: square to the road
     from kerb to kerb, a crosswalk without paint standing for M16's band so the lines stop at it too. Crossing and cycle
@@ -207,9 +211,12 @@ def place(roads, found, on=None):
         n = np.array([-u[1], u[0]])
         z = float(a[i, 2] + t[i] * (b[i, 2] - a[i, 2]))
         half = spec.width / 2
-        for side in (1, -1):
-            ramps.setdefault((fid, side), []).append((c.copy(), u, -M15_L / 2, M15_L / 2))
         long_ = M15_FAST_L if (spec.kmh or 0.0) > M15_FAST_KMH else M15_L
+        if min_width is not None:
+            long_ = max(long_, min_width)
+        ramp_width = long_ if min_width is not None else M15_L
+        for side in (1, -1):
+            ramps.setdefault((fid, side), []).append((c.copy(), u, -ramp_width / 2, ramp_width / 2))
         band = M16_RIDE + 2 * M16_SIDE              # M16's: from the outer edge of one row to the other's
         at_m15 = -band / 2 if what == M15 | M16 else 0.0
         at_m16 = long_ / 2 if what == M15 | M16 else 0.0

@@ -11698,6 +11698,25 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if walks is not None:
         import railways
         rail_cuts = railways.walk_cut_lines(frame, cells, own_box)
+    if str(country or "").upper() == "RU":
+        # Stop control is independent of curb/crosswalk construction. Use the
+        # same incoming arms as the traffic props, including roads without walks.
+        import furniture
+        import markings as _ru_marks
+        crosswalks = [cw for cw in crosswalks if not cw.get("stop")]
+        if nodes is not None:
+            import secrossings as _ru_cross
+            # Same source-node eligibility as RU crossing signs, including signals.
+            crosswalks, _, mapped_ramps = _ru_cross.place(
+                roads, dict(nodes, crossings=nodes.get("ru_crossings", [])), min_width=4.0)
+            zebras = [(np.array([cw["a"], cw["b"]])[:, :2], cw["w"] / 2) for cw in crosswalks]
+            for key, ranges in mapped_ramps.items():
+                jramps.setdefault(key, []).extend(ranges)
+        ru_stops, jlines = _ru_marks.stop_lines(
+            furniture.give_way_arms(roads, signals, country, priority, stops=True),
+            crosswalks, mapped=nodes.get("stop_lines") if nodes is not None else None,
+            left_hand=left_hand, w=0.4)
+        crosswalks.extend(ru_stops)
     if str(country or "").upper() == "SE":
         import furniture
         import markings as _gw
@@ -11812,19 +11831,19 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 for fill in ([] if ROADS_IN_GROUND else ([c["fill"]] if c["fill"] is not None else []) + c.get("fills", [])):
                     chunks.append({"m": fill_look["m"], "w": 0.0, "tl": fill_look["tl"], "p": fill_look["p"],
                                    "poly": [[round(float(v), 3) for v in q] for q in fill], "n": []})
-        import markings as _mk
-        ladder = _mk.style(line_country, float(np.mean([r[3] for r in roads])) if roads else None).ladder
-        for cw in crosswalks:                   # crosswalks and stop lines
-            mid = 0.5 * (cw["a"] + cw["b"])
-            if skin_own(mid[0], mid[1]) and cw.get("paint", True):
-                look = junctions.STOP_LINE if cw.get("stop") else cw.get("look", crosswalk_look)
-                ab = np.array([cw["a"], cw["b"]])
-                chunks.append(_chunk(look, cw["w"], ab))
-                if ladder and not cw.get("stop"):
-                    # a ladder crosswalk (MUTCD 3C.07, Baltimore's on the MD iMAP 3-inch aerial): a solid line along
-                    # each side of the bars
-                    for sd in (1, -1):
-                        chunks.append(_chunk(EDGE_LINE, LADDER_LINE_W, offset_polyline(ab, sd * cw["w"] / 2)))
+    import markings as _mk
+    ladder = _mk.style(line_country, float(np.mean([r[3] for r in roads])) if roads else None).ladder
+    for cw in crosswalks:                   # crosswalks and stop lines
+        mid = 0.5 * (cw["a"] + cw["b"])
+        if skin_own(mid[0], mid[1]) and cw.get("paint", True):
+            look = junctions.STOP_LINE if cw.get("stop") else cw.get("look", crosswalk_look)
+            ab = np.array([cw["a"], cw["b"]])
+            chunks.append(_chunk(look, cw["w"], ab))
+            if ladder and not cw.get("stop"):
+                # a ladder crosswalk (MUTCD 3C.07, Baltimore's on the MD iMAP 3-inch aerial): a solid line along
+                # each side of the bars
+                for sd in (1, -1):
+                    chunks.append(_chunk(EDGE_LINE, LADDER_LINE_W, offset_polyline(ab, sd * cw["w"] / 2)))
     import markings
     for fid, spec, pts, lon in roads:               # turn arrows (OpenStreetMap turn:lanes; MUTCD 3B.20)
         tags = lane_tags(*seen[fid][:2]) if fid in seen else None

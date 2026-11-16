@@ -78,18 +78,25 @@ def widest(sizes):
     return max(max(v) for v in sizes.values())
 
 
-def is_marked_crossing(tags):
-    """Whether a crossing node's OSM tags state a marked crossing without signals."""
+def is_marked_crossing(tags, include_signals=False):
+    """A mapped crossing eligible for signs; RU includes signalized crossings."""
     if not tags:
         return False
     try:
         t = json.loads(tags)
     except ValueError:
         return False
-    if t.get("highway") != "crossing" or t.get("crossing:markings") == "no" or t.get("crossing:signals") == "yes":
+    if t.get("highway") != "crossing":
         return False
     if t.get("foot") == "no":
         return False
+    signal = t.get("crossing:signals") == "yes" or t.get("crossing") in {"traffic_signals", "signals"}
+    if t.get("crossing:markings") == "no" and not (include_signals and signal):
+        return False
+    if signal:
+        return include_signals
+    if include_signals and t.get("crossing:markings") in {"yes", "zebra", "lines", "surface"}:
+        return True
     return t.get("crossing") in CROSSING_KINDS or t.get("crossing_ref") == "zebra"
 
 
@@ -110,9 +117,9 @@ def points(frame, cells, wanted):
     return np.ascontiguousarray(np.column_stack([e, n]), np.float64)
 
 
-def crossings(frame, cells):
+def crossings(frame, cells, include_signals=False):
     """(n, 2) of the marked crossings of infrastructure cells, in frame, each once."""
-    return points(frame, cells, {"crossing": is_marked_crossing})
+    return points(frame, cells, {"crossing": lambda tags: is_marked_crossing(tags, include_signals)})
 
 
 def signals(frame, cells):
@@ -402,7 +409,7 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
         if keep:
             drop = (poi[:, 2] == POI_BUS_STOP) & keep.contains(poi[:, :2])
             poi = np.ascontiguousarray(poi[~drop], np.float64)
-    got = fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra),
+    got = fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra, sys_row.get("atlas") == "vienna_ru"),
                                     signals(frame, infra), open_ends(frame, cells), poly, poly_off, [float(v) for v in box],
                                     bool(left_hand), [float(v) for v in sys_row["lateral"]], float(widest(sizes)),
                                     params(sys_row), speed_signs(frame, box, context, left_hand, mph), pole_params(sys_row),

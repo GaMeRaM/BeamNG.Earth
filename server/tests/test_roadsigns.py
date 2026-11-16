@@ -415,3 +415,25 @@ class Mesh(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RussianControlledCrossings(unittest.TestCase):
+    def test_marked_and_signalized_variants(self):
+        for extra in [{'crossing':'traffic_signals'}, {'crossing:signals':'yes'},
+                      {'crossing:markings':'zebra'}, {'crossing':'marked','crossing:signals':'yes'}]:
+            tags = json.dumps({'highway':'crossing', **extra})
+            self.assertTrue(roadsigns.is_marked_crossing(tags, include_signals=True))
+
+    def test_explicit_exclusions_win(self):
+        for extra in [{'foot':'no'}]:
+            tags = json.dumps({'highway':'crossing','crossing':'traffic_signals',**extra})
+            self.assertFalse(roadsigns.is_marked_crossing(tags, include_signals=True))
+        self.assertFalse(roadsigns.is_marked_crossing(json.dumps({'highway':'traffic_signals'}),True))
+
+    def test_existing_other_country_filter_stays(self):
+        self.assertFalse(roadsigns.is_marked_crossing(json.dumps({'highway':'crossing','crossing':'traffic_signals'})))
+
+    def test_signal_crossing_sign_does_not_require_paint(self):
+        tags=json.dumps({'highway':'crossing','crossing':'traffic_signals','crossing:markings':'no'})
+        self.assertTrue(roadsigns.is_marked_crossing(tags, include_signals=True))
+        self.assertFalse(roadsigns.is_marked_crossing(tags))

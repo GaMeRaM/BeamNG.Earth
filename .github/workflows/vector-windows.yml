@@ -75,6 +75,8 @@ jobs:
           node --test mod/tests/test_ui_lifecycle.mjs mod/tests/test_restart_box.mjs mod/tests/test_vectorresources.mjs mod/tests/test_mapmath.mjs mod/tests/test_mapsearch.mjs mod/tests/test_paste.mjs
       - name: Russian signs and native rendering checks
         run: |
+          python -m unittest discover -s server/tests -p test_ru_stop_lines.py
+          python -m unittest discover -s server/tests -p test_secrossings.py
           python -m unittest discover -s server/tests -p test_ru_signs.py
           python -m unittest discover -s server/tests -p test_ru_infrastructure.py
           python -m unittest discover -s server/tests -p test_roadsigns.py
