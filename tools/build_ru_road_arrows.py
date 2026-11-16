@@ -37,14 +37,17 @@ def build():
             triple = kind == 'left_right_through'
             # Shaft 0.15 m, straight head 0.75 m wide and 2.05 m long.
             tip = L + (2.05 if triple else 0)
-            polygon([(-.075, 0), (.075, 0), (.075, d2 + .15), (-.075, d2 + .15)])
+            stem_end = d2 - (2.05 if 'through' in kind and not triple else 0)
+            polygon([(-.075, 0), (.075, 0), (.075, stem_end), (-.075, stem_end)])
             if 'through' in kind:
                 polygon([(-.075, 0), (.075, 0), (.075, tip-2.05),
                          (.375, tip-2.05), (0, tip), (-.375, tip-2.05), (-.075, tip-2.05)])
             # Angled turn head (45 degrees), lateral extent 1.05 m from
             # the stem's outer edge; shared stem for combined directions.
-            turn = [(-.075,d2), (.675,d2+a1), (.675,L),
-                    (1.125,d2+a1+b), (.375,d2), (.075,d2-.3)]
+            turn = [(-.075,d2+a1+b), (.675,L-a2), (.675,L),
+                    (.975,d2+a1+b), (.675,d2), (.675,d2+a1), (.075,d2), (-.075,d2)]
+            if 'through' in kind and not triple:
+                turn = [(px, py-2.05) for px,py in turn]
             if 'left' in kind:
                 polygon(turn)
             if 'right' in kind:
