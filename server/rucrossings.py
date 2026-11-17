@@ -148,7 +148,7 @@ def layout(roads, nodes, signals=None, priority=None, left_hand=False, fallback=
                 go /= max(float(dnp.norm(go)), 1e-9)
                 if any(
                     float(dnp.norm((x["a"][:2] + x["b"][:2]) / 2 - centre)) < 20.0
-                    and float(np.dot((x["b"] - x["a"])[:2], np.array([go[1], -go[0]])))
+                    and float(dnp.dot((x["b"] - x["a"])[:2], np.array([go[1], -go[0]])))
                     > 0.0
                     for x in stops
                 ):
