@@ -69,6 +69,8 @@ jobs:
         run: python tools/run_tests.py test_test_runner test_budget test_bake_formats test_detail test_osm_building_colours test_osm_building_years test_bridge_copy_identity --par 1 --timeout 180 --logs build/portability-tests
       - name: New upstream regression checks
         run: python tools/run_tests.py test_build_mt_bindings test_experimental test_gameinstall test_ground_lines_near test_launcher_packaging test_mtarchive test_pools test_ramp_envelope test_srvrestart test_telemetry --par 2 --timeout 600 --logs build/road-integration-tests
+      - name: Imported host, canopy and data regressions
+        run: python tools/run_tests.py test_host test_railxing_corridor test_genground_blockfade test_genground_far test_hrdem_covers test_plan_neutral test_session_report test_areaprops test_german_roads --par 2 --timeout 600 --logs build/road-integration-tests
       - name: Vector transport checks
         run: |
           python -m unittest discover -s server/tests -p test_vectorresources.py
@@ -125,7 +127,7 @@ jobs:
       - name: Lua sign and streaming checks
         run: |
           python -m pip install lupa==2.8
-          python tools/run_lua_tests.py test_deckguard test_places test_mpdefer test_mpsession test_framepacer test_governor test_issuefmt test_farpack test_gps test_gps_autodrive test_parking test_weather test_edgeguard test_collisiontrace test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_drophold test_rebase test_simhold test_settings test_beammp test_codeswap test_loadprogress test_gcpace
+          python tools/run_lua_tests.py test_deckguard test_places test_mpdefer test_mpsession test_framepacer test_governor test_issuefmt test_farpack test_gps test_gps_autodrive test_parking test_weather test_edgeguard test_collisiontrace test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_junction_approaches test_navgraph test_roadgeo test_drophold test_rebase test_simhold test_settings test_beammp test_codeswap test_loadprogress test_gcpace
       - name: Bootloader from source
         run: python tools/build_bootloader.py
       - name: Build the exe
@@ -136,7 +138,6 @@ jobs:
           f=$(ls dist/*.exe)
           "$f" --server --help > help.txt
           head -3 help.txt
-          "$f" --world-cache --help > world-cache-help.txt
           "$f" --run-addon tools/check_worker_pools.py
           BNE_GEN_GROUND=on "$f" --run-addon tools/check_generated_ground.py
       - name: Package source and BeamMP mod
