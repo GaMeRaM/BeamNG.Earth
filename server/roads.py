@@ -11702,21 +11702,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         # Stop control is independent of curb/crosswalk construction. Use the
         # same incoming arms as the traffic props, including roads without walks.
         import furniture
-        import markings as _ru_marks
         crosswalks = [cw for cw in crosswalks if not cw.get("stop")]
-        if nodes is not None:
-            import secrossings as _ru_cross
-            # Same source-node eligibility as RU crossing signs, including signals.
-            crosswalks, _, mapped_ramps = _ru_cross.place(
-                roads, dict(nodes, crossings=nodes.get("ru_crossings", [])), min_width=4.0)
-            zebras = [(np.array([cw["a"], cw["b"]])[:, :2], cw["w"] / 2) for cw in crosswalks]
-            for key, ranges in mapped_ramps.items():
-                jramps.setdefault(key, []).extend(ranges)
-        ru_stops, jlines = _ru_marks.stop_lines(
-            furniture.give_way_arms(roads, signals, country, priority, stops=True),
-            crosswalks, mapped=nodes.get("stop_lines") if nodes is not None else None,
-            left_hand=left_hand, w=0.4)
-        crosswalks.extend(ru_stops)
+        import rucrossings
+        ru = rucrossings.layout(roads, nodes, signals, priority, left_hand, crosswalks)
+        crosswalks = ru['crosswalks']
+        zebras = [(np.array([cw['a'], cw['b']])[:, :2], cw['w'] / 2) for cw in crosswalks]
+        for key, ranges in ru['ramps'].items():
+            jramps.setdefault(key, []).extend(ranges)
+        jlines = ru['cuts']
+        crosswalks.extend(ru['stops'])
     if str(country or "").upper() == "SE":
         import furniture
         import markings as _gw
@@ -11833,7 +11827,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                    "poly": [[round(float(v), 3) for v in q] for q in fill], "n": []})
     import markings as _mk
     ladder = _mk.style(line_country, float(np.mean([r[3] for r in roads])) if roads else None).ladder
-    for cw in crosswalks:                   # crosswalks and stop lines
+    painted_crosswalks = rucrossings.paint_stripes(crosswalks) if str(country or "").upper() == "RU" else crosswalks
+    for cw in painted_crosswalks:                   # crosswalks and stop lines
         mid = 0.5 * (cw["a"] + cw["b"])
         if skin_own(mid[0], mid[1]) and cw.get("paint", True):
             look = junctions.STOP_LINE if cw.get("stop") else cw.get("look", crosswalk_look)

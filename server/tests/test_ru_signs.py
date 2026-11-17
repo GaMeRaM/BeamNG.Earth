@@ -104,3 +104,10 @@ class RussianSignsTest(TestCase):
         value = rusigns.content({'kind': 'advance', 'side': 1,
                                  'label': {'names': ['Kazan'], 'routes': ['65K-001']}})
         self.assertEqual(value[2], [('Kazan', '', '')])
+
+    def test_posted_exit_accepts_actual_short_signroad_spec(self):
+        import signroads
+        spec = signroads.Spec(10., 'motorway', True, 1, False)
+        line = np.array([[0., 0., 0.], [100., 0., 0.]])
+        sign = {'travel': [1., 0.], 'road_point': [10., 0.]}
+        self.assertEqual(rusigns.board_kind(sign, [('r', spec, line, 0.)]), 'freeway')

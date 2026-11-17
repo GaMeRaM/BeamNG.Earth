@@ -92,6 +92,14 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
     dir_mesh, dir_faces = (_dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, aid,
                                  autobahn=german, country=country, directions=dirs) if dirs or country == "RU" else (None, {}))
     rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country) if rsigns else None
+    if rsigns and str(country or '').upper() == 'RU':
+        import rucrossings, rusigns
+        result = _optional('Russian crossing boundaries', rucrossings.build_tile,
+                           md, frame, tx, ty, elev, context, out_dir, vfs_dir, left_hand, decks)
+        if result is not None and len(result) == 3:
+            pairs, plates, pictures = result
+            rsign_mesh = rusigns.join_meshes([m for m in (rsign_mesh, pairs, plates) if m is not None])
+            dir_faces.update(pictures)
     import busstationsign               # the bus stations' name signs (on whether or not the direction boards are)
     bus_mesh, bus_faces = _optional('Bus station signs', busstationsign.sign_tile, md, frame, tx, ty, elev, out_dir,
                                     vfs_dir, country)

@@ -409,7 +409,7 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
         if keep:
             drop = (poi[:, 2] == POI_BUS_STOP) & keep.contains(poi[:, :2])
             poi = np.ascontiguousarray(poi[~drop], np.float64)
-    got = fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra, sys_row.get("atlas") == "vienna_ru"),
+    got = fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, (np.empty((0, 2)) if sys_row.get("atlas") == "vienna_ru" else crossings(frame, infra)),
                                     signals(frame, infra), open_ends(frame, cells), poly, poly_off, [float(v) for v in box],
                                     bool(left_hand), [float(v) for v in sys_row["lateral"]], float(widest(sizes)),
                                     params(sys_row), speed_signs(frame, box, context, left_hand, mph, "RU" if sys_row.get("atlas") == "vienna_ru" else None), pole_params(sys_row),
@@ -451,6 +451,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=
     box = roads.tile_bbox(tx, ty)
     signs = place(md, frame, box, context, left_hand, mph, sys_row)
     signs = supported(signs, sys_row)
+
     keep = [k for k in range(len(signs)) if not exitsigns._on_deck(signs[k, :2], decks, 1.5)]
     if not keep:
         return None

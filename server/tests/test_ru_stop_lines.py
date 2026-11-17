@@ -38,8 +38,10 @@ class RussianMappedZebras(unittest.TestCase):
         f=features([[(10.,100.),(200.,100.)]],['tertiary'])
         nodes={'ru_crossings':[(100.,100.,1)], 'stop_lines':np.empty((0,2)), 'priority':np.empty((0,3))}
         chunks=roads.build_tile(FRAME,0,0,[f],flat,country='RU',nodes=nodes,signals=np.empty((0,2)))
-        zebras=[c for c in chunks if c['m']=='crossing_white']
-        self.assertEqual(len(zebras),1)
+        zebras=[c for c in chunks if c['m']=='line_white' and c['w']==4.]
+        self.assertGreater(len(zebras),1)
+        for stripe in zebras:
+            self.assertAlmostEqual(float(np.linalg.norm(np.diff(np.array(stripe['n'])[:,:2],axis=0)[0])),.5,places=2)
         self.assertEqual(zebras[0]['w'],4.0)
         self.assertAlmostEqual(np.mean(np.array(zebras[0]['n'])[:,0]),100.,places=2)
 

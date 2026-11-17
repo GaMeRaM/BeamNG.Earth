@@ -123,7 +123,7 @@ def nodes(frame, infra_list):
         ll = np.array([q[1] for q in found], np.float64)
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([np.asarray(e), np.asarray(n)])
-    crossings, lines, priority, zebras, signals, de, refuges, ru = [], [], [], [], [], [], [], []
+    crossings, lines, priority, zebras, signals, de, refuges, ru, ru_signs, ru_signals = [], [], [], [], [], [], [], [], [], []
     for (cls, _, tag), p in zip(found, xy if found else ()):
         if cls == "crossing":
             crossings.append((float(p[0]), float(p[1]), paint(tag)))
@@ -131,6 +131,10 @@ def nodes(frame, infra_list):
             ru.append((float(p[0]), float(p[1]), M15 if roadsigns.is_marked_crossing(
                 json.dumps(tag), include_signals=True) and tag.get("crossing:markings") not in
                 {"no", "surface", "lines", "dots", "dashes"} else 0))
+            if roadsigns.is_marked_crossing(json.dumps(tag), include_signals=True):
+                ru_signs.append((float(p[0]), float(p[1]), M15))
+                if tag.get("crossing:signals") == "yes" or tag.get("crossing") in {"traffic_signals", "signals"}:
+                    ru_signals.append(tuple(map(float,p)))
             de.append((float(p[0]), float(p[1]), de_paint(tag)))
             if str(tag.get("crossing:island", "")).lower() == "yes":      # (a refuge in the road: a splitter island, plan 038)
                 refuges.append((float(p[0]), float(p[1])))
@@ -147,7 +151,7 @@ def nodes(frame, infra_list):
         return any(math.hypot(z[0] - q[0], z[1] - q[1]) < SIGNALS_NEAR_M for q in signals)
     zebras = [z for z in zebras if not lit(z)]
     de = [(x, y, 0 if w and lit((x, y)) else w) for x, y, w in de]
-    return {"crossings": crossings, "ru_crossings": ru, "zebras": zebras, "de_crossings": de, "islands": refuges,
+    return {"crossings": crossings, "ru_crossings": ru, "ru_signs": ru_signs, "ru_signal_crossings": ru_signals, "zebras": zebras, "de_crossings": de, "islands": refuges,
             "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
             "priority": np.array(priority, np.float64).reshape(-1, 3)}
 

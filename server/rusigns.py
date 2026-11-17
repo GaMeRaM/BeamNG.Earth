@@ -63,7 +63,7 @@ def board_kind(sign, pavements):
     import dirsigns
     rows = {str(i): (None, np.asarray(line)[:, :2],
                     (sp.width / 2, (sp.dir or 1) if sp.oneway else 0,
-                     7 if sp.cls == 'motorway' else 0, sp.urban, sp.link))
+                     7 if sp.cls == 'motorway' else 0, getattr(sp, 'urban', False), sp.link))
             for i, (_fid, sp, line, _lon) in enumerate(pavements)}
     board = [0., 0., *sign['travel'], *sign['road_point']]
     return dirsigns.board_kind({'country': 'RU'}, 'freeway', board, rows)
