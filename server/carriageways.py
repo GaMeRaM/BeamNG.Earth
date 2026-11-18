@@ -91,7 +91,7 @@ def sample(parts, chain, step=STEP_M):
         s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
         m = max(2, int(math.ceil(s[-1] / step)) + 1)
         a = np.linspace(0.0, s[-1], m)
-        pts = np.stack([np.interp(a, s, ln[:, 0]), np.interp(a, s, ln[:, 1])], axis=1)
+        pts = np.stack([dnp.interp(a, s, ln[:, 0]), dnp.interp(a, s, ln[:, 1])], axis=1)
         if xs:
             pts = pts[1:]                               # (the joint once)
         xs.append(pts)
@@ -109,7 +109,7 @@ def sample(parts, chain, step=STEP_M):
     ends = s[changes]
     order = np.r_[pi[0], pi[changes + 1]]
     grid = np.linspace(0., s[-1], max(1, int(math.ceil(s[-1] / step))) + 1)
-    xy = np.c_[np.interp(grid, s, xy[:, 0]), np.interp(grid, s, xy[:, 1])]
+    xy = np.c_[dnp.interp(grid, s, xy[:, 0]), dnp.interp(grid, s, xy[:, 1])]
     pi = order[np.searchsorted(ends, grid, side='right')]
     br = np.array([bool(parts[i][2]) for i in pi])
     s = grid

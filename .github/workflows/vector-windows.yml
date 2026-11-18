@@ -73,6 +73,8 @@ jobs:
         run: python tools/run_tests.py test_host test_railxing_corridor test_genground_blockfade test_genground_far test_hrdem_covers test_plan_neutral test_session_report test_areaprops test_german_roads --par 2 --timeout 600 --logs build/road-integration-tests
       - name: Imported roadnet, geometry and asset checks
         run: python tools/run_tests.py test_deck_k_speed test_european_sidewalks test_highway_signs test_hold_abut test_home_ranges test_navband test_racedig test_roadnet_assembly test_roadnet_countries test_roadnet_eustreets test_roadnet_flowhome test_roadnet_joint_desc test_roadnet_laneflow test_roadnet_lanesplit test_roadnet_layout test_roadnet_levelkinds test_roadnet_regions test_roadnet_rings test_roadnet_spec_columns test_roadnet_splitlayer test_roadnet_surfaces test_roadnet_verdicts test_roadnet_width_regions test_routing_valhalla test_seams test_shape_lods test_width_repair --par 2 --timeout 600 --logs build/road-integration-tests
+      - name: Imported terrain, crossings and native regressions
+        run: python tools/run_tests.py test_dem_short test_initial_loading test_lanesjoin_native test_npyguard test_onewayjoin_native test_osmjoin_native test_osmrows_native test_osmtags test_railroadseam test_railstations test_roadnet_countrylookup test_roadnet_overrides test_roadnet_specjson test_roadnet_widthlanes test_skiramps test_structprobe test_textcol_native --par 2 --timeout 600 --logs build/road-integration-tests
       - name: Vector transport checks
         run: |
           python -m unittest discover -s server/tests -p test_vectorresources.py

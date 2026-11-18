@@ -45,6 +45,7 @@ MODULES = (
     "test_determinism",
     "test_native_threads","test_paintlist","test_ground_rules","test_chain_short","test_chainview_prefer","test_subsea_final","test_stale_revisit","test_build_decisions","test_server_list","test_preload_place","test_enu_ahead","test_regional_geotiles", "test_decisions", "test_latework", "test_enginepatch_terfast", "test_aerialpacks", "test_base_photo_revisit", "test_blockcache", "test_bnwt", "test_farrestore", "test_photo_lawns_in_use", "test_revisit_scopes", "test_world_reset",
     "test_srvrestart", "test_build_mt_bindings", "test_experimental", "test_gameinstall", "test_ground_lines_near", "test_launcher_packaging", "test_mtarchive", "test_ramp_envelope", "test_telemetry",
+    'test_npyguard',
 )
 
 

@@ -56,6 +56,9 @@ import os
 # thread per worker. Set before numpy is imported.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+# numpy's AVX-512 kernels held back (an AVX-512 CPU's sorts of equal keys and SIMD maths are other bits than every
+# other player's): read by numpy at its import, inherited by the processes started from here (npyguard.py)
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
@@ -3287,8 +3290,26 @@ class Server:
                                      de_on=designsmod.enabled(self.dej_on), de_routes=de_routes, mapped_lamps=mapped_lamps,
                                      wear=Server.wear_arg(self),
                                      cover_fn=getattr(self.surface, "classes", None))
-        # (railway and tram tracks on the ground)
-        chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
+        # (railway and tram tracks on the ground; BNE_RAIL_ROAD_FIT: one record of the level crossings for the decks here
+        # and the 3D track below)
+        import railways
+        rail_rec = rail_early = None    # (the track made first from the records, the decks for the parts it drew)
+        if railways.RAIL_ROAD_FIT:
+            _rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)]
+            _rground = railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon))
+            _rfar = railways.point_ground(
+                anchor.frame, lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
+                ("raw", aid, anchor.lat, anchor.lon))
+            _rbed = getattr(getattr(self, "plan_store", None), "elev", None)
+            rail_rec = railways.crossing_records(anchor.frame, tx, ty, _rcells, _rground, far_ground=_rfar,
+                                                 load=cell_fn, bed_elev=_rbed)
+            rail_early_props = []
+            rail_early = railways.tile_mesh(anchor.frame, tx, ty, _rcells, _rground, far_ground=_rfar,
+                                            return_decks=True, load=cell_fn, bed_elev=_rbed,
+                                            furniture=rail_early_props,
+                                            under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                                   if _bridge_fps else None), records=rail_rec)
+        chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban, records=rail_rec)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
         x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
@@ -3412,18 +3433,21 @@ class Server:
         attachment_decks = [{**ch, 'level': attachment_levels.get(str(ch.get('fid')), 1.)}
                             for ch in ctx if ch.get('deck') and len(ch.get('n', ())) >= 2]
         rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
-
-        rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
-                                   rail_cells,
-                                   railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon)),
-                                   far_ground=railways.point_ground(
-                                       anchor.frame,
-                                       lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
-                                       ("raw", aid, anchor.lat, anchor.lon)),
-                                   return_decks=True, road_decks=attachment_decks, load=cell_fn,
-                                   bed_elev=getattr(getattr(self, "plan_store", None), "elev", None), furniture=rail_props,
-                                   under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                          if _bridge_fps else None))
+        if rail_early is not None and not (attachment_decks and any(
+                cls == "tram" and kind == "bridge" for _, cls, kind, _ in rail_rec["rails"])):
+            (rmesh, rail_decks), rail_props = rail_early, rail_early_props
+        else:
+            rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
+                                     rail_cells,
+                                     railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon)),
+                                     far_ground=railways.point_ground(
+                                         anchor.frame,
+                                         lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
+                                         ("raw", aid, anchor.lat, anchor.lon)),
+                                     return_decks=True, road_decks=attachment_decks, load=cell_fn,
+                                     bed_elev=getattr(getattr(self, "plan_store", None), "elev", None), furniture=rail_props,
+                                     under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                            if _bridge_fps else None), records=rail_rec)
         if rail_props:
             props = (props or []) + rail_props
 
@@ -3532,7 +3556,7 @@ class Server:
         if radar_props:
             props = (props or []) + radar_props
         import racedig              # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
-        racedig.tile_clear(anchor.frame, cells, props, wires, elev)
+        racedig.tile_clear(anchor.frame, cells, props, wires, elev, self.mapdata)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
@@ -13334,6 +13358,15 @@ def main():
     except fast.NativeMissing as ex:
         log.error("%s", ex)
         raise SystemExit(str(ex))
+    try:                # (npyguard at this file's top: an AVX-512 CPU's numpy kernels held back)
+        on512 = npyguard.avx512_active()
+        if on512:
+            log.warning("numpy dispatches AVX-512 kernels (%s; %s=%r): this machine's plans may differ in the last "
+                        "bits from other players'", " ".join(on512), npyguard.ENV, os.environ.get(npyguard.ENV))
+        elif os.environ.get(npyguard.ENV):
+            log.info("numpy's AVX-512 kernels held back (%s=%s)", npyguard.ENV, os.environ[npyguard.ENV])
+    except Exception:
+        pass
     import sampler
     sampler.maybe_start()           # BNGE_SAMPLE=<path>: a sampling profile of this process's threads (debugging)
     import budget
