@@ -2928,14 +2928,10 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         prof = (_beds(frame, rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev)
                 if rails else [])
         runs = None
-    for n, fixed in fixed_decks.items():
-        prof[n] = (fixed, prof[n][1])
-    if rec is not None:
-        prof, runs = (rec["prof"], rec["runs"]) if rails else ([], [])
-    else:
-        prof = (_beds(frame, rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev)
-                if rails else [])
-        runs = None
+    if fixed_decks:
+        prof = list(prof)  # The shared crossing record keeps its original track profiles.
+        for n, fixed in fixed_decks.items():
+            prof[n] = (fixed, prof[n][1])
     keep = [n for n in range(len(rails)) if n not in _drop]
     if _drop:                                       # (a retry past the vertex budget: the tracks of lowest rank left out)
         rails, prof = [rails[n] for n in keep], [prof[n] for n in keep]
