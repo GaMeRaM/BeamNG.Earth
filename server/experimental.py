@@ -25,6 +25,11 @@ SETTINGS_FILE = ("settings", "beamngEarth.json")    # (cpupin.MOD_SETTINGS; the 
 FEATURES = (
     ("roadSigns", {"BNE_ROADSIGNS": "on"}, None),                         # roadsigns.ON
     ("expNlRoadSigns", {"BNE_NL_ROADSIGNS": "on"}, "roadSigns"),           # roadsigns.NL_ON (only with ON)
+    # The road revamp's switches as one (the user, 2026-11-17: "if revamped roads arent enabled by default in the dev
+    # builds yet make it a single experemental toggle"); each later revamp switch joins this set, not the page
+    # (BNE_LEVEL_SPACING left out: on the 33-place ride corpus it made perth_915 and a5_underpass worse, 2026-11-17)
+    ("expRoadRevamp", {"BNE_SPEED_TAPERS": "on", "BNE_DECK_K_SPEED": "on",
+                       "BNE_FOOT_CLEAR": "on", "BNE_RAIL_LIFECYCLE": "on", "BNE_RACEWAY_DIG": "on"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled
