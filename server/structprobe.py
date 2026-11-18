@@ -31,7 +31,6 @@ import argparse
 import json
 import logging
 import os
-import resource
 import sys
 import time
 
@@ -1201,10 +1200,13 @@ def main():
             f.write("\n")
         os.replace(a.json + ".tmp", a.json)
     if a.timing:
-        ru = resource.getrusage(resource.RUSAGE_SELF)
+        timing = {"wall_s": round(time.time() - t0, 1), "cpu_s": round(time.process_time(), 1)}
+        if sys.platform != "win32":
+            import resource
+            ru = resource.getrusage(resource.RUSAGE_SELF)
+            timing["max_rss_mb"] = round(ru.ru_maxrss / (2**20 if sys.platform == "darwin" else 1024))
         with open(a.timing, "w") as f:
-            json.dump({"wall_s": round(time.time() - t0, 1), "cpu_s": round(ru.ru_utime + ru.ru_stime, 1),
-                       "max_rss_mb": round(ru.ru_maxrss / 1024.0)}, f, sort_keys=True)
+            json.dump(timing, f, sort_keys=True)
             f.write("\n")
     sys.stdout.flush()
     sys.stderr.flush()

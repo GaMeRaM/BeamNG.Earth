@@ -17,6 +17,11 @@ import math
 import os
 import sys
 
+try:
+    import npyfirst  # noqa: F401
+except ImportError:  # loaded by a test whose entry point already guards NumPy
+    pass
+
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
