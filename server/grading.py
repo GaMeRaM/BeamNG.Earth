@@ -7845,7 +7845,7 @@ RAMP_NODE_M = 1.5           # m: road ends this close are one node
 RAMP_REACH_M = 400.0        # m along the roads from a raised one the envelope goes at most
 
 
-RAMP_FLOOR_NOW = os.environ.get("BNE_RAMP_FLOOR_NOW", "on") != "off"
+RAMP_FLOOR_NOW = os.environ.get("BNE_RAMP_FLOOR_NOW", "off") == "on"   # opt-in: default-on regresses the Paris AX crest (fork drivability gate)
 
 
 def _floor_now(floor, plans):
