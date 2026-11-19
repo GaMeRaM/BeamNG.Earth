@@ -150,7 +150,7 @@ class PickTest(unittest.TestCase):
         self.assertEqual(op.cache_dir_of(["--cache-dir", "a", "--cache-dir=b"], default, root),
                          os.path.join(root, "b"))
         self.assertEqual(op.cache_dir_of([], default, root), default)
-        self.assertEqual(op.cache_dir_of(["--cache-dir", "~/c"], default, root), os.path.expanduser("~/c"))
+        self.assertEqual(op.cache_dir_of(["--cache-dir", "~/c"], default, root), str(Path.home() / "c"))
 
     def test_rejection_then_offline_never_takes_it(self):
         """Codex round 1: an answer that says no forgets the release as a fallback at once (not when a server later
