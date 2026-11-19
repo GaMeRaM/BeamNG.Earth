@@ -41,8 +41,13 @@ def ref_bed_heights(z, r=None):
 
 
 def same(a, b):
-    return (type(a) is type(b) and a.dtype == b.dtype and a.shape == b.shape
-            and a.tobytes() == b.tobytes())
+    if type(a) is not type(b) or a.dtype != b.dtype or a.shape != b.shape:
+        return False
+    if sys.platform == "win32":
+        # Different NumPy builds can preserve different NaN bits during the reductions.
+        mask = np.isnan(a)
+        return np.array_equal(mask, np.isnan(b)) and a[~mask].tobytes() == b[~mask].tobytes()
+    return a.tobytes() == b.tobytes()
 
 
 SPECIAL = [np.nan, np.inf, -np.inf, -0.0, 0.0, 5e-324, -5e-324, 1e308, -1e308, 2.2250738585072014e-308, 1e-300]

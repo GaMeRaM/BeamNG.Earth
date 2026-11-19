@@ -145,9 +145,12 @@ class PickTest(unittest.TestCase):
 
     def test_cache_dir_by_the_server_s_rules(self):
         """Codex round 2: the pick's cache folder is the server's (the last --cache-dir, relative to its folder)."""
-        self.assertEqual(op.cache_dir_of(["--cache-dir", "a", "--cache-dir=b"], "/d", "/root"), "/root/b")
-        self.assertEqual(op.cache_dir_of([], "/d", "/root"), "/d")
-        self.assertEqual(op.cache_dir_of(["--cache-dir", "~/c"], "/d", "/root"), os.path.expanduser("~/c"))
+        root = os.path.join(self.cache, "root")
+        default = os.path.join(self.cache, "d")
+        self.assertEqual(op.cache_dir_of(["--cache-dir", "a", "--cache-dir=b"], default, root),
+                         os.path.join(root, "b"))
+        self.assertEqual(op.cache_dir_of([], default, root), default)
+        self.assertEqual(op.cache_dir_of(["--cache-dir", "~/c"], default, root), os.path.expanduser("~/c"))
 
     def test_rejection_then_offline_never_takes_it(self):
         """Codex round 1: an answer that says no forgets the release as a fallback at once (not when a server later
@@ -307,12 +310,13 @@ class PickTest(unittest.TestCase):
 
     def test_launcher_cache_dir_without_saving(self):
         import launcher
-        with mock.patch.object(launcher, "app_settings", return_value={"cacheDir": "/saved"}):
-            self.assertEqual(launcher.pick_cache_dir(None, ["--cache-dir", "/x"]), "/x")
-            self.assertEqual(launcher.pick_cache_dir(None, ["--cache-dir", "/x", "--cache-dir=/y"]), "/y")
+        x, y, saved = (os.path.join(self.cache, name) for name in ("x", "y", "saved"))
+        with mock.patch.object(launcher, "app_settings", return_value={"cacheDir": saved}):
+            self.assertEqual(launcher.pick_cache_dir(None, ["--cache-dir", x]), x)
+            self.assertEqual(launcher.pick_cache_dir(None, ["--cache-dir", x, f"--cache-dir={y}"]), y)
             self.assertEqual(launcher.pick_cache_dir(None, ["--cache-dir", "rel"]),
                              os.path.join(launcher.ROOT, "rel"))
-            self.assertEqual(launcher.pick_cache_dir(None, []), "/saved")
+            self.assertEqual(launcher.pick_cache_dir(None, []), saved)
             self.assertEqual(launcher.pick_cache_dir("default", []), launcher.apppaths.default_cache_dir())
 
     def test_constants_agree(self):

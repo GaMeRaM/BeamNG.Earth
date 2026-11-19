@@ -77,12 +77,17 @@ def ref_dot(a, b):
 
 # ---- comparison ----
 
-def same(got, want):
-    """The same type, dtype, shape and bytes (a NaN's bytes too)."""
+def same(got, want, *, nan_payloads=True):
+    """Check identical metadata and bytes, optionally ignoring platform-specific NaN encodings."""
     if type(got) is not type(want):
         return False
     g, w = np.asarray(got), np.asarray(want)
-    return g.dtype == w.dtype and g.shape == w.shape and g.tobytes() == w.tobytes()
+    if g.dtype != w.dtype or g.shape != w.shape:
+        return False
+    if not nan_payloads and np.issubdtype(g.dtype, np.floating):
+        mask = np.isnan(g)
+        return np.array_equal(mask, np.isnan(w)) and g[~mask].tobytes() == w[~mask].tobytes()
+    return g.tobytes() == w.tobytes()
 
 
 def outcome(fn, *args):
@@ -170,7 +175,8 @@ class ParityTest(unittest.TestCase):
                 got, want = outcome(fn, a, b), outcome(ref, a, b)
                 self.assertEqual(got[0], want[0], (a.shape, b.shape, a.dtype, b.dtype, got, want))
                 if want[0] == "ok":
-                    self.assertTrue(same(got[1], want[1]), (fn.__name__, a.shape, b.shape, a.dtype, b.dtype,
+                    self.assertTrue(same(got[1], want[1], nan_payloads=FITTED_BUILD),
+                                    (fn.__name__, a.shape, b.shape, a.dtype, b.dtype,
                                                             got[1], want[1]))
                     n += 1
                 else:
@@ -386,7 +392,8 @@ class LayoutTest(unittest.TestCase):
                 got, want = outcome(fn, a, b), outcome(ref, a, b)
                 self.assertEqual(got[0], want[0], (a.shape, b.shape, a.strides, b.strides, got, want))
                 if want[0] == "ok":
-                    self.assertTrue(same(got[1], want[1]), (fn.__name__, a.shape, b.shape, a.dtype, b.dtype,
+                    self.assertTrue(same(got[1], want[1], nan_payloads=FITTED_BUILD),
+                                    (fn.__name__, a.shape, b.shape, a.dtype, b.dtype,
                                                             a.strides, b.strides, got[1], want[1]))
                     n += 1
                 else:
