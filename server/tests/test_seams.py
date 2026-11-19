@@ -220,6 +220,7 @@ class StructEndsTest(unittest.TestCase):
         g = object.__new__(grading._Planner)
         g.lock = threading.Lock()
         g.frame = geodesy.EnuFrame(50.5, 16.2)
+        g._cw_z_at = lambda *_: None
         # twins 60 m long, 9 m apart centre to centre (1 m edge to edge at 4 m half widths), b drawn the other way
         a = np.array([[0.0, 0.0], [30.0, 0.0], [60.0, 0.0]])
         b = np.array([[62.0, 9.0], [32.0, 9.0], [2.0, 9.0]])
@@ -396,6 +397,15 @@ class StructEndsTest(unittest.TestCase):
         self.assertLessEqual(float(np.abs(np.diff(za)).max()) / 4.0, grading.STRUCT_SEAM_GRADE * 1.5 + 1e-9)
         self.assertAlmostEqual(float(za[0]), 10.0, places=6)            # (far from the end as it was)
         self.assertFalse(g._pin_struct_ends(plans, [spec("primary"), spec("primary")]))   # (already there)
+
+    def test_carriageway_profile_owns_its_approach(self):
+        from unittest import mock
+        g = self.planner((10.0, 11.0, 11.6, 10.3))
+        g._cw_z_at = lambda *_: np.array([10.0])
+        s = np.arange(0., 101., 4.)
+        p = grading.Plan(np.c_[s - 100., np.zeros_like(s)], np.full_like(s, 10.), 5., abut=(False, True))
+        with mock.patch.object(grading, "CW_ON", True):
+            self.assertFalse(g._pin_struct_ends([("ra", p)], [spec("primary")]))
 
 
 if __name__ == "__main__":

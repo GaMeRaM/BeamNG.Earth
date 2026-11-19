@@ -6642,8 +6642,7 @@ class _Planner:
             ab = getattr(p, "abut", None)
             if sp is None or ab is None or not (ab[0] or ab[1]):
                 continue
-            if CW_ON and _cw.family(getattr(sp, "cls", None) + ("_link" if _is_link(sp) else "")) is not None:
-                continue            # (its deck is drawn at its carriageway's profile: _pin_cw_ends, roads.DECK_Z_HOOK)
+            cw_family = CW_ON and _cw.family(getattr(sp, "cls", None) + ("_link" if _is_link(sp) else "")) is not None
             xy = np.asarray(p.xy, np.float64)[:, :2]
             if len(xy) < 2:
                 continue
@@ -6653,6 +6652,10 @@ class _Planner:
             for end, flag in ((0, ab[0]), (-1, ab[1])):
                 if not flag:
                     continue
+                if cw_family:
+                    point = xy[:1] if end == 0 else xy[-1:]
+                    if self._cw_z_at(xy, point, str(fid).split(":")[0]) is not None:
+                        continue  # The carriageway profile owns this seam.
                 got = self._struct_end(xy[end])
                 if got is None:
                     continue
