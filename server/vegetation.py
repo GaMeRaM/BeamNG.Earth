@@ -47,7 +47,7 @@ log = logging.getLogger("earthd.vegetation")
 CELL_WAIT_S = 30.0          # another process's cold cell; bounded while we hold other cache claims
 CELL_LIVE_S = 120.0         # a live producer can be waited for longer when this thread holds no other claim
 
-VERSION = 32          # 32: exclude building footprints superseded by OSM from the tree mask; 29: upstream latitude scaling plus fork road-clearance masks; (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 33          # 33: account for retained small ML outlines; 32: exclude building footprints superseded by OSM from the tree mask; 29: upstream latitude scaling plus fork road-clearance masks; (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
