@@ -65,6 +65,10 @@ jobs:
       - name: Validate reused native kernel
         if: github.event_name == 'workflow_dispatch' && !inputs.build_native
         run: python -c "import sys; sys.path.insert(0, 'server'); import fast; fast.require(fast.MIN_VERSION, 'hotfix build'); print('earthfast', fast._ef.VERSION)"
+      - name: Lua sign and streaming checks
+        run: |
+          python -m pip install lupa==2.8
+          python tools/run_lua_tests.py test_autodrive_signals test_gps_recovery_lane test_obstacle_probe_budget test_oncomingPass_settings test_oncoming_pass test_oncoming_pass_runtime test_staticObstacles_settings test_static_obstacle_lane_transitions test_static_obstacle_surface test_static_obstacles test_static_obstacles_runtime test_deckguard test_places test_mpdefer test_mpsession test_framepacer test_governor test_issuefmt test_farpack test_gps test_gps_autodrive test_parking test_weather test_edgeguard test_collisiontrace test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_junction_approaches test_navgraph test_roadgeo test_drophold test_rebase test_simhold test_settings test_beammp test_codeswap test_loadprogress test_gcpace
       - name: Imported native and map data portability checks
         run: python tools/run_tests.py test_dnp_matmul_native test_osmml test_overture_release test_rail_index test_railbeds_native test_structures --par 2 --timeout 180 --logs build/portability-tests
       - name: Portable test runner, decoder bounds and cache format
@@ -130,10 +134,6 @@ jobs:
             build/road-integration-tests/*.log
             build/tested-python-packages.txt
           if-no-files-found: warn
-      - name: Lua sign and streaming checks
-        run: |
-          python -m pip install lupa==2.8
-          python tools/run_lua_tests.py test_autodrive_signals test_gps_recovery_lane test_obstacle_probe_budget test_oncomingPass_settings test_oncoming_pass test_oncoming_pass_runtime test_staticObstacles_settings test_static_obstacle_lane_transitions test_static_obstacle_surface test_static_obstacles test_static_obstacles_runtime test_deckguard test_places test_mpdefer test_mpsession test_framepacer test_governor test_issuefmt test_farpack test_gps test_gps_autodrive test_parking test_weather test_edgeguard test_collisiontrace test_roadsigns test_townsigns test_roads test_trees test_groundcover test_scoping test_core_robustness test_core_stubbed test_junction_approaches test_navgraph test_roadgeo test_drophold test_rebase test_simhold test_settings test_beammp test_codeswap test_loadprogress test_gcpace
       - name: Bootloader from source
         run: python tools/build_bootloader.py
       - name: Build the exe

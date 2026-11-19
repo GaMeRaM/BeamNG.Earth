@@ -223,7 +223,7 @@ local lastError = nil
 local sinceChange = stopwatch.new()  -- ms since a tile arrived / went or a road was made / deleted
 local sinceReload = stopwatch.new()
 local collisionDirty = false
-local lastReloadAt = -math.huge   -- now() of the last be:reloadCollision (ours or another's): M.ahead
+local lastReloadAt = -math.huge   -- CPU timestamp for collision diagnostics
 local reloads = 0                 -- be:reloadCollision runs so far (ours or another's): M.reloads
 local sinceUrgent = math.huge     -- frames since the last urgent walk import (M.urgentWalk)
 local deletesDirty = false  -- only far colliders deleted (and far ghosts dropped) since the last rebuild (RELOAD_DELETES_S)
@@ -1217,7 +1217,7 @@ function M.swapCommit(gen)
     if p.collide and p.t[p.what] == p.id then
       markTileCollider(p.t)
       newColliders[#newColliders + 1] = { p.id, p.q, objectBox(p.id) }
-      p.t.colAt = p.t.colAt or {}; p.t.colAt[p.what] = now()
+      p.t.colReload = p.t.colReload or {}; p.t.colReload[p.what] = reloads
     end
   end
   markDirty('swap')
@@ -2477,7 +2477,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
         if isRoad or staged then t[q.what] = id else       -- (a staged collider: registered at the swap's commit)
           t[q.what] = id; markTileCollider(t); newColliders[#newColliders + 1] = { id, q, objectBox(id) }
-          t.colAt = t.colAt or {}; t.colAt[q.what] = now()
+          t.colReload = t.colReload or {}; t.colReload[q.what] = reloads
         end
       else lastError = tostring(id) end
       local ms = now() - t0
@@ -2959,7 +2959,8 @@ function M.readyAround(aid, x, y, r, explain)
     if skin and (not t.skin or t.skin.anchor ~= aid) then return blocked('skin_missing', key) end
     for what in pairs(t.colWant or {}) do
       if not t[what] then return blocked('collider_missing', key, what) end
-      if ((t.colAt and t.colAt[what]) or math.huge) >= lastReloadAt then
+      -- A collider joins the first rebuild after its creation, including in the same clock tick.
+      if ((t.colReload and t.colReload[what]) or math.huge) >= reloads then
         return blocked('collision_reload_pending', key, what)
       end
     end
@@ -3184,7 +3185,7 @@ function M.ahead(x, y, hx, hy, dist)
           want = want + 1
           if t[what] then
             made = made + 1
-            if (t.colAt and t.colAt[what] or tnow) < lastReloadAt then solid = solid + 1 end
+            if ((t.colReload and t.colReload[what]) or math.huge) < reloads then solid = solid + 1 end
           end
         end
         e.col = want == 0 and 'none' or (solid == want and 'solid') or (made == want and 'made') or 'parked'

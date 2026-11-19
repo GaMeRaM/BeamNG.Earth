@@ -169,6 +169,9 @@ do
   T.check(not ok and why.reason == 'skin_missing' and why.tile ~= nil, 'diagnosis: absent surface names tile')
 end
 -- its skin for A
+local clock = os.clock
+local tick = clock()
+os.clock = function() return tick end
 T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
 do
   local ok, why = roads.readyAround(1, car.x, car.y, 50, true)
@@ -182,6 +185,7 @@ do
     'diagnosis: object exists but physics reload is still pending')
 end
 roads.collisionRebuilt()
+os.clock = clock
 do
   local ok, why = roads.readyAround(1, car.x, car.y, 50, true)
   T.check(ok and why == nil, 'diagnosis clears after collision rebuild')
