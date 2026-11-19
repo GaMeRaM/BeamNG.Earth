@@ -26,6 +26,7 @@ import exitsigns
 import fast
 import dnp
 import mapcells
+import overture
 import roads
 import speedsigns
 import staging
@@ -35,8 +36,10 @@ log = logging.getLogger("earthd.dirsigns")
 ON = os.environ.get("BNE_DIRSIGNS", "off") == "on"
 KERNEL = 163                    # earthfast VERSION with dirsign_place / dirsign_face / dirsign_mesh
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-PLACES_FILE = os.path.join(DATA, "places_2026-10-21.0.json.gz")
-PLACES_SHA256 = "3e245bc2ed118ff69720e14284ab5e7d42b701eaa512f8d7fdff6e0316fae14d"
+PLACES_FILE = os.path.join(DATA, "places_2026-11-18.0.json.gz")
+PLACES_SHA256 = "40b3f23fd1f955e7249aad81b0f36cff3fd7551368af05c9fd9a8c9a2963be89"
+RU_PLACES_FILE = os.path.join(DATA, "places_2026-10-21.0.json.gz")
+RU_PLACES_SHA256 = "3e245bc2ed118ff69720e14284ab5e7d42b701eaa512f8d7fdff6e0316fae14d"
 STYLES_FILE = os.path.join(DATA, "dirsigns_styles.json")
 FONTS = (os.path.join(DATA, "fonts", "Overpass-Bold.ttf"), os.path.join(DATA, "fonts", "FiraSansCondensed-Medium.ttf"))
 FACE_VERSION = 1                # (in every face's hash: a changed drawing is another file)
@@ -62,13 +65,26 @@ class Places:
              for r in rows], np.float64).reshape(-1, 4)
 
 
+def _read_places(path, sha256):
+    with open(path, "rb") as f:
+        raw = f.read()
+    if hashlib.sha256(raw).hexdigest() != sha256:
+        raise ValueError("place snapshot checksum mismatch")
+    return json.loads(gzip.decompress(raw))
+
+
 @lru_cache(maxsize=1)
 def places():
-    with open(PLACES_FILE, "rb") as f:
-        raw = f.read()
-    if hashlib.sha256(raw).hexdigest() != PLACES_SHA256:
-        raise ValueError("place snapshot checksum mismatch")
-    return Places(json.loads(gzip.decompress(raw)))
+    doc = _read_places(PLACES_FILE, PLACES_SHA256)
+    regional = _read_places(RU_PLACES_FILE, RU_PLACES_SHA256)
+    doc["places"] = [row for row in doc["places"] if row["cc"] != "RU"]
+    doc["places"].extend(row for row in regional["places"] if row["cc"] == "RU")
+    # (the switch file may name a newer Overture release than the snapshot's, overture.effective: the signs keep the
+    # bundled snapshot, one list for the whole world and pinned by this build (PLACES_SHA256, in the tiles' code key),
+    # so no two neighbouring boards read different lists; a town founded or renamed since waits for the next build)
+    if doc.get("release") != overture.effective():
+        log.info("dirsigns: place snapshot of Overture %s (the map data: %s)", doc.get("release"), overture.effective())
+    return Places(doc)
 
 
 @lru_cache(maxsize=1)

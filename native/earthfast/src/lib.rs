@@ -7,6 +7,8 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod demsample;
+mod dmmatmul;
 mod devctx;
 mod reach;
 mod devraster;
@@ -124,8 +126,16 @@ mod vegclumps;
 mod roadwear;
 mod roadtone;
 mod railbeds;
+mod raildrawn;
+mod railindex;
+mod railnode;
+mod stationzone;
+mod railunder;
+mod railspans;
+mod osmml;
 mod railxing;
 mod roadnet;
+mod structures;
 mod osmtagshards;
 mod buildyears;
 mod buildcolours;
@@ -3971,19 +3981,9 @@ fn bilinear_tiles<'py>(
     if xs.len() != ys.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("bilinear_tiles: fx and fy differ in length"));
     }
-    let px = |y: usize, x: usize| ts[(y / tile) * nx + x / tile][[y % tile, x % tile]] as f64;
-    let out = py.detach(|| {
-        numpy::ndarray::Array1::from_shape_fn(xs.len(), |i| {
-            let (x, y) = (xs[i], ys[i]);
-            let ix = (x.floor() as i64).clamp(0, w as i64 - 2) as usize;
-            let iy = (y.floor() as i64).clamp(0, h as i64 - 2) as usize;
-            let wx = (x - ix as f64).clamp(0.0, 1.0);
-            let wy = (y - iy as f64).clamp(0.0, 1.0);
-            let (v00, v10) = (px(iy, ix), px(iy, ix + 1));
-            let (v01, v11) = (px(iy + 1, ix), px(iy + 1, ix + 1));
-            (v00 * (1.0 - wx) + v10 * wx) * (1.0 - wy) + (v01 * (1.0 - wx) + v11 * wx) * wy
-        })
-    });
+    let ts: Vec<_> = ts.into_iter().map(Some).collect();
+    let out = py.detach(|| demsample::bilinear_mosaic(&ts, nx, tile, xs, ys))
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("bilinear_tiles: a pixel outside the tiles"))?;
     Ok(out.into_pyarray(py))
 }
 
@@ -6403,6 +6403,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // 262: deterministic maths (dm: the libm crate in every kernel instead of the platform's C library; dm_vec and
         // the dm_<fn> scalars for server/dnp.py / dmath.py: Windows and Linux plan the same roads, GitHub #1169)
     dm::register(m)?;
+    demsample::register(m)?;
         // 264: 262 (deterministic maths) and 263 (stationgeom) in one module
     // 266: bldclear::footprint_twins (the same building mapped twice: one of the two outlines left out, London's
     // reports 2026-11-12); junctions_find's one-way / single-lane arms' stop lines (London reports 3, 8, 9)
@@ -6682,6 +6683,50 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lanesjoin::lanes_join, m)?)?;
     // 456: the full port's roadlanes.count and roadlanes.join (lanesjoin: the OSM counts, the highway boxes asked of
     // the geometry, the geometry match through dm::interp)
-    m.add("VERSION", 472)?;
+    m.add_function(wrap_pyfunction!(dmmatmul::dm_matmul, m)?)?;
+    // 472: the full port's dnp.matmul / dnp.dot (dmmatmul: numpy's matmul rules, the products summed in the Python's
+    // order, numpy's floating-point errors reported as np.errstate says)
+    m.add_function(wrap_pyfunction!(structures::groups::structure_groups, m)?)?;
+    // 480: road revamp RS step S1 (structures::groups::structure_groups: which decks of one bridge chain form one
+    // structure; roads writes them as a shadow JSON per chain, BNE_DECK_STRUCT=shadow). 472-479 left to other branches
+    m.add_function(wrap_pyfunction!(structures::groups::structure_touch, m)?)?;
+    // 481: RS step S2a: structure_groups takes an outside flag per member (its own kind kept: an outside conflict only
+    // where the pair could be one structure) and returns each member's duplicate (one way under two part keys);
+    // structure_touch, the pairs the chain closure must hold (BridgeProfiles._resolve on the switch path)
+    m.add_function(wrap_pyfunction!(railbeds::rail_bed_heights, m)?)?;
+    // 483: the full port's railways._avg / bed_heights (railbeds::rail_bed_heights: every ground part of one
+    // railways.profile in one call, numpy's cumsum order). (r2a7 was given 473-479, but dev's module is 480 already
+    // (rs-s1): VERSION has to pass 480 so that a 480 module, which lacks it, fails the start check)
+    m.add_function(wrap_pyfunction!(raildrawn::rail_drawn_cols, m)?)?;
+    // 486: the full port's railways.drawn / wear (raildrawn::rail_drawn_cols: a layer's drawn class and wear per
+    // feature in one pass, the glue reading the columns). 484 and 485 are other branches'
+    m.add_function(wrap_pyfunction!(railspans::rail_span_clip, m)?)?;
+    m.add_function(wrap_pyfunction!(railspans::rail_underpass_hits, m)?)?;
+    m.add_function(wrap_pyfunction!(railspans::rail_underpass_distance, m)?)?;
+    // 487: the full port's railways._span_underpasses / _clip / _underpass_masks / _underpass_distance (railspans: a
+    // node window's parts over the road tunnels and cut to the window in one call)
+    m.add_function(wrap_pyfunction!(structures::heights::structure_heights, m)?)?;
+    // 488: road revamp RS step S2b part 1 (structures::heights::structure_heights: one joint height solve per
+    // structure, BNE_DECK_STRUCT=shadow's JSON alone; given 485-489, past 487 so that a 487 module fails the start check)
+    m.add_function(wrap_pyfunction!(osmml::osm_over_ml, m)?)?;
+    // 489: OpenStreetMap over machine-learned building outlines (osmml::osm_over_ml: an ML outline where OSM maps a
+    // cell's buildings, or overlapping an OSM one, left out; the user, 2026-11-18). 488 is another branch's
+    m.add_class::<railindex::RailIndex>()?;
+    m.add_function(wrap_pyfunction!(railindex::rail_parts_select, m)?)?;
+    m.add_class::<railunder::UnderpassIndex>()?;
+    m.add_class::<railunder::UnderpassSeen>()?;
+    m.add_function(wrap_pyfunction!(railunder::rail_underpass_select, m)?)?;
+    // 491: the full port's railways.parts feature loop (railindex: a layer's rail features per frame in a RailIndex,
+    // a window's selection, pieces, clip test, resampling and sort in one call) and railways.road_underpasses
+    // (railunder: a layer's roads with a tunnel in an UnderpassIndex, a window's short tunnels in one call). 488-490
+    // are other branches'
+    m.add_class::<railnode::RailNode>()?;
+    m.add_function(wrap_pyfunction!(railnode::rail_node_pack, m)?)?;
+    // 492: the full port's railprofile._make_node packing (railnode: a lattice node's beds by (fid, kind) and
+    // centimetre key in a RailNode, the last of equal keys; RailNode.find, railprofile._find's lookup)
+    m.add_function(wrap_pyfunction!(stationzone::station_zone, m)?)?;
+    // 494: the full port's busstationmesh.zone loops and _clip_cell (stationzone::station_zone: a station's walkable
+    // ground, kerb walls and tactile strips from walk_field's lattice in one call). 493 is another branch's
+    m.add("VERSION", 495)?;
     Ok(())
 }

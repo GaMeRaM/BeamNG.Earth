@@ -37,6 +37,7 @@ import dmath
 import dnp
 
 import mapcells
+import osmml
 import pacer
 import staging
 import xproc
@@ -46,7 +47,7 @@ log = logging.getLogger("earthd.vegetation")
 CELL_WAIT_S = 30.0          # another process's cold cell; bounded while we hold other cache claims
 CELL_LIVE_S = 120.0         # a live producer can be waited for longer when this thread holds no other claim
 
-VERSION = 31          # 29: upstream latitude scaling plus fork road-clearance masks; (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 32          # 32: exclude building footprints superseded by OSM from the tree mask; 29: upstream latitude scaling plus fork road-clearance masks; (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -405,7 +406,8 @@ class Vegetation:
 
     def _path(self, x, y):
         rel = getattr(self.md, "release", "x")
-        return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
+        source = str(rel) if osmml.ON else f"{rel}-keep-ml"
+        return os.path.join(self.dir, source, str(x), f"{y}.npz") if self.dir else None
 
     def _load(self, x, y):
         p = self._path(x, y)
