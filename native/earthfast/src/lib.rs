@@ -109,6 +109,7 @@ mod classgrid;
 mod frontage;
 mod furnstations;
 mod stationgeom;
+mod busstation;
 mod railpiers;
 mod bdtopo;
 mod nycmassing;
@@ -137,6 +138,7 @@ mod stationzone;
 mod seawater;
 mod subpoly;
 mod railunder;
+mod railcrossings;
 mod railspans;
 mod osmml;
 mod railxing;
@@ -544,6 +546,12 @@ fn segment_crossings_lists(py: Python<'_>, parts: Vec<PyReadonlyArray2<'_, f64>>
 pub(crate) fn segment_crossings_core(pa: numpy::ndarray::ArrayView2<f64>, ps: numpy::ndarray::ArrayView1<i64>,
                                      ga: numpy::ndarray::ArrayView2<f64>, gs: numpy::ndarray::ArrayView1<i64>)
                                      -> Vec<(usize, usize, f64, f64, f64)> {
+    segment_crossings_scan::<false>(pa, ps, ga, gs)
+}
+
+fn segment_crossings_scan<const RAIL_RUNS: bool>(pa: numpy::ndarray::ArrayView2<f64>, ps: numpy::ndarray::ArrayView1<i64>,
+                                                 ga: numpy::ndarray::ArrayView2<f64>, gs: numpy::ndarray::ArrayView1<i64>)
+                                                 -> Vec<(usize, usize, f64, f64, f64)> {
     let np_ = ps.len().saturating_sub(1);
     let ng = gs.len().saturating_sub(1);
     {
@@ -567,6 +575,9 @@ pub(crate) fn segment_crossings_core(pa: numpy::ndarray::ArrayView2<f64>, ps: nu
                 let dy = pa[[i0 + k, 1]] - pa[[i0 + k - 1, 1]];
                 s[k] = s[k - 1] + dx.dhypot(dy);
             }
+            let runs = if RAIL_RUNS && i1 - i0 > railcrossings::RUN_SEGMENTS {
+                railcrossings::segment_runs(pa, i0, i1)
+            } else { Vec::new() };
             for g in 0..ng {
                 let (gx0, gy0, gx1, gy1) = gbox[g];
                 if gx1 < lx0 || gx0 > lx1 || gy1 < ly0 || gy0 > ly1 { continue; }
@@ -574,16 +585,25 @@ pub(crate) fn segment_crossings_core(pa: numpy::ndarray::ArrayView2<f64>, ps: nu
                 for k in j0..j1.saturating_sub(1) {
                     let (ax, ay) = (ga[[k, 0]], ga[[k, 1]]);
                     let (dx, dy) = (ga[[k + 1, 0]] - ax, ga[[k + 1, 1]] - ay);
-                    for j in 0..(i1 - i0 - 1) {
+                    let mut test = |j: usize| {
                         let (px, py_) = (pa[[i0 + j, 0]], pa[[i0 + j, 1]]);
                         let (rx, ry) = (pa[[i0 + j + 1, 0]] - px, pa[[i0 + j + 1, 1]] - py_);
                         let den = rx * dy - ry * dx;
-                        if !(den.abs() > 1e-12) { continue; }
+                        if !(den.abs() > 1e-12) { return; }
                         let (apx, apy) = (ax - px, ay - py_);
                         let t = (apx * dy - apy * dx) / den;
                         let u = (apx * ry - apy * rx) / den;
                         if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
                             out.push((pi, g, s[j] + t * (s[j + 1] - s[j]), px + t * rx, py_ + t * ry));
+                        }
+                    };
+                    if runs.is_empty() {
+                        (0..i1 - i0 - 1).for_each(test);
+                    } else {
+                        for run in &runs {
+                            if run.can_cross(ax, ay, dx, dy) {
+                                run.segments.clone().for_each(&mut test);
+                            }
                         }
                     }
                 }
@@ -7357,6 +7377,26 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 513: v2 P2a2 (fork_records: noses from the lanes + a fitted gore width, the separation held; at-grade slip lanes
     // flagged, no record; three more params)
     m.add_function(wrap_pyfunction!(roadshape::sheet::deck_sheets, m)?)?;
+    m.add_class::<roadshape::segments::SegmentCell>()?;
+    m.add_class::<roadshape::segments::SegmentWindow>()?;
+    m.add_function(wrap_pyfunction!(roadshape::segments::connector_vertices, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::paint::pavement_coverage, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::lanes::lane_cell_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::lanes::lane_tag_columns, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::lanes::lane_connectors, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::lanes::lane_graph, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::lane_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_slab_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_ramp_offsets, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_surface_groups, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_surface_z, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_event_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::deck::deck_surface_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::surface::cut_lines, m)?)?;
+    // 542: road surface v3 phase S2 (roadshape::surface: the ground road surface as one mesh, lane strips sharing
+    // their rows, pieces welded to the roads on shared rows, markings from the boundaries; BNE_ROADSURF_V3=surface)
+    // 538: road surface v3 phase S1 (roadshape::lanes::lane_graph: strokes, anchored ordered lane boundaries, gore
+    // from geometry, the TaperRule table; BNE_ROADSURF_V3=shadow, nothing built reads it)
     // 514: v2 P2b (roadshape::sheet::deck_sheets: exits off bridges as one deck, BNE_ROADSHAPE=sheet)
     // 515: v2 P2c (deck_sheets: the union ends where the heights part when the edges' split fails the height tests)
     m.add_function(wrap_pyfunction!(roadshape::profile::profile_members, m)?)?;
@@ -7392,6 +7432,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 535: the full Rust port's phase 2b on try598 (534): host/farstate.rs, the far state machine (FarState;
     // far_swap_groups)
     // 537: try598 with 536 (P3e) and 535 (port2b) merged
-    m.add("VERSION", 538)?;
+    // 545: bus station feature extraction, layout, render and collision meshes (Codex GPT-6.2-Astra port).
+    busstation::register(m)?;
+    // 548: try598 with 547 and 545 (busstation) merged
+    m.add_function(wrap_pyfunction!(railcrossings::rail_crossing_roads, m)?)?;
+    m.add_function(wrap_pyfunction!(railcrossings::rail_cut_worn, m)?)?;
+    // 550: ground-road surface partitions, lane window selection and pavement coverage.
+    // 552: try598 with 549 (codex-port2 rail crossings) and 550 (v3 S2b) merged
+    // 556: merged
+    m.add("VERSION", 557)?;
     Ok(())
 }

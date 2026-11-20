@@ -391,6 +391,7 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_NETSTATS_PROC", "BNE_LIDAR_GAPS_WAIT",
                 "BNE_TELEMETRY",
                 "BNE_ROADSHAPE_DEBUG",      # (v2 P2a's fork records written beside the build: nothing built reads them)
+                "BNE_ROADSURF_V3_DEBUG",    # (v3 S1's lane graphs written beside the build: nothing built reads them)
                 # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
                 # plancache's stage_*)
                 "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
@@ -465,7 +466,8 @@ SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER
 def keyed_value(k, v):
     """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
     SWITCH_VERSIONS version after it when it has one."""
-    n = SWITCH_VERSIONS.get(k)
+    # The surface generation includes the supporting deck and its parapet outline.
+    n = 4 if (k, v) == ("BNE_ROADSURF_V3", "surface") else SWITCH_VERSIONS.get(k)
     return f"{k}={v}" if n is None else f"{k}={v}@v{n}"
 
 

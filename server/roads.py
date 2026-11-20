@@ -23,7 +23,6 @@ import json
 import functools
 import logging
 import math
-import types
 import collections
 import hashlib
 import os
@@ -4442,7 +4441,7 @@ def tunnel_specs(feats):
     return list(_cell_memo(feats, "_tunnel_specs", lambda: _bridge_specs(feats, "tunnel")))
 
 
-def _bridge_specs(feats, want="bridge"):
+def _bridge_specs(feats, want="bridge", ground_fallback=None):
     """bridge_specs' / tunnel_specs' making (earthfast.RoadRules.bridge_specs): the roads with a range of that kind
     (bridges: the lengthened level_ranges, a bridge's range carried onto the road joined at its end (_skew_decks) is a
     deck too: with the raw ranges that stretch was neither deck nor ground, the deck's end lost its approach ramp and
@@ -4451,10 +4450,16 @@ def _bridge_specs(feats, want="bridge"):
     way, Kommunalny Bridge in Perm, GitHub #378 by RiDexSS), Sweden's widths, and one carriageway of a divided road
     (dual_carriageways on its ground specs) one carriageway wide, as its approaches (Baltimore's motorways: 18.8 m
     decks on 12 m roads, the user 2026-10-31: "bridge widths dont always match the road widths")."""
-    ground = road_specs(feats)
+    ground = road_specs(feats) if ground_fallback is None else ground_fallback
     inp = _spec_inputs(feats)
     n = len(feats)
     elig = np.flatnonzero(inp["cols"]["elig"]).tolist()
+    if ground_fallback is not None:
+        # The lane graph uses the ground spec wherever one exists. Only the
+        # remaining eligible features can need the structural level lookup.
+        elig = [i for i in elig if ground[i] is None]
+        if not elig:
+            return [None] * n
     lv = _level_lists(feats, elig) if want == "bridge" else _raw_all(feats)
     has = _has_kind(lv, elig, want, n)
     import fast
@@ -7575,17 +7580,8 @@ def tiles_near(x, y, radius):
     user, 2026-10-28: "change the quality/view distance radius from a square to a circle"). Before it was the square
     (Chebyshev): its corners reached 41 % farther than its sides, ~27 % more tiles than the disc for no reach ahead
     (the anchor frame's axes are not the way the car drives). Order: tx, then ty (as before)."""
-    t0x, t1x = int(math.floor((x - radius) / TILE)), int(math.floor((x + radius) / TILE))
-    t0y, t1y = int(math.floor((y - radius) / TILE)), int(math.floor((y + radius) / TILE))
-    r2 = radius * radius
-    out = []
-    for tx in range(t0x, t1x + 1):
-        dx = max(tx * TILE - x, x - (tx + 1) * TILE, 0.0)
-        for ty in range(t0y, t1y + 1):
-            dy = max(ty * TILE - y, y - (ty + 1) * TILE, 0.0)
-            if dx * dx + dy * dy <= r2:
-                out.append((tx, ty))
-    return out
+    fast.require(551, "tracker_near")
+    return fast._ef.tracker_near(x, y, radius, TILE, 1, None)
 
 
 def tile_distance(tx, ty, x, y):
@@ -7596,55 +7592,32 @@ def tile_distance(tx, ty, x, y):
 def wanted_tiles(x, y, vx=0.0, vy=0.0):
     """The tile keys the mod should have around (x, y): those within SEND_M, and moving at FAST_MS or more also those
     within CORRIDOR_M of the path ahead, up to LEAD_S of driving (LEAD_MAX_M at most)."""
-    want = set(tiles_near(x, y, SEND_M))
-    s = math.hypot(vx, vy)
-    lead = min(LEAD_MAX_M, s * LEAD_S)
-    if s < FAST_MS or lead <= SEND_M:
-        return want
-    ux, uy = vx / s, vy / s
-    d = 0.0
-    while d <= lead:
-        want.update(tiles_near(x + ux * d, y + uy * d, CORRIDOR_M))
-        d += TILE / 2
-    return want
+    fast.require(551, "anchor_wanted")
+    return fast._ef.anchor_wanted((x, y), (vx, vy))
 
 
 def path_key(x, y, vx, vy):
     """The build order at speed: by how far along the path ahead the tile is, its sideways distance from the path
     counting SIDE_PENALTY times, a tile behind the car by its distance times SIDE_PENALTY (after those ahead)."""
-    s = math.hypot(vx, vy)
-    ux, uy = vx / s, vy / s
+    fast.require(551, "road_path_rank")
+    speed = math.hypot(vx, vy)
+    return functools.partial(fast._ef.road_path_rank, p=(x, y), unit=(vx / speed, vy / speed), tile=TILE,
+                             penalty=SIDE_PENALTY, lead=LEAD_MAX_M)
 
-    def key(k):
-        d = tile_distance(k[0], k[1], x, y)
-        if d <= 0:
-            return 0.0
-        x0, y0, x1, y1 = tile_bbox(k[0], k[1])
-        dx, dy = (x0 + x1) / 2 - x, (y0 + y1) / 2 - y
-        along, side = dx * ux + dy * uy, abs(dy * ux - dx * uy)
-        if along < -TILE / 2:
-            return d * SIDE_PENALTY + LEAD_MAX_M
-        return max(0.0, along) + SIDE_PENALTY * max(0.0, side - TILE / 2)
-    return key
+
+def _tracker_cone(conn, aid):
+    import farfield
+    cam = getattr(conn, "cam", None)
+    if isinstance(cam, dict) and getattr(conn, "cam_aid", None) == aid:
+        return farfield.view_cone(cam) or ()
+    return ()
 
 
 def view_key(conn, aid, x, y):
-    """The build order of a tracker's tiles: nearest first, a tile outside the camera's view cone counting
-    farfield.VIEW_PENALTY times as far (the far field's own rule, farfield.view_distance): what the player sees
-    comes first, the tiles behind the car later. Plain distance without the pose's camera."""
     import farfield
-    cam = getattr(conn, "cam", None)
-    cone = farfield.view_cone(cam) if isinstance(cam, dict) and getattr(conn, "cam_aid", None) == aid else None
-
-    def key(k):
-        d = tile_distance(k[0], k[1], x, y)
-        if cone is None or d <= 0:
-            return d
-        # (the far field's own rule, in Rust: the flat cone, or the 3D map's 3D one)
-        return farfield.view_distances([types.SimpleNamespace(bbox=tile_bbox(k[0], k[1]))], cone, x, y)[0]
-    return key
-
-
+    fast.require(551, "road_view_rank")
+    return functools.partial(fast._ef.road_view_rank, p=(x, y), tile=TILE, cone=_tracker_cone(conn, aid),
+                             penalty=farfield.VIEW_PENALTY)
 
 
 def cells_of_tile(frame, tx, ty, margin=OVERLAP):
@@ -12170,7 +12143,7 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
 
 
 def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=None, shift_of=None, width_of=None,
-                   context_of=None, context_m=None, left_hand=False, country=None, sheet_marks=None):
+                   context_of=None, context_m=None, left_hand=False, country=None, sheet_marks=None, surface=None):
     """The chunks of the bridges crossing the tile box `exact` (deck surfaces flagged "deck", their
     centre / edge lines; every bridge chunk "fixed": its z is the deck's, not the ground's). Deck
     heights: from `bridges` (BridgeProfiles: whole chains, shared by every tile), else from the
@@ -12247,13 +12220,62 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
                 if roadshape.SHEET and any(_travel(sp) != 0 for _f, sp, _p, _l in got) else None)
         pf = getattr(bridges, "profiled_ids", None) if roadshape.PROFILE_BUILT and wide is not None else None
         pf = pf() if pf is not None else None
-        if shaped:
-            return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
-                                shift_of, width_of, context_m, marks_of=marks_of, shapes=shapes, sheet_wide=wide,
-                                sheet_marks=sheet_marks, profiled=pf)
-        return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
-                            shift_of, width_of, context_m, marks_of=marks_of, sheet_wide=wide, sheet_marks=sheet_marks,
-                            profiled=pf)
+        covered, face_chunks = {}, []
+        if surface is not None and any(sp.cls in ("motorway", "trunk") for _, sp, _, _ in got):
+            import roadsurf3_decks
+            import revisit
+            def surface_parts(full_cells, bbox):
+                shapes_in_window = None
+                if shaped:
+                    records = [(fid, sp, np.c_[xy, z], lon, shape) for fid, sp, xy, z, lon, shape in
+                               bridges.parts_shaped(full_cells, bbox) if np.isfinite(z).all()]
+                    parts = [r[:4] for r in records]
+                    shapes_in_window = [r[4] for r in records]
+                else:
+                    parts = [(fid, sp, np.c_[xy, z], lon) for fid, sp, xy, z, lon in
+                             bridges.parts(full_cells, bbox) if np.isfinite(z).all()]
+                context = context_of(full_cells) if context_of else (walks or {}, shift_of, width_of)
+                return roadsurf3_decks.prepare(parts, shapes_in_window, exact, context, dd, frame, country,
+                                               surface["cell_fn"], surface.get("lane_memo"))
+
+            with revisit.scope() as deck_scope:
+                try:
+                    covered, face_chunks, skip = _sheet_window_parts(bridges, frame, cells, exact, surface_parts)
+                    if sheet_marks is not None:
+                        sheet_marks.extend(skip)
+                except Exception as ex:
+                    import logging
+                    revisit.fault()
+                    logging.getLogger("earthd.roadsurf3").warning("deck surface: %s", ex)
+            surface["deck_short"] = not deck_scope.kept_until()[0]
+        depth = {d[0]: dd(d[0]) for d in got} if dd else None
+        if not covered:
+            return _deck_chunks(got, exact, bridges._ground, depth, walks, shift_of, width_of, context_m,
+                                marks_of=marks_of, shapes=shapes, sheet_wide=wide, sheet_marks=sheet_marks,
+                                profiled=pf)
+        if wide is not None:
+            wide = [d for d in wide if _sheet_key(d[0], d[2]) not in covered]
+        ordinary, by_group = [], {}
+        for i, (fid, _, p, _) in enumerate(got):
+            key = _sheet_key(fid, p)
+            if key in covered:
+                group, cut, wide_cut, dz = covered[key]
+                if any(dz):
+                    p = p.copy()
+                    p[:, 2] += dz
+                    got[i] = (fid, got[i][1], p, got[i][3])
+                by_group.setdefault(group, ([], (cut, wide_cut)))[0].append(i)
+            else:
+                ordinary.append(i)
+
+        def chunks_for(indices, cuts=None):
+            return _deck_chunks([got[i] for i in indices], exact, bridges._ground, depth, walks, shift_of,
+                                width_of, context_m, marks_of=marks_of, shapes=[shapes[i] for i in indices]
+                                if shapes is not None else None, sheet_wide=wide, sheet_marks=sheet_marks,
+                                profiled=pf, surface_cuts=cuts)
+        for indices, cuts in by_group.values():
+            face_chunks.extend(chunks_for(indices, cuts))
+        return chunks_for(ordinary) + face_chunks
     if not bseen:
         return []
     parts = []                                  # (fid, spec, xy (k, 2), lon)
@@ -12928,7 +12950,7 @@ def _sheet_key(fid, pts):
     return (str(fid), round(float(p[0, 0]), 2), round(float(p[0, 1]), 2), len(p))
 
 
-def _sheet_window_parts(bridges, frame, cells, exact):
+def _sheet_window_parts(bridges, frame, cells, exact, reader=None):
     """BNE_ROADSHAPE=sheet: the deck parts within roadshape.SHEET_WINDOW_M of the tile box exact (the cells round it
     read through bridges.cell_fn as the short-branch forks' are), one per _sheet_key: the forks' input only, never
     drawn (a wider drawn set changed other decks: SD Fwy's I-605 connector drawn twice)."""
@@ -12950,8 +12972,11 @@ def _sheet_window_parts(bridges, frame, cells, exact):
                     continue
                 cells.append(features)
     m = max(0.0, reach - NEAR_M)            # (parts() adds NEAR_M)
+    box = (x0 - m, y0 - m, x1 + m, y1 + m)
+    if reader is not None:
+        return reader(cells, box)
     return [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in
-            bridges.parts(cells, (x0 - m, y0 - m, x1 + m, y1 + m)) if np.isfinite(z).all()]
+            bridges.parts(cells, box) if np.isfinite(z).all()]
 
 
 def _sheet_records(src):
@@ -13340,7 +13365,7 @@ def _cut_ends(ch, line, box):
 
 
 def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None, context_m=None,
-                 marks_of=None, shapes=None, sheet_wide=None, sheet_marks=None, profiled=None):
+                 marks_of=None, shapes=None, sheet_wide=None, sheet_marks=None, profiled=None, surface_cuts=None):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
     within context_m (default DECK_CONTEXT_M) as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck).
     ground_fn(xy) -> heights: a part's ends on the ground are its abutments (each deck chunk's "abut" points: the
@@ -13358,9 +13383,9 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         ws = width_of(fid, pts) if width_of else None
         return pts, spec.width if ws is None else ws
     sheet_recs = []
-    if roadshape.SHEET:     # (road revamp v2 P2b: an exit off a bridge one deck with its road; its heights pinned first)
+    if roadshape.SHEET and surface_cuts is None:     # (road revamp v2 P2b: an exit off a bridge one deck with its road; its heights pinned first)
         sheet_recs, decks = _sheet_plan(decks, walks, shapes, sheet_wide, sheet_marks, profiled)
-    layouts = rampmerges.plans(decks, geometry=geometry, pavement=geometry)
+    layouts = [] if surface_cuts is not None else rampmerges.plans(decks, geometry=geometry, pavement=geometry)
     walks = walks or {}
     out = []
     abut = {}
@@ -13453,7 +13478,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                     if depths and fid in depths:
                         ch["dd"] = round(float(depths[fid]), 3)
                     out.append(ch)
-    reach = _deck_reach(decks, shifted, walks, width_of, sheet, exact,
+    reach = {} if surface_cuts is not None else _deck_reach(decks, shifted, walks, width_of, sheet, exact,
                         {fid for fid in joint_profiles if fid not in joint_excluded})
     for i, (fid, spec, pts, lon) in enumerate(decks):
         # at a merge / split the whole deck shifted toward the ramp (its lines with it): the far edge goes straight on
@@ -13525,6 +13550,18 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             if abut.get(fid):
                                 ch["abut"] = abut[fid]
                         out.append(ch)
+    if surface_cuts is not None:
+        import roadsurf3
+        for c in out:
+            if c.get("deck"):
+                c["surface_ref"] = True
+                c.pop("jn", None)
+        # A member retains its old markings outside the lane-event footprint.
+        # The clipper accepts draped chunks; restore the surveyed height flag.
+        marks = [dict(c, fixed=False) for c in out if not c.get("deck")]
+        cuts, wide_cuts = surface_cuts
+        out = [c for c in out if c.get("deck")] + [
+            dict(c, fixed=True) for c in roadsurf3.cut_chunks(marks, cuts, wide_cuts, roadsurf3._is_edge)]
     out.extend(rampmerges.chunks(layouts, exact, fixed=True))
     return roadmarkings.paint(out)
 
@@ -13907,7 +13944,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
                sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=(),
-               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None):
+               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None, v3=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -13936,7 +13973,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     Germany's border (markings.style of germany.effective_country at the tile's middle). wear: the road wear's
     argument (roadwear.py: tyre polish, concrete joints, cracks, patches, manholes, oil spots, fallen leaves as chunks
     of the road mesh; a tier or {"tier", "season"}; None or 0: none); cover_fn(lat, lon) -> (WorldCover classes, complete): with wear, a rural road's asphalt edge
-    is the grassy one where grass grows to it, and its fallen leaves (roadwear.verges).
+    is the grassy one where grass grows to it, and its fallen leaves (roadwear.verges). v3: {"cell_fn": cell -> its
+    roads features} with BNE_ROADSURF_V3=surface (roadsurf3.py): the motorway / trunk ground surface as one mesh, read
+    from the cells round the tile (not their carriageway chunks: its mesh instead).
     Pure given its inputs (sorted by feature id)."""
     own_box = tile_bbox(tx, ty)                 # (a geotile's knows its own points: box_owns)
     x0, y0, x1, y1 = own_box
@@ -14052,6 +14091,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     rough = (lambda sp: terrain_paint and terrain_surface(sp) is not None)     # noqa: E731
     strip_ends = _strip_open_ends(roads, rings, seen, near, rough) if DIRT_STRIPS else {}
     paved_segs = _built_segments(roads) if DIRT_STRIPS else None
+    import roadsurf3
+    v3_on = v3 is not None and roadsurf3.ON
+    if v3_on:
+        v3["lane_memo"] = {}
     for k_road, (fid, spec, pts, _) in enumerate(roads):
         # the carriageway painted into the ground (surface.photo_roads); a dirt or gravel road's strip over it
         # (DIRT_LOOK)
@@ -14077,7 +14120,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             for piece in clip_polyline(line, *box):
                 for c in split(densify(simplify(piece))):
                     if len(c) >= 2:
-                        chunks.append(_chunk(look, lw, c))
+                        ch = _chunk(look, lw, c)
+                        if v3_on and spec.cls in roadsurf3.V3_CLASSES and spec.kind == "paved":
+                            # Retain the strip in its original order until its replacement succeeds.
+                            ch["_v3_fallback"] = True
+                        chunks.append(ch)
     decks_near = []                             # (retaining_walls: none under a bridge)
     traffic_decks = []                          # genuine bridge geometry only, never the tunnel vaults below
     deck_walk = {}                              # the bridges that carry sidewalks (deck_walks)
@@ -14107,7 +14154,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
 
     for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, deck_walk, deck_shift, deck_width,
                              bridge_context, context_m=context_m if traffic_context else None,
-                             left_hand=left_hand, country=country, sheet_marks=sheet_marks):
+                             left_hand=left_hand, country=country, sheet_marks=sheet_marks, surface=v3 if v3_on else None):
         if ch.get("deck"):
             decks_near.append(ch)
             traffic_decks.append(_deck_clearance(ch))
@@ -14857,6 +14904,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if marks is not None and aisles:            # stall lines along the aisles (parking.aisle_markings)
             marks.extend(parking.aisle_markings(roads, aisles, wexact))
     chunks.extend(rampmerges.chunks(merge_layouts, box))
+    if v3_on:                                   # (road surface v3, S2: the ground surface of motorways and trunks)
+        import logging
+        import revisit
+        with revisit.scope() as surface_build:
+            chunks = roadsurf3.apply(frame, own_box, chunks, v3["cell_fn"], urban_fn, widths, left_hand, line_country,
+                                     float(frame.lon0), SURFACE_V2, log=logging.getLogger("earthd.roadsurf3"),
+                                     build_memo=v3.pop("lane_memo"))
+        v3["short"] = v3.get("deck_short", False) or not surface_build.kept_until()[0]
     return roadmarkings.paint(chunks)
 
 
@@ -14942,9 +14997,8 @@ class Tracker:
         """(done, wanted) of the road tiles round the car at the last pose: done = sent to the mod, empty, or failed
         and waiting for its retry (nothing more comes for it now). (0, 0) before a pose. (near_m: as GeoTracker's;
         these tiles carry no distances, all count.)"""
-        car = getattr(self, "car", ())
-        done = sum(1 for k in car if k in self.sent or k in self.empty or k in self.retry)
-        return done, len(car)
+        fast.require(551, "tracker_progress")
+        return fast._ef.tracker_progress(getattr(self, "car", ()), self.sent, self.empty, self.retry, None, None, None)
 
     def on_pose(self, conn, aid, x, y, loop, build, vel=(0.0, 0.0), ground_busy=False, view=None, foci=()):
         """Called with the player's position (and velocity, m/s) in the active anchor's frame. build(aid, tx, ty) runs
@@ -14961,34 +15015,12 @@ class Tracker:
             self.empty, self.retry, self.fails = set(), {}, {}
             self.started, self.stuck_said = {}, set()
         if self.pool is None:
-            from runtimeprofiler import ThreadPoolExecutor
-            self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-tile")
-        vx, vy = (float(vel[0]), float(vel[1])) if vel else (0.0, 0.0)
-        fast = math.hypot(vx, vy) >= FAST_MS
-        car = wanted_tiles(x, y, vx, vy)
-        self.car = car                      # (progress: the loading line's road tiles)
-        seen = set(tiles_near(*view, SEND_M)) - car if view else set()
-        others = set()
-        for f in foci:
-            others.update(tiles_near(f[0], f[1], min(SEND_M, f[2] + TILE / 2)))
-        others -= car | seen
-        wanted = car | seen | others
-        def far(k):
-            return tile_distance(k[0], k[1], x, y) > DROP_M and (not view or tile_distance(k[0], k[1], *view) > DROP_M) \
-                and all(tile_distance(k[0], k[1], f[0], f[1]) > f[2] + TILE for f in foci)
-        for k in self.building - wanted:
-            if far(k):
-                asyncsubmit.request_cancel(self.futs.get(k))
-        start = set(tiles_near(x, y, SEND_M)) if ground_busy else wanted
+            from runtimeprofiler import TileJobs
+            self.pool = TileJobs(BUILD_PER_POSE, "roads-tile")
+        fast.require(551, "anchor_tiles")
         now = time.monotonic()
-        want = [k for k in start if k not in self.sent and k not in self.building and k not in self.empty
-                and self.retry.get(k, 0.0) <= now]
-        car_key = path_key(x, y, vx, vy) if fast else view_key(conn, aid, x, y)
-        cam_key = view_key(conn, aid, *view) if seen else None
-        def focus_d(k):
-            return min(tile_distance(k[0], k[1], f[0], f[1]) for f in foci)
-        want.sort(key=lambda k: (2, focus_d(k)) if k in others else (1, cam_key(k)) if k in seen else (0, car_key(k)))
-        for tx, ty in want[:max(0, BUILD_PER_POSE - len(self.building))]:   # in flight at most (vegetation.Tracker)
+        def start(key):
+            tx, ty = key
             self.building.add((tx, ty))
             self.started[(tx, ty)] = now
             # (the tile's file read in the worker, not on the event loop: staging.build_inline; the build's own
@@ -14997,24 +15029,22 @@ class Tracker:
                                     False)
             fut = self.futs[(tx, ty)] = asyncsubmit.submit(loop, self.pool, job, aid, tx, ty, owned=True)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
-        # a build that never ends leaves the loading line at "roads & buildings 0/36" with nothing in the log (GitHub
-        # #241, a Discord report): said once per tile, with how many are in flight
-        for k in self.building:
-            t0 = self.started.get(k)
-            if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
-                self.stuck_said.add(k)
-                # (not "may be stuck": players read it as broken and cleared their caches, which only made the next
-                # try slower; the time counts the wait for a free road process too)
-                log.warning("roads tile %s of anchor %d: not ready after %.0f s (%d tiles in flight, %d sent): "
-                            "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
-        drop = [k for k in self.sent if k not in wanted and far(k)]
-        for k in drop:
-            self.sent.discard(k)
-            conn.send({"type": "roads_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
-        if self.empty:
-            self.empty = {k for k in self.empty if k in wanted or not far(k)}
-        if self.retry:
-            self.retry = {k: t for k, t in self.retry.items() if t > now}
+
+        def stuck():
+            # a build that never ends leaves the loading line at "roads & buildings 0/36" with nothing in the log (GitHub
+            # #241, a Discord report): said once per tile, with how many are in flight
+            for k in self.building:
+                t0 = self.started.get(k)
+                if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
+                    self.stuck_said.add(k)
+                    # (not "may be stuck": players read it as broken and cleared their caches, which only made the next
+                    # try slower; the time counts the wait for a free road process too)
+                    log.warning("roads tile %s of anchor %d: not ready after %.0f s (%d tiles in flight, %d sent): "
+                                "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
+
+        velocity = (float(vel[0]), float(vel[1])) if vel else (0., 0.)
+        fast._ef.anchor_tiles(self, conn, aid, (x, y), tuple(view) if view else None, foci, velocity,
+                              ground_busy, now, start, stuck)
 
     def _built(self, conn, aid, key, fut):
         if self.closed or aid != self.aid:  # (an old anchor's: the same key may be in flight for the new one)
@@ -15084,24 +15114,8 @@ def geo_wanted(frame, x, y, vx=0.0, vy=0.0, tree=None):
     within CORRIDOR_M of the path ahead (LEAD_S of driving, LEAD_MAX_M at most). {(gx, gy): m from (x, y)}. tree: the
     car's time-to-reach tree (reach.Tree): the path ahead is the roads it is likely to take (reach.P_WANT), not a
     straight line (m: its ETA at the car's speed)."""
-    import geotiles
-    want = {(a, b): d for a, b, d in geotiles.tiles_near(frame, x, y, SEND_M)}
-    s = math.hypot(vx, vy)
-    lead = min(LEAD_MAX_M, s * LEAD_S)
-    if s < FAST_MS or lead <= SEND_M:
-        return want
-    if tree is not None:
-        for k, got in tree.geotile_keys(frame, CORRIDOR_M, horizon=lead / s).items():
-            if got[1]:
-                want.setdefault(k, got[2] * s)
-        return want
-    ux, uy = vx / s, vy / s
-    d = 0.0
-    while d <= lead:
-        for a, b, _dd in geotiles.tiles_near(frame, x + ux * d, y + uy * d, CORRIDOR_M):
-            want.setdefault((a, b), d)
-        d += TILE / 2
-    return want
+    fast.require(551, "road_geo_wanted")
+    return fast._ef.road_geo_wanted(frame, (x, y), (vx, vy), tree)
 
 
 STUCK_DUMP_S = 600.0        # s between two stack dumps of this process for stuck road tiles (_stuck_dump)
@@ -15133,7 +15147,7 @@ class GeoTracker:
     def __init__(self):
         self.aid = None
         self.frame = None
-        self.frames = {}        # anchor id -> its frame (the exact variants' error: _shown_err)
+        self.frames = {}        # anchor id -> its frame, for the error of a visible exact variant
         self.sent = set()       # (gx, gy) whose content the mod has
         self.info = {}          # (gx, gy) -> its content's {"h", "parts": {what: {pivot, relief, col}}}
         self.skins = set()      # (gx, gy) with self.aid's skin sent
@@ -15189,26 +15203,17 @@ class GeoTracker:
         """(done, wanted) of the tiles round the car: done = content and this anchor's skin sent, or waiting for a
         retry. near_m: only those within it of the car (the catch-up boost: the ground under the car, not SEND_M's
         far edge, where a tile is always on its way while driving)."""
-        car = self.car
-        if near_m is not None:
-            dist = getattr(self, "car_m", {}) or {}
-            car = [k for k in car if dist.get(k, 0.0) <= near_m]
-        done = sum(1 for k in car if (k in self.sent and k in self.skins) or k in self.retry)
-        return done, len(car)
+        fast.require(551, "tracker_progress")
+        return fast._ef.tracker_progress(self.car, self.sent, None, self.retry, self.skins,
+                                         getattr(self, "car_m", None), near_m)
 
     def ready_tiles(self, frame, x, y, r):
         """The anchor road tiles (tx, ty) within r of (x, y) (tiles_near) whose road geotiles are all with the mod
         (content and this anchor's skin, or waiting for a retry): their highway and speed signs may come (signstream).
         Before (2026-10-29) the signs waited until every road geotile round the car was in, which while driving it
         seldom was: signs came only once the car slowed down or stopped, one tile at a time, right next to it."""
-        import geotiles
-        reach = TILE / 2 * math.sqrt(2.0)
-        out = set()
-        for tx, ty in tiles_near(x, y, r):
-            ks = geotiles.tiles_near(frame, (tx + 0.5) * TILE, (ty + 0.5) * TILE, reach, exact=True)
-            if all(((a, b) in self.sent and (a, b) in self.skins) or (a, b) in self.retry for a, b, _ in ks):
-                out.add((tx, ty))
-        return out
+        fast.require(551, "road_ready")
+        return fast._ef.road_ready(self, frame, (x, y), r, TILE)
 
     def again(self, keys):
         """The sent geotiles among keys built again (content and this anchor's skin) at the next pose and sent again
@@ -15219,63 +15224,24 @@ class GeoTracker:
             self.skins.discard(k)
             self.need = {nk: v for nk, v in self.need.items() if nk[0] != k}
 
-    def _shown_err(self, key, what, part, frame):
-        """m the part (pivot, relief) of tile key is off in frame's world as the mod shows it (its base shape, or the
-        exact variant of the anchor in shown) under rigid placement."""
-        import geotiles
-        tf = geotiles.frame(*key)
-        piv = float(part.get("pivot", 0.0))
-        rel = float(part.get("relief", 0.0))
-        r_b, _t, c_b = geotiles.placement(tf, frame, (0.0, 0.0, piv))
-        src = self.shown.get(key, {}).get(what)
-        if src is None or src not in self.frames:
-            off = c_b
-        else:
-            r_a, _ta, c_a = geotiles.placement(tf, self.frames[src], (0.0, 0.0, piv))
-            off = dnp.matmul(dnp.matmul(r_b, r_a.T), c_a) - c_b
-        return rel * float(dnp.hypot(off[0], off[1]))
-
     def exact_need(self, key, aid=None, frame=None):
         """({what: {pivot}} of tile key's parts whose exact variant for the anchor must be made, [what] of those
         whose base shape is exact enough again while the mod shows a variant)."""
         aid = self.aid if aid is None else aid
         frame = self.frame if frame is None else frame
-        info = self.info.get(key)
-        if info is None or frame is None:
-            return {}, []
-        make, base = {}, []
-        for what, part in (info.get("parts") or {}).items():
-            tol = EXACT_TOL_COL_M if part.get("col") else EXACT_TOL_M
-            src = self.shown.get(key, {}).get(what)
-            if src == aid:
-                continue
-            if self._shown_err(key, what, part, frame) <= tol:
-                continue
-            saved = self.shown.get(key, {}).pop(what, None)         # (the base shape's error, for the choice)
-            base_err = self._shown_err(key, what, part, frame)
-            if saved is not None:
-                self.shown[key][what] = saved
-            if base_err <= tol:
-                base.append(what)
-            else:
-                make[what] = {"pivot": part.get("pivot", 0.0)}
-        return make, base
+        import geotiles
+        fast.require(551, "road_exact")
+        return fast._ef.road_exact(self, key, aid, frame, geotiles.Z, EXACT_TOL_COL_M, EXACT_TOL_M)
 
     def unwanted(self, key, now=None):
         """May queued job key be dropped (Server.geo_unwanted)? While the car's time-to-reach tree leads the order
         (the last pose's), a tile no pose has wanted for reach.UNWANTED_GRACE_S (an exit passed, a turn not taken:
         off the tree and out of SEND_M round the car, the camera and other cars) that is not right by the car."""
-        if not getattr(self, "tree_on", False) or self.frame is None:
-            return False
-        import reach
-        now = time.monotonic() if now is None else now
-        if now - self.wanted_at.get(key, -1e9) <= reach.UNWANTED_GRACE_S:
-            return False
-        at = getattr(self, "car_at", None)
-        if at is None:
-            return False
         import geotiles
-        return geotiles.quad_dist(geotiles.quad(self.frame, *key), *at) > SEND_M + TILE
+        import reach
+        fast.require(551, "road_unwanted")
+        return fast._ef.road_unwanted(self, key, time.monotonic() if now is None else now,
+                                      reach.UNWANTED_GRACE_S, SEND_M + TILE, geotiles.Z)
 
     def on_pose(self, conn, aid, x, y, loop, build, vel=(0.0, 0.0), ground_busy=False, view=None, foci=(),
                 frame=None, tree=None):
@@ -15296,109 +15262,12 @@ class GeoTracker:
             self.need = {}
             self.stats["anchors"] += 1
         if self.pool is None:
-            from runtimeprofiler import ThreadPoolExecutor
-            self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-geo")
-        vx, vy = (float(vel[0]), float(vel[1])) if vel else (0.0, 0.0)
-        s = math.hypot(vx, vy)
-        import reach
-        if s < reach.MIN_V:     # (the tree from reach.MIN_V up: below FAST_MS it orders the tiles round the car)
-            tree = None
-        car = geo_wanted(frame, x, y, vx, vy, tree)
-        tkeys = tree.geotile_keys(frame, CORRIDOR_M, horizon=max(min(LEAD_MAX_M, s * LEAD_S), reach.HORIZON_MIN_M)
-                                  / s) if tree is not None else {}
-        self.tree_on = tree is not None
-        self.car_at = (x, y)
-        self.car = set(car)
-        self.car_m = car                    # (progress(near_m): each wanted tile's m from the car)
-        seen = {(a, b): d for a, b, d in geotiles.tiles_near(frame, *view, SEND_M)} if view else {}
-        others = {}
-        for f in foci:
-            for a, b, d in geotiles.tiles_near(frame, f[0], f[1], min(SEND_M, f[2] + TILE / 2)):
-                others.setdefault((a, b), d)
-        wanted = set(car) | set(seen) | set(others)
-        def far(k):
-            q = geotiles.quad(frame, *k)
-            if geotiles.quad_dist(q, x, y) <= DROP_M:
-                return False
-            if view and geotiles.quad_dist(q, *view) <= DROP_M:
-                return False
-            return all(geotiles.quad_dist(q, f[0], f[1]) > f[2] + TILE for f in foci)
-        for k in self.building - wanted:
-            if far(k):
-                asyncsubmit.request_cancel(self.futs.get(k))
-        self.clock = getattr(loop, "now", None) or time.monotonic     # (a simulated loop's clock: tools/eta_sim.py)
+            from runtimeprofiler import TileJobs
+            self.pool = TileJobs(BUILD_PER_POSE, "roads-geo")
+        self.clock = getattr(loop, "now", None) or time.monotonic
         now = self.clock()
-        wa = self.__dict__.setdefault("wanted_at", {})
-        for k in wanted:
-            wa[k] = now
-        if len(wa) > 4 * len(wanted) + 256:
-            self.wanted_at = {k: t for k, t in wa.items() if now - t <= 60.0}
-        start = {(a, b) for a, b, _ in geotiles.tiles_near(frame, x, y, SEND_M)} if ground_busy else wanted
-        jobs = []
-        self.redo &= self.sent
-        for k in (set(start) | self.redo) if self.redo else start:
-            if k in self.building or self.retry.get(k, 0.0) > now:
-                continue
-            if k not in self.sent or k in self.redo:
-                jobs.append((k, True, True, "auto"))
-                continue
-            make = None
-            if k not in self.skins or (k, self.aid) not in self.need:
-                mk, base = self.exact_need(k)
-                self.need[(k, self.aid)] = mk
-                if base:                    # (the base shape is exact enough again: no build)
-                    for w in base:
-                        self.shown.get(k, {}).pop(w, None)
-                    self.stats["exact_base"] += len(base)
-                    conn.send({"type": "roads_exact", "anchorId": aid, "key": geotiles.key(*k),
-                               "parts": {w: False for w in base}})
-            make = self.need.get((k, self.aid)) or None
-            if k not in self.skins or make:
-                jobs.append((k, False, k not in self.skins, make))
 
-        build_s = getattr(self, "build_s", None) or reach_build_est()
-
-        deck_first = getattr(self, "deck_first", None) or ()
-
-        def order(job):
-            k = job[0]
-            if k in deck_first:         # (a bridge's tile the mod's deck guard slows the car for: first, deckguard.lua)
-                return (-1, 0.0)
-            if k in car:
-                d = car[k]
-                if tree is not None:    # (by time to reach: reach.order_key; in m at the car's speed)
-                    if s < FAST_MS:     # (a slow car: the tiles right round it first, INSURE_M)
-                        qd = geotiles.quad_dist(geotiles.quad(frame, *k), x, y)
-                        if qd <= INSURE_M:
-                            return (0, qd)
-                    got = tkeys.get(k)
-                    if got is not None:
-                        return (0, reach.order_key(got[2], got[3], got[4], s, build_s) * s)
-                    q = geotiles.quad(frame, *k)
-                    cx, cy = float(np.mean(q[:, 0])), float(np.mean(q[:, 1]))
-                    along = ((cx - x) * vx + (cy - y) * vy) / s
-                    if along < -TILE / 2:
-                        return (0, (d * SIDE_PENALTY + LEAD_MAX_M) + reach.LATE_S * 2 * s)
-                    side = abs(((cx - x) * vy - (cy - y) * vx) / s)
-                    return (0, reach.order_key(max(0.0, along) / s, 1.0, max(0.0, side - TILE / 2), s, build_s) * s)
-                if s >= FAST_MS:        # (ahead first: the corridor's distance along the path)
-                    q = geotiles.quad(frame, *k)
-                    cx, cy = float(np.mean(q[:, 0])), float(np.mean(q[:, 1]))
-                    along = ((cx - x) * vx + (cy - y) * vy) / s
-                    if along < -TILE / 2:
-                        d = d * SIDE_PENALTY + LEAD_MAX_M
-                    else:
-                        # (by the distance along the path, a tile off the corridor later by how far off it is: by
-                        # their plain distance the sides within SEND_M all came before the corridor beyond it, and
-                        # at 500 mph the car outran its road tiles, 0 m of them ahead, Indianapolis 2026-10-30)
-                        side = abs(((cx - x) * vy - (cy - y) * vx) / s)
-                        d = max(0.0, along) + max(0.0, side - CORRIDOR_M) * SIDE_PENALTY
-                return (0, d)
-            if k in seen:
-                return (1, seen[k])
-            return (2, others.get(k, 1e9))
-        jobs.sort(key=order)
-        for k, content, skin, make in jobs[:max(0, BUILD_PER_POSE - len(self.building))]:
+        def start(k, content, skin, make):
             self.building.add(k)
             self.started[k] = now
             # (the content's and the skin's files read in the worker, not on the event loop)
@@ -15407,15 +15276,17 @@ class GeoTracker:
             fut = self.futs[k] = asyncsubmit.submit(loop, self.pool, job, aid, k[0], k[1], content, skin, make, owned=True)
             fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
                                   self._built(conn, a, kk, f, c, sk, m))
-        for k in self.building:
-            t0 = self.started.get(k)
-            if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
-                self.stuck_said.add(k)
-                log.warning("road geotile %s of anchor %d: not ready after %.0f s (%d in flight, %d sent): "
-                            "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
-                _stuck_dump(f"road geotile {k} of anchor {aid} not ready after {now - t0:.0f} s")
 
-        for k in [k for k in self.sent if k not in wanted and k not in self.building and far(k)]:
+        def stuck():
+            for k in self.building:
+                t0 = self.started.get(k)
+                if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
+                    self.stuck_said.add(k)
+                    log.warning("road geotile %s of anchor %d: not ready after %.0f s (%d in flight, %d sent): "
+                                "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
+                    _stuck_dump(f"road geotile {k} of anchor {aid} not ready after {now - t0:.0f} s")
+
+        def drop_tile(k):
             self.sent.discard(k)
             self.skins.discard(k)
             self.skin_h.pop(k, None)
@@ -15427,8 +15298,11 @@ class GeoTracker:
             gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
             if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
                 gone("roads", k, geotiles.key(*k))
-        if self.retry:
-            self.retry = {k: t for k, t in self.retry.items() if t > now}
+
+        fast.require(551, "road_geo")
+        velocity = (float(vel[0]), float(vel[1])) if vel else (0., 0.)
+        fast._ef.road_geo(self, conn, aid, frame, (x, y), velocity, tuple(view) if view else None, foci, tree,
+                          ground_busy, now, start, stuck, drop_tile)
 
     def _built(self, conn, aid, key, fut, content, skin, make):
         import geotiles

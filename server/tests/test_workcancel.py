@@ -12,7 +12,6 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor, CancelledError
 from unittest import mock
 
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import asyncsubmit
@@ -244,12 +243,17 @@ class AsyncCancellationTest(unittest.IsolatedAsyncioTestCase):
     async def test_geo_tracker_protects_camera_and_other_car_then_prioritizes_new_place(self):
         import roads
         import geotiles
+        import geodesy
         entered, release, fresh = threading.Event(), threading.Event(), threading.Event()
         requests = {}
+        frame = geodesy.EnuFrame(39.2834, -76.5934)
+        old_key = geotiles.tile_of(frame.lat0, frame.lon0)
+        lat, lon, _ = frame.enu_to_geodetic(25600., 0., 0.)
+        new_key = geotiles.tile_of(lat, lon)
 
         def build(aid, gx, gy, *args):
-            requests[gx] = workcancel.current()
-            if gx == 0:
+            requests[gx, gy] = workcancel.current()
+            if (gx, gy) == old_key:
                 entered.set()
                 if not release.wait(5):
                     raise TimeoutError('old tile not released')
@@ -258,32 +262,26 @@ class AsyncCancellationTest(unittest.IsolatedAsyncioTestCase):
                 fresh.set()
             return None
 
-        def quad(frame, gx, gy):
-            return np.array([[gx * 256., 0.], [(gx + 1) * 256., 0.],
-                             [(gx + 1) * 256., 256.], [gx * 256., 256.]])
-
         tracker = roads.GeoTracker()
         conn = mock.Mock()
-        loop, frame = asyncio.get_running_loop(), object()
+        loop = asyncio.get_running_loop()
         with mock.patch.object(roads, 'BUILD_PER_POSE', 1), \
-                mock.patch.object(roads, 'geo_wanted', side_effect=lambda f, x, y, *v: {(0 if x < 500 else 100, 0): 0.}), \
-                mock.patch.object(geotiles, 'tiles_near', return_value=[(0, 0, 0.)]), \
-                mock.patch.object(geotiles, 'quad', side_effect=quad):
+                mock.patch.object(geotiles, 'tiles_near',
+                                  side_effect=lambda f, x, y, *a: [(*(old_key if x < 500 else new_key), 0.)]):
             try:
                 tracker.on_pose(conn, 1, 0., 0., loop, build, frame=frame)
-                while not entered.is_set():
-                    await asyncio.sleep(.001)
-                old = tracker.futs[(0, 0)]
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                old = tracker.futs[old_key]
                 tracker.on_pose(conn, 1, 1100., 0., loop, build, frame=frame)
-                requests[0].checkpoint()     # retain work inside the larger drop radius: no edge jitter
+                requests[old_key].checkpoint()     # retain work inside the larger drop radius: no edge jitter
                 tracker.on_pose(conn, 1, 25600., 0., loop, build, view=(0., 0.), frame=frame)
-                requests[0].checkpoint()     # still needed by the camera
+                requests[old_key].checkpoint()     # still needed by the camera
                 tracker.on_pose(conn, 1, 25600., 0., loop, build, foci=[(0., 0., 100., True)], frame=frame)
-                requests[0].checkpoint()     # still needed by another vehicle's collision focus
+                requests[old_key].checkpoint()     # still needed by another vehicle's collision focus
                 tracker.on_pose(conn, 1, 25600., 0., loop, build, frame=frame)
                 with self.assertRaises(workcancel.WorkCancelled):
-                    requests[0].checkpoint()
-                self.assertIn((0, 0), tracker.building)
+                    requests[old_key].checkpoint()
+                self.assertIn(old_key, tracker.building)
                 self.assertFalse(fresh.is_set())
                 release.set()
                 with self.assertRaises(asyncio.CancelledError):
@@ -294,6 +292,7 @@ class AsyncCancellationTest(unittest.IsolatedAsyncioTestCase):
                 while not fresh.is_set() and loop.time() < end:
                     await asyncio.sleep(.001)
                 self.assertTrue(fresh.is_set(), 'the next slot builds at the new position')
+                self.assertIn(new_key, requests)
             finally:
                 release.set()
                 tracker.close()
