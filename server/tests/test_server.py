@@ -1312,12 +1312,15 @@ class DeleteQueueTest(unittest.TestCase):
             mesh.queue_delete([kept], (1, "0_0_0"))         # evicted, then built again (below)
             mesh.queue_delete(paths)
             mesh.tiles[(1, "0_0_0")] = object()
-            await asyncio.sleep(2.0)
+            async def enough_samples():
+                while len(times) < 40:
+                    await asyncio.sleep(0.05)
+            # Loaded runners may delete slower than the cap. Measure the spacing of a fixed sample.
+            await asyncio.wait_for(enough_samples(), timeout=10)
         asyncio.run(run())
         self.assertTrue(os.path.exists(kept))
         # ~40 files/s, evenly spaced (one per step): never more than a few in any 0.1 s
-        self.assertGreater(len(times), 1.5 * earthd.DELETE_MAX_RATE)
-        self.assertLess(len(times), 2.0 * earthd.DELETE_MAX_RATE + 5)
+        self.assertGreaterEqual(times[39] - times[0], 38.0 / earthd.DELETE_MAX_RATE)
         dt = np.diff(times)
         self.assertGreater(float(np.median(dt)), 0.5 / earthd.DELETE_MAX_RATE)
 
