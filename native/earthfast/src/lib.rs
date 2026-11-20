@@ -7,6 +7,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod deckreach;
 mod demsample;
 mod dmmatmul;
 mod devctx;
@@ -112,6 +113,7 @@ mod railpiers;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
+mod bldmesh;
 mod specs;
 mod gsrows;
 mod places;
@@ -127,6 +129,7 @@ mod vegclumps;
 mod roadwear;
 mod roadtone;
 mod railbeds;
+mod railprof;
 mod raildrawn;
 mod railindex;
 mod railnode;
@@ -2211,16 +2214,17 @@ fn batter_apply<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                      b: PyReadonlyArray2<'py, f64>, za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>,
                      h: PyReadonlyArray1<'py, f64>, rh: PyReadonlyArray1<'py, f64>, ba: PyReadonlyArray1<'py, f64>,
                      bb: PyReadonlyArray1<'py, f64>, m: PyReadonlyArray2<'py, f64>, r: PyReadonlyArray2<'py, f64>,
-                     fl: PyReadonlyArray2<'py, u8>,
+                     fl: PyReadonlyArray2<'py, u8>, nb: PyReadonlyArray2<'py, i64>,
                      prm: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64))
                      -> PyResult<Bound<'py, PyArray1<f64>>> {
     let s = batter::Segs { a: a.as_array(), b: b.as_array(), za: za.as_array(), zb: zb.as_array(), h: h.as_array(),
                            rh: rh.as_array(), ba: ba.as_array(), bb: bb.as_array(), m: m.as_array(),
-                           r: r.as_array(), fl: fl.as_array() };
+                           r: r.as_array(), fl: fl.as_array(), nb: nb.as_array() };
     let n = s.h.len();
     if s.a.nrows() != n || s.b.nrows() != n || s.a.ncols() < 2 || s.b.ncols() < 2 || s.za.len() != n
         || s.zb.len() != n || s.rh.len() != n || s.ba.len() != n || s.bb.len() != n || s.m.dim() != (n, 4)
-        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) {
+        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) || s.nb.dim() != (n, 2)
+        || s.nb.iter().any(|&v| v < -1 || v >= 2 * n as i64) {
         return Err(pyo3::exceptions::PyValueError::new_err("batter_apply: the segment arrays disagree"));
     }
     let (px, pyy, base, g0) = (px.as_array(), pyy.as_array(), base.as_array(), g0.as_array());
@@ -2244,16 +2248,17 @@ fn batter_apply_vw<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: Py
                         b: PyReadonlyArray2<'py, f64>, za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>,
                         h: PyReadonlyArray1<'py, f64>, rh: PyReadonlyArray1<'py, f64>, ba: PyReadonlyArray1<'py, f64>,
                         bb: PyReadonlyArray1<'py, f64>, m: PyReadonlyArray2<'py, f64>, r: PyReadonlyArray2<'py, f64>,
-                        fl: PyReadonlyArray2<'py, u8>,
+                        fl: PyReadonlyArray2<'py, u8>, nb: PyReadonlyArray2<'py, i64>,
                         prm: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64))
                         -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
     let s = batter::Segs { a: a.as_array(), b: b.as_array(), za: za.as_array(), zb: zb.as_array(), h: h.as_array(),
                            rh: rh.as_array(), ba: ba.as_array(), bb: bb.as_array(), m: m.as_array(),
-                           r: r.as_array(), fl: fl.as_array() };
+                           r: r.as_array(), fl: fl.as_array(), nb: nb.as_array() };
     let n = s.h.len();
     if s.a.nrows() != n || s.b.nrows() != n || s.a.ncols() < 2 || s.b.ncols() < 2 || s.za.len() != n
         || s.zb.len() != n || s.rh.len() != n || s.ba.len() != n || s.bb.len() != n || s.m.dim() != (n, 4)
-        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) {
+        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) || s.nb.dim() != (n, 2)
+        || s.nb.iter().any(|&v| v < -1 || v >= 2 * n as i64) {
         return Err(pyo3::exceptions::PyValueError::new_err("batter_apply_vw: the segment arrays disagree"));
     }
     let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
@@ -4532,31 +4537,34 @@ fn view_distances<'py>(py: Python<'py>, bboxes: PyReadonlyArray2<'py, f64>, px: 
     let b = bboxes.as_array();
     let n = b.shape()[0];
     let out: Vec<f64> = release(py, n * cone.len().max(1), || {
-        (0..n).map(|k| {
-            let (x0, y0, x1, y1) = (b[[k, 0]], b[[k, 1]], b[[k, 2]], b[[k, 3]]);
-            let dx = (x0 - px).max(0.0).max(px - x1);
-            let dy = (y0 - py_).max(0.0).max(py_ - y1);
-            let d = dx.dhypot(dy);
-            if cone.len() == 8 {
-                if d <= 0.0 {
-                    return d;
-                }
-                let (cx, cy, cz) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1], cone[7] - cone[2]);
-                let r = (cx * cx + cy * cy + cz * cz).sqrt();
-                // (the tile's corner nearest the cone's axis counts too: half its diagonal as an angle at r)
-                let slack = ((x1 - x0) * std::f64::consts::FRAC_1_SQRT_2 / r.max(1.0)).min(1.0).dasin();
-                let c = ((cx * cone[3] + cy * cone[4] + cz * cone[5]) / r.max(1e-9)).clamp(-1.0, 1.0);
-                return if c.dacos() - slack <= cone[6].clamp(-1.0, 1.0).dacos() { d } else { d * penalty };
-            }
-            if cone.len() != 5 || d <= 0.0 {
-                return d;
-            }
-            let (cx, cy) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1]);
-            let r = cx.dhypot(cy);
-            if r <= x1 - x0 || (cx * cone[2] + cy * cone[3]) / r >= cone[4] { d } else { d * penalty }
-        }).collect()
+        (0..n).map(|k| view_distance([b[[k, 0]], b[[k, 1]], b[[k, 2]], b[[k, 3]]], px, py_, &cone, penalty)).collect()
     });
     numpy::ndarray::Array1::from(out).into_pyarray(py)
+}
+
+/// One tile's view_distances (the far state machine's build order, host/farstate.rs).
+pub fn view_distance(bb: [f64; 4], px: f64, py_: f64, cone: &[f64], penalty: f64) -> f64 {
+    let (x0, y0, x1, y1) = (bb[0], bb[1], bb[2], bb[3]);
+    let dx = (x0 - px).max(0.0).max(px - x1);
+    let dy = (y0 - py_).max(0.0).max(py_ - y1);
+    let d = dx.dhypot(dy);
+    if cone.len() == 8 {
+        if d <= 0.0 {
+            return d;
+        }
+        let (cx, cy, cz) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1], cone[7] - cone[2]);
+        let r = (cx * cx + cy * cy + cz * cz).sqrt();
+        // (the tile's corner nearest the cone's axis counts too: half its diagonal as an angle at r)
+        let slack = ((x1 - x0) * std::f64::consts::FRAC_1_SQRT_2 / r.max(1.0)).min(1.0).dasin();
+        let c = ((cx * cone[3] + cy * cone[4] + cz * cone[5]) / r.max(1e-9)).clamp(-1.0, 1.0);
+        return if c.dacos() - slack <= cone[6].clamp(-1.0, 1.0).dacos() { d } else { d * penalty };
+    }
+    if cone.len() != 5 || d <= 0.0 {
+        return d;
+    }
+    let (cx, cy) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1]);
+    let r = cx.dhypot(cy);
+    if r <= x1 - x0 || (cx * cone[2] + cy * cone[3]) / r >= cone[4] { d } else { d * penalty }
 }
 
 /// vegetation._mask_roads' inner loop: the road corridors of segments (n, 4) [ax, ay, bx, by] in CHM grid px (column,
@@ -6895,6 +6903,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(levelways::level_ways_promote, m)?)?;
     // (and roadmesh's per-ribbon rounds: deck_trim_overlaps, keep_up_mask, shared_points)
     m.add_function(wrap_pyfunction!(meshtrim::deck_trim_overlaps, m)?)?;
+    m.add_function(wrap_pyfunction!(meshtrim::deck_trim_coplanar, m)?)?;
     m.add_function(wrap_pyfunction!(meshtrim::keep_up_mask, m)?)?;
     m.add_function(wrap_pyfunction!(meshtrim::shared_points, m)?)?;
     // (and shelters' carriageway tests: shelter_intrusion, shelter_worst_post)
@@ -7347,6 +7356,42 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 512: try598 with both 510 (P2a) and 511 (P1c trim) merged
     // 513: v2 P2a2 (fork_records: noses from the lanes + a fitted gore width, the separation held; at-grade slip lanes
     // flagged, no record; three more params)
-    m.add("VERSION", 514)?;
+    m.add_function(wrap_pyfunction!(roadshape::sheet::deck_sheets, m)?)?;
+    // 514: v2 P2b (roadshape::sheet::deck_sheets: exits off bridges as one deck, BNE_ROADSHAPE=sheet)
+    // 515: v2 P2c (deck_sheets: the union ends where the heights part when the edges' split fails the height tests)
+    m.add_function(wrap_pyfunction!(roadshape::profile::profile_members, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::profile::profile_solve, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::pins::profile_pin_field, m)?)?;
+    // 516: v2 P3a (roadshape::profile: the stretches from anchor to anchor through a chain's decks and their joint
+    // height solve, shadow only, BNE_ROADSHAPE=profile)
+    // 521: v2 P3b (roadshape::pins::profile_pin_field: the joint profile's approach ground into the graded ground)
+    bldmesh::register(m)?;
+    // 519: the full Rust port's r2a19 (bldmesh: buildings.Mesh as BldMesh, the box-frame roofs, lids, cornices, boxes,
+    // stoops, signs and roof-clutter boxes of buildings.build); 516-518 are other branches'
+    // 524: try598 with 521 (P3b) and 519 (r2a19) merged; 522-523 are other branches'
+    m.add_function(wrap_pyfunction!(deckreach::deck_stations, m)?)?;
+    m.add_function(wrap_pyfunction!(deckreach::deck_reach, m)?)?;
+    // 518: deckreach::deck_reach (a slab's reach along each deck part's whole line, at fixed stations: the tiles either
+    // side of a seam agree on it), on 516 (P3a); 517 is another branch's
+    // 526: try598 with 524 and 518 (deckreach) merged; 525 is another branch's
+    // 523: v2 P3c (profile_pin_field: each approach's pin weight local to its own line and abutment)
+    // 529: try598 with 526 and 523 (P3c) merged; 525, 527, 528 are other branches'
+    m.add_function(wrap_pyfunction!(railprof::rail_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(railprof::rail_approach_rays, m)?)?;
+    // 525: the full port's railways.profile (railprof: the beds, the decks' approach levels, the underpasses'
+    // clearance and the decks run out along the track in one call; the ground stays the caller's)
+    // 530: try598 with 529 and 525 (r2a20) merged; 527-528 are other branches'
+    // 522: revampfix (batter::apply_vw: a corridor loosened behind an end its plan does not carry it on past, cap_loosen)
+    // 531: revampfix2 (522 on try598; batter_apply_vw's continuation links from plan_pack's nb); 530 is another branch's
+    // 532: try598 with 530 and 531 (revampfix2) merged
+    // 528: the full Rust port's phase 2a (host/pyjson.rs: protocol.encode's bytes; host/pyjob.rs: PyJobs; host/msgs.rs:
+    // far_tile, far_swap, far_remove, far_done, status and load_progress made in Rust); 527 is another branch's
+    // 533: try598 (532) with 528 (port2a) merged: the version the protocol layer asks for (532 lacks it)
+    // 534: v2 P3d on try598 (533): profile_solve's twins, junction nodes, cross-level sheet ends, approaches under
+    // decks; deck_trim_overlaps' coplanar mode
+    // 535: the full Rust port's phase 2b on try598 (534): host/farstate.rs, the far state machine (FarState;
+    // far_swap_groups)
+    // 537: try598 with 536 (P3e) and 535 (port2b) merged
+    m.add("VERSION", 538)?;
     Ok(())
 }
