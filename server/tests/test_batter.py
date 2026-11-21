@@ -72,6 +72,50 @@ class Batter(unittest.TestCase):
             far = off > day + grading.BATTER_SMOOTH_K
             np.testing.assert_array_equal(g[far], nat[far])
 
+    def test_surface_outline_is_the_start_of_each_fill(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import roadsurf3
+
+        plan = road(z=6.)
+        outline = np.array([[-80., .1], [-40., .1], [-20., 10.], [80., 10.],
+                            [80., -4.], [-20., -4.], [-40., -.1], [-80., -.1]])
+        surface = {"pieces": [({"segs": ["way", "through", "ramp"]}, None)],
+                   "kept": [0], "outlines": [outline]}
+        planner = SimpleNamespace(frame=None, _roads_cell=None, widths=None)
+        with patch.object(roadsurf3, "tile_surface", return_value=surface):
+            roadsurf3.grade_plans(planner, (-200., -30., 200., 30.), [("way", plan)],
+                                  [SimpleNamespace(kind="paved", cls="motorway")], "US")
+        ground = lambda x, y: np.zeros_like(np.asarray(y))  # noqa: E731
+        pack = packed([plan], ground)
+        ys = np.array([-21., -5., -4., 0., 10., 11., 27.])
+        # The clipped tip is narrower than the old shoulder. A negative
+        # banking width here would panic when the terrain is evaluated.
+        np.testing.assert_allclose(self.profile(pack, ground, np.array([0.]), x=-60.), 6.)
+        self.assertGreater(float(np.min(pack.rh)), 0.)
+        zs = self.profile(pack, ground, ys)
+        np.testing.assert_allclose(zs[2:5], 6., atol=1e-6)
+        np.testing.assert_allclose(zs[[1, 5]], 6. - grading.BATTER_STRIP_LO, atol=1e-6)
+        self.assertLess(float(max(zs[0], zs[-1])), .1)
+        self.assertEqual(plan.half + plan.widen[0], 4.5)  # the core beyond the lane event
+
+    def test_welded_taper_between_grading_sections(self):
+        xy = np.array([[0., 0.], [40., 0.], [80., 0.]])
+        plan = grading.Plan(xy, np.full(3, 6.), 3.)
+        plan.rank, plan.rid = 110, 1
+        plan.surface_width = True
+        grading.set_widen(plan, np.array([0., 4., 0.]))
+
+        def ground(x, y):
+            return np.zeros_like(y)
+
+        pack = packed([plan], ground)
+        for station in (10., 20., 30., 39.999, 40., 40.001, 50., 60., 70.):
+            half = 3. + min(station, 80. - station) * .1
+            for side in (-1., 1.):
+                z = self.profile(pack, ground, side * np.array([half, half + 1.]), station)
+                np.testing.assert_allclose(z, [6., 6. - grading.BATTER_STRIP_LO], atol=1e-5, rtol=0)
+
     def test_off_is_today(self):
         rng = np.random.default_rng(3)
         plans = random_plans(rng, 60, (0, 0, 400, 400))

@@ -38,6 +38,15 @@ def send(conn, message, files=None, valid=None, inline=None):
             return not getattr(conn, 'closing', False) and (lease is None or lease.connection is conn) and (valid is None or valid())
         if not live():
             return
+        if inline is not None and inline.prepared is not None:
+            data = inline.files.get(message.get('path'))
+            if data is not None:
+                message['data'] = data
+            slots = inline.pool(conn, files) if files else None
+            if slots:
+                message['slots'] = slots
+            conn.send(message)
+            return
         owners = getattr(server, '_publishing_owners', None)
         if owners is None:
             owners = server._publishing_owners = set()

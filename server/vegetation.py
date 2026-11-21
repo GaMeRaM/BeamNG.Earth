@@ -1849,6 +1849,8 @@ class Tracker:
         out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
         digest = self.geo and (self.digests or key in self.redo)
         job = functools.partial(staging.build_inline, build, out_dir, digest)
+        if hasattr(getattr(conn, "s", None), "matslots") and self.kind in ("bldfar", "bldsky", "brfar", "bldpack", "bldhz"):
+            job = functools.partial(staging.prepare_shapes, conn.s, self.kind, self.geo, self.aid, key, job)
         args = key if self.geo else (self.aid, *key)
         self.building.add(key)
         fut = self.futs[key] = asyncsubmit.submit(loop, self.pool, job, *args)

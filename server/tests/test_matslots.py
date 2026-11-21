@@ -1,8 +1,5 @@
 """Pooled far-tile material names (matslots.py) and the server's use of them (reclaim_names, reslot)."""
-import asyncio
 import os
-import threading
-from unittest.mock import patch
 import sys
 import tempfile
 import unittest
@@ -86,7 +83,7 @@ class Conn:
         return {(aid, k) for k in list(self.sent) + list(self.desired)} | set(self.inflight)
 
 
-class ServerTest(unittest.IsolatedAsyncioTestCase):
+class ServerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.s = earthd.Server(self.tmp.name, self.tmp.name)
@@ -105,7 +102,7 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
                                            self.s.texture_name(1, key))
         return ck, name
 
-    async def test_idle_tiles_reclaimed_lru_first_and_reslotted(self):
+    def test_idle_tiles_reclaimed_lru_first_and_reslotted(self):
         cks = [self.add(f"0_{i}_0") for i in range(matslots.TARGET + 20)]
         busy = cks[0][0]
         self.s.names_in_use = lambda: {busy}            # a connection still shows the first tile
@@ -115,7 +112,7 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.s.matslots.owns(*cks[-1]))
         # sent again: a copy of the shape with a fresh name, under a new file name
         ck, old = cks[1]
-        info = await self.s.reslot(ck, self.s.tiles[ck])
+        info = self.s.reslot(ck, self.s.tiles[ck])
         self.assertTrue(self.s.matslots.owns(ck, info.material))
         self.assertNotEqual(info.material, old)
         self.assertEqual(info.shape, f"slot_{info.material.rsplit('_', 1)[1]}.cdae")       # its pooled file
@@ -123,18 +120,62 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(fh.read(), b"head" + info.material.encode() + b"tail")
         self.assertIs(self.s.tiles[ck], info)
 
-    async def test_reslot_own_name_back_rewrites_its_file(self):
+    def test_reslot_own_name_back_rewrites_its_file(self):
         ck, name = self.add("0_0_0")
         slot = os.path.join(self.s.out_dir, matslots.MatSlots.file(name))
         with open(slot, "wb") as fh:            # another tile had the slot meanwhile
             fh.write(b"other")
         self.s.matslots.release(ck)
-        info = await self.s.reslot(ck, self.s.tiles[ck])          # the stack hands its own name back
+        info = self.s.reslot(ck, self.s.tiles[ck])          # the stack hands its own name back
         self.assertEqual(info.material, name)
         with open(slot, "rb") as fh:
             self.assertEqual(fh.read(), b"head" + name.encode() + b"tail")
 
-    async def test_reslot_again_restamps_the_files_own_name(self):
+    def test_renewal_is_shared_and_survives_a_cancelled_waiter(self):
+        import asyncio
+        import threading
+        from types import SimpleNamespace
+
+        ck, original = self.add("0_0_0")
+        self.s.matslots.release(ck)
+        self.s.matslots.take("another tile")
+        info = self.s.tiles[ck]
+        anchor, tile = SimpleNamespace(id=ck[0]), SimpleNamespace(key=ck[1])
+        write = self.s._write_reslot
+        entered, proceed = threading.Event(), threading.Event()
+        writers = []
+
+        def held_write(*args):
+            writers.append(threading.get_ident())
+            entered.set()
+            if not proceed.wait(5):
+                raise AssertionError("the loop did not release the worker")
+            return write(*args)
+
+        self.s._write_reslot = held_write
+
+        async def run():
+            first = self.s.renew_slot(ck, info, anchor, tile)
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                first.cancel()
+                second = self.s.tile(anchor, tile)
+                self.assertIn(ck, self.s.in_use())
+                self.assertFalse(second.done())
+            finally:
+                proceed.set()
+            renewed = await second
+            self.assertNotEqual(writers, [threading.get_ident()])
+            self.assertEqual(len(writers), 1)
+            self.assertIs(self.s.tiles[ck], renewed)
+            self.assertNotEqual(renewed.material, original)
+            self.assertTrue(self.s.matslots.owns(ck, renewed.material))
+            self.assertNotIn(ck, self.s.renewing)
+            self.assertNotIn(ck, self.s.tile_inflight)
+
+        asyncio.run(run())
+
+    def test_reslot_again_restamps_the_files_own_name(self):
         """A tile renamed twice (a global far tile kept across rebases, its name reclaimed at each): the second rename
         restamps the name its own file carries, not the first rename's (that failed, and the tile was sent under a
         name another tile had: it drew that tile's texture, red Utah far tiles on Pikes Peak's ground, 2026-10-29)."""
@@ -143,13 +184,13 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         for rename in range(3):
             self.s.matslots.release(ck)
             others.append(self.s.matslots.take((2, f"x_{rename}")))    # its name goes to another tile
-            info = await self.s.reslot(ck, self.s.tiles[ck])
+            info = self.s.reslot(ck, self.s.tiles[ck])
             self.assertTrue(self.s.matslots.owns(ck, info.material), rename)
             self.assertNotIn(info.material, others)
             with open(os.path.join(self.s.out_dir, info.shape), "rb") as fh:
                 self.assertEqual(fh.read(), b"head" + info.material.encode() + b"tail")
 
-    async def test_reslot_without_a_name_keeps_none(self):
+    def test_reslot_without_a_name_keeps_none(self):
         """A shape with no pooled name in it cannot be renamed: the tile does not own the name it had (the streamer
         then builds it again instead of sending it under another tile's name)."""
         ck, name = self.add("0_0_0")
@@ -157,38 +198,8 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
             fh.write(b"no name here")
         self.s.matslots.release(ck)
         self.s.matslots.take((2, "x"))
-        info = await self.s.reslot(ck, self.s.tiles[ck])
+        info = self.s.reslot(ck, self.s.tiles[ck])
         self.assertFalse(self.s.matslots.owns(ck, info.material))
-
-    async def test_slow_reslot_is_shared_and_cancellation_keeps_slot_reserved(self):
-        ck, name = self.add("0_0_0")
-        entered, release = threading.Event(), threading.Event()
-        original = earthd.staging.replace
-        calls = []
-        def slow(*args):
-            calls.append(args)
-            entered.set()
-            if not release.wait(3):
-                raise TimeoutError('test writer not released')
-            original(*args)
-        with patch.object(earthd.staging, 'replace', side_effect=slow):
-            first = asyncio.create_task(self.s.reslot(ck, self.s.tiles[ck]))
-            second = asyncio.create_task(self.s.reslot(ck, self.s.tiles[ck]))
-            try:
-                self.assertTrue(await asyncio.to_thread(entered.wait, 2))
-                await asyncio.wait_for(asyncio.sleep(.01), .5)
-                first.cancel()
-                with self.assertRaises(asyncio.CancelledError):
-                    await first
-                self.assertIn(ck, self.s.in_use())
-                self.s.reclaim_names()
-                self.assertTrue(self.s.matslots.owns(ck, name))
-            finally:
-                release.set()
-            info = await asyncio.wait_for(second, 2)
-        self.assertEqual(len(calls), 1)
-        self.assertTrue(self.s.matslots.owns(ck, info.material))
-        self.assertFalse(self.s._publishing_owners)
 
     def test_name_in(self):
         p = matslots.MatSlots("ab12")
@@ -207,6 +218,58 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         with open(dst, "rb") as fh:
             self.assertEqual(fh.read(), b"two")
         self.assertFalse(os.path.exists(dst + ".tmp"))
+
+    def test_unpublished_slot_survives_reclaim_and_returns_on_cancel(self):
+        import gc
+        import staging
+        from pathlib import Path
+
+        c = Conn()
+        c.s = self.s
+        self.s.connections.add(c)
+        files = {"road": "first.cdae"}
+        Path(self.s.out_dir, files["road"]).write_bytes(b"first")
+        prepared = staging.prepare_shape_files(self.s, files)
+        self.s.reclaim_names()
+        next_name = self.s.matslots.take("other")
+        self.assertNotEqual(next_name, self.s.matslots.name(0))
+        self.assertEqual(c.slot_holds, {})
+        del prepared
+        gc.collect()
+        self.assertEqual(self.s.matslots.take("after cancel"), self.s.matslots.name(0))
+
+    def test_snapshot_arriving_after_shape_preparation_keeps_its_hold(self):
+        import staging
+        from pathlib import Path
+
+        conn = Conn()
+        conn.s = self.s
+        self.s.connections.add(conn)
+        files = {"road": "ready.cdae"}
+        Path(self.s.out_dir, files["road"]).write_bytes(b"new")
+        prepared = staging.prepare_shape_files(self.s, files)
+        conn.slot_holds[0] = 91
+        self.assertEqual(prepared.claim(conn, files), {})
+        self.assertEqual(conn.slot_holds, {0: 91})
+        self.assertIn(0, self.s.matslots.waiting)
+
+    def test_prepared_shape_transfers_only_to_current_lease(self):
+        import staging
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        old, current = Conn(), Conn()
+        old.s = current.s = self.s
+        old.lease = current.lease = SimpleNamespace(connection=current)
+        files = {"road": "ready.cdae"}
+        Path(self.s.out_dir, files["road"]).write_bytes(b"original")
+        prepared = staging.prepare_shape_files(self.s, files)
+        self.assertEqual(prepared.claim(old, files), {})
+        path, serial = prepared.claim(current, files)["road"]
+        slot = int(Path(path).stem.split("_")[1])
+        self.assertEqual(current.slot_holds, {slot: serial})
+        self.assertIn(slot, self.s.matslots.waiting)
+        self.assertEqual(prepared.claim(current, files), {})
 
     def test_slots_wait_for_the_mods_report(self):
         ck, name = self.add("0_0_0")
