@@ -139,15 +139,26 @@ class SharedGateTest(unittest.TestCase):
         from unittest import mock
         nf.SHARED_DIR = self.tmp.name
         log = os.path.join(self.tmp.name, "gate.log")
+        now = 10.0
+
+        def clock():
+            return now
+
+        def sleep(seconds):
+            nonlocal now
+            now += seconds
+
+        limits = policy(4.0, burst=1.0)
+        gate = nf.SharedGate(self.tmp.name, HOST, limits, clock=clock, sleep=sleep)
         # (two fetchers, as two processes: each one's own bucket has room, the shared one makes them wait)
-        fs = [nf.Fetcher(transport=_Transport(0.0), policies={HOST: policy(5.0, burst=1.0)}) for _ in range(2)]
-        with mock.patch.object(nf, "GATE_LOG", log):
+        fs = [nf.Fetcher(clock=clock, sleep=sleep, transport=_Transport(0.0), policies={HOST: limits})
+              for _ in range(2)]
+        with mock.patch.dict(nf._GATES, {(self.tmp.name, HOST): gate}), mock.patch.object(nf, "GATE_LOG", log):
             for f in fs * 2:
                 f.get(URL, kind="demand")
-        lines = open(log).read().splitlines()
-        self.assertGreaterEqual(len(lines), 3, "all but the first waited for the shared token")
-        self.assertTrue(all(float(ln.split()[-1]) > 0.1 for ln in lines))
-        self.assertGreaterEqual(sum(f.host(HOST).total["wait_ms"] for f in fs), 450, "counted as our own limits' wait")
+        lines = Path(log).read_text().splitlines()
+        self.assertEqual([float(ln.split()[-1]) for ln in lines], [0.25, 0.25, 0.25])
+        self.assertEqual(sum(f.host(HOST).total["wait_ms"] for f in fs), 750)
 
     def test_only_shared_hosts_and_only_with_a_folder(self):
         nf.SHARED_DIR = self.tmp.name
