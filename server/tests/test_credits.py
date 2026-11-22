@@ -651,23 +651,28 @@ class FeatureSourcesTest(unittest.TestCase):
             folder.mkdir()
             p = folder / "info_56789.json"
 
+            stamp = folder.stat()
+
+            def advance_directory_stamp(step):
+                # Windows can report the same stamp for rapid directory changes.
+                os.utime(folder, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + step * 2_000_000_000))
+
             def locate(path, cache, model_id):
                 return tuple(json.loads(Path(path).read_text()))
 
             with mock.patch.object(threedmr, "_credit_position", side_effect=locate) as resolve:
                 self.assertFalse(threedmr.credited_near(39, -76, 50, root))
                 p.write_text("[")
+                advance_directory_stamp(1)
                 self.assertFalse(threedmr.credited_near(39, -76, 50, root))
                 p.write_text("[39, -76]")
+                advance_directory_stamp(2)
                 self.assertTrue(threedmr.credited_near(39, -76, 0, root))
                 n = resolve.call_count
                 self.assertFalse(threedmr.credited_near(41, -76, 50, root))
                 self.assertEqual(resolve.call_count, n)
-                stamp = folder.stat()
                 p.unlink()
-                # The native index watches the directory stamp. Rapid writes
-                # and deletes can share a timestamp on Windows CI.
-                os.utime(folder, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 2_000_000_000))
+                advance_directory_stamp(3)
                 self.assertFalse(threedmr.credited_near(39, -76, 50, root))
 
     def test_leaf_off_share_is_no_source(self):
