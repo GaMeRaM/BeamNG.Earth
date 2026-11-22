@@ -56,7 +56,7 @@ def _on_approach(centre, travel, arm):
     offset = centre - points[:-1, :2]
     along = np.sum(offset * tangents, axis=1)
     lateral = dnp.hypot(*(offset - along[:, None] * tangents).T)
-    return bool(np.any((abs(tangents @ travel) > 0.8) & (lateral < min(3.0, spec.width / 2))
+    return bool(np.any((abs(dnp.matmul(tangents, travel)) > 0.8) & (lateral < min(3.0, spec.width / 2))
                        & (along >= -1.0) & (along <= lengths + 5.0)))
 
 
