@@ -367,7 +367,7 @@ def _past_crossing(along, st, crosswalks, spec, at, gap, room):
     return at
 
 
-def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
+def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W, own_crossings=False, signal_minimum=None):
     """(stop lines [{"a", "b", "w", "stop": True}], line cuts {fid: [(junction point, u, m along)]}) of arms [(fid, spec,
     centreline from the junction, half the crossing road's width, what)] (furniture.give_way_arms): M13 across the lanes
     coming in, where the map has it (mapped: (n, 2), secrossings.nodes) or else at least 1.0 m from the crossing road's
@@ -390,12 +390,26 @@ def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
             if len(near):
                 at = max(at, float(near.min()))
         signal = what == furniture.G_SIGNAL
-        at = _past_crossing(along, st, crosswalks, spec, at, M13_SIGNAL_CROSSWALK_M if signal else M14_CROSSWALK_M,
-                            float("inf") if signal else CAR_ROOM_M)
+        if signal and signal_minimum is not None:
+            at = max(at, signal_minimum(line, spec, wide))
+        gap = M13_SIGNAL_CROSSWALK_M if signal else M14_CROSSWALK_M
+        room = float("inf") if signal else CAR_ROOM_M
+        if own_crossings:
+            start = at
+            reach = min(float(s[-1]), M14_LOOK_M)
+            for cw in crosswalks:
+                for station in s[-1] - _control_distances(line, cw):
+                    if station <= reach and station - cw["w"] / 2 - start < room:
+                        at = max(at, float(station) + cw["w"] / 2 + gap)
+        else:
+            at = _past_crossing(along, st, crosswalks, spec, at, gap, room)
         if at + 2.0 > s[-1]:
             continue                        # (a stub: nowhere to stop)
         c, _, n, (lo, hi) = _way_in(line, s, at, spec, left_hand)
-        out.append({"a": np.r_[c[:2] + n * lo, c[2]], "b": np.r_[c[:2] + n * hi, c[2]], "w": w, "stop": True})
+        mark = {"a": np.r_[c[:2] + n * lo, c[2]], "b": np.r_[c[:2] + n * hi, c[2]], "w": w, "stop": True}
+        if own_crossings:
+            mark["control"] = what
+        out.append(mark)
         u = (along[1, :2] - along[0, :2]) if len(along) > 1 else line[1, :2] - line[0, :2]
         cuts.setdefault(fid, []).append((line[0, :2].copy(), u / max(float(dnp.hypot(*u)), 1e-6), at))
     return out, cuts
@@ -493,6 +507,7 @@ def arrow_material(country=None):
 
 
 ARROW_CELL_M = (4.0, 3.0)           # the cell's quad: m along, across (the arrow ~2.8 m by 0.8 m in it)
+RU_ARROW_AT_M = (12.0, 37.0)          # 25 m between rows (GOST R 52289-2019, 6.2.21)
 ARROW_AT_M = (12.0, 45.0)           # m before the lane's end (the stop line, then one further back)
 
 
@@ -526,10 +541,56 @@ def _point_back(line, d, min_start=2.0):
     return p, t
 
 
-def arrows(osm, pts, two_way, drive, lanes, left_hand=False, country=None):
+def _control_distances(line, control):
+    """Distances from the end of a polyline to its intersections with a control marking."""
+    a = line[:-1, :2]
+    step = np.diff(line[:, :2], axis=0)
+    p = control["a"][:2]
+    edge = control["b"][:2] - p
+    delta = p - a
+    det = step[:, 0] * edge[1] - step[:, 1] * edge[0]
+    valid = abs(det) > 1e-8
+    ds, st, den = delta[valid], step[valid], det[valid]
+    t = (ds[:, 0] * edge[1] - ds[:, 1] * edge[0]) / den
+    u = (ds[:, 0] * st[:, 1] - ds[:, 1] * st[:, 0]) / den
+    lengths = dnp.hypot(*step.T)
+    remaining = np.cumsum(lengths[::-1])[::-1]
+    return (remaining[valid] - t * lengths[valid])[(t >= 0) & (t <= 1) & (u >= 0) & (u <= 1)]
+
+
+def _control_setback(line, controls):
+    """Distance from the lane end past the stop line and crossing on its approach."""
+    setback = 0.0
+    for control in controls:
+        distances = _control_distances(line, control)
+        near = distances[distances <= max(ARROW_AT_M)]
+        if len(near):
+            setback = max(setback, float(near.min()) + control["w"] / 2)
+    return setback
+
+
+def _solid_start(line, solids, lane_width):
+    """Distance back to the upstream end of an adjacent solid lane divider."""
+    import furniture
+
+    total = furniture._arclen(line)[-1]
+    starts = []
+    for divider in solids:
+        ends = divider[[0, -1], :2]
+        at = furniture._project(line, ends)
+        points, _ = furniture._at(line, at)
+        lateral = dnp.hypot(*(ends - points[:, :2]).T)
+        start, end = sorted(at)
+        if 0 < start < end - 2. and total - end <= 40. and max(lateral) <= lane_width * .8:
+            starts.append(total - start)
+    return max(starts, default=None)
+
+
+def arrows(osm, pts, two_way, drive, lanes, left_hand=False, country=None, controls=(), edges=(), speed_kmh=None, solids=()):
     """[(centre (3,), travel direction (2,), "left" | "right" | "through")] of the turn arrows of a road (pts its
     centreline (k, 3)) from its turn:lanes tags (osm); none without a turn lane. Pure."""
     osm = osm or {}
+    russian = str(country or "").upper() == "RU"
     import roads as roadsmod
     out = []
     plan = []          # (turn:lanes value, the lanes' offsets left to right in their travel, travel along the way?)
@@ -561,17 +622,33 @@ def arrows(osm, pts, two_way, drive, lanes, left_hand=False, country=None):
                 plan.append((bw, [-drive / 2 + (k + 0.5) * lw for k in range(b_)], False))
     for value, offs, along in plan:
         toks = str(value).split("|")
-        kinds = [_arrow_kind(t, strict=str(country or "").upper() == "RU") for t in toks]
+        kinds = [_arrow_kind(t, strict=russian) for t in toks]
         if len(toks) != len(offs) or not any(k is not None and ("left" in k or "right" in k) for k in kinds):
             continue
         for kind_, off in zip(kinds, offs):
             if kind_ is None:
                 continue
             line = roadsmod.offset_polyline(pts, off) if along else roadsmod.offset_polyline(pts, off)[::-1].copy()
-            for d in ARROW_AT_M:
+            setback = _control_setback(line, controls) if controls else 0.0
+            distances = RU_ARROW_AT_M if russian else ARROW_AT_M
+            if russian and (edges or solids):
+                edge = _control_setback(line, edges)
+                solid = _solid_start(line, solids, drive / max(lanes, 1)) if solids else None
+                if edge or solid is not None:
+                    # 6.2.21 measures from the base of the last arrow.
+                    base = 40.0 if speed_kmh is not None and speed_kmh > 60 else 20.0
+                    quad, _ = arrow_quad(np.zeros(3), np.array([1., 0.]), kind_, country, speed_kmh)
+                    half_length = quad[:, 0].max()
+                    last = (solid if solid is not None else edge + base) - half_length
+                    clearance = setback + half_length + .5
+                    if solid is not None and last < clearance:
+                        continue  # mapped solid and stop/crossing cannot fit the specified layout
+                    last = max(last, clearance)
+                    setback, distances = 0.0, (last, last + 25.0)
+            for d in distances:
                 # The longest RU quad is 9.85 m (high-speed triple arrow).
                 # Keep its centre at least 5 m from the lane start.
-                got = _point_back(line, d, 5.0 if str(country or "").upper() == "RU" else 2.0)
+                got = _point_back(line, d + setback, 5.0 if russian else 2.0)
                 if got is not None:
                     out.append((got[0], got[1], kind_))
     return out

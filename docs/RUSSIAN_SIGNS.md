@@ -264,9 +264,9 @@ none changes the lane graph or makes a carriageway two-way.
 | Priority and zones | Keep mapped STOP/give-way and living-street rules. Suppress Russian side-road priority claims inferred only from class, and pedestrian-zone claims inferred only from a pedestrian street. | No complete source of posted Russian zone/priority boundaries. |
 | Tunnels | Suppress the generic blue European tunnel information plate in RU. | Proper Russian warning-sign selection and placement need additional evidence; this does not add a new tunnel sign. |
 | Centre lines | Keep both white centre lines continuous on four-plus-lane two-way roads with asymmetric overtaking tags. No US shared-turn-lane paint for RU. | A complete reversible-lane scheme is not implemented; no guessed replacement paint. |
-| Lane arrows | Seven dedicated RU masks preserve all supported combinations and lane offsets in both travel directions. Two speed profiles use 5/7.5 m stems, with a further 2.05 m for the triple arrow, from GOST R 51256 fig. B.5/table B.1. | Speed comes from the road model, unknown speed uses the short profile. Angled branches remain approximate; reverse/unknown movements are omitted. Placement still uses the existing 12/45 m before lane-end heuristic and now needs 5 m clearance from the lane start, not a surveyed intersection layout. Other countries retain their artwork. |
+| Lane arrows | Seven dedicated RU masks preserve all supported combinations and lane offsets in both travel directions. Two speed profiles use 5/7.5 m stems, with a further 2.05 m for the triple arrow, from GOST R 51256 fig. B.5/table B.1. | Speed comes from the road model, unknown speed uses the short profile. Angled branches remain approximate; reverse/unknown movements are omitted. Rows are 25 m apart and move upstream of a stop line or crossing intersecting their lane. The base of the last arrow follows an adjacent solid lane divider when its start can be located. Otherwise the base uses the estimated crossing-road edge and the 20/40 m rule. A lane-end estimate remains where the junction edge is unavailable. Other countries retain their artwork. |
 | Direction boards | Inferred green boards require a nearby motorway aligned with the signed direction, excluding links and opposite carriageways. Normalize Latin A/K/H in numeric regional references. | Road-level/elevation ambiguity and inferred destinations remain approximate. Posted exit destinations still come from mapped labels. |
-| Other placement | Existing mounting heights, right-side clearance, dash periods, lane counts, posted exits and Cyrillic faces remain covered by regression tests. | Crosswalk far-side pairs/overhead duplicates and complete regulatory sign coverage are not implemented. |
+| Other placement | Existing mounting heights, right-side clearance, dash periods, lane counts, posted exits and Cyrillic faces remain covered by regression tests. | Crossing pairs and overhead duplicates are implemented. Sign size, actual signal-head location, and coverage of regulatory signs still depend on map detail or estimates. |
 
 Reference: [GOST R 52289-2019 published by Moscow](https://www.mos.ru/upload/documents/files/6980/GOSTR52289-2019TehnicheskiesredstvaorganizaciidorojnogodvijeniyaP_.pdf),
 clauses 5.6.6, 5.3.4, 5.6.41, 5.2.33 and 6.2.5. This is an implementation audit,
@@ -295,3 +295,25 @@ posted traffic rules, reversible-lane control state or surveyed board placement
 cannot be established from road class alone. Keep these separate in future work.
 
 The broader, maintained task list is [Russian world localization](RUSSIAN_WORLD_LOCALIZATION.md).
+
+### Russian approaches and crossings
+
+The marking and sign layouts use the same incoming approach geometry. A short
+approach can continue across a degree-two road split with a compatible
+direction. Stop lines, line cuts and 6.16 plates use that approach. Separate
+signal-controlled crossings can still have a stop line per incoming direction.
+
+The 5.19.1 overhead duplicate applies outside towns and at urban uncontrolled
+crossings with at least two incoming lanes on a two-way road or three on a
+one-way road. The urban exception for a signal-controlled crossing is used.
+Town boundaries and unmapped lane counts are inferred. The stop line uses the station of a mapped head with mounting data or the
+location estimated by the same placement routine as the generated boom.
+The minimum setback is 3 m for a roadside head and 10 m for an overhead one.
+A crossing can move the line farther back. Where mounting is unknown at a
+standalone crossing, the crossing geometry remains the fallback.
+
+A mapped crossing width above 6 m selects 1.14.2 with opposing pedestrian
+arrows. The crossing width also sets the envelope for signs, ramps and stop
+lines. Diagonal crossings and widths missing from the map still need
+additional source geometry. See
+[GOST R 52289-2019, amendment 1](https://protect.gost.ru/gost/changesdetails/82f9f97a-f912-4574-af96-3a576399e045).

@@ -14257,7 +14257,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         import furniture
         crosswalks = [cw for cw in crosswalks if not cw.get("stop")]
         import rucrossings
-        ru = rucrossings.layout(roads, nodes, signals, priority, left_hand, crosswalks)
+        ru = rucrossings.layout(roads, nodes, signals, priority, left_hand, crosswalks,
+                                lane_tags={fid: lane_tags(f, i) for fid, (f, i, _) in seen.items()})
         crosswalks = ru['crosswalks']
         zebras = [(np.array([cw['a'], cw['b']])[:, :2], cw['w'] / 2) for cw in crosswalks]
         for key, ranges in ru['ramps'].items():
@@ -14383,6 +14384,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     ladder = _mk.style(line_country, float(np.mean([r[3] for r in roads])) if roads else None).ladder
     painted_crosswalks = rucrossings.paint_stripes(crosswalks) if str(country or "").upper() == "RU" else crosswalks
     for cw in painted_crosswalks:                   # crosswalks and stop lines
+        if "poly" in cw:
+            poly = cw["poly"]
+            if skin_own(*poly.mean(0)[:2]):
+                chunks.append(mark_poly(poly))
+            continue
         mid = 0.5 * (cw["a"] + cw["b"])
         if skin_own(mid[0], mid[1]) and cw.get("paint", True):
             look = junctions.STOP_LINE if cw.get("stop") else cw.get("look", crosswalk_look)
@@ -14394,19 +14400,34 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 for sd in (1, -1):
                     chunks.append(_chunk(EDGE_LINE, LADDER_LINE_W, offset_polyline(ab, sd * cw["w"] / 2)))
     import markings
-    for fid, spec, pts, lon in roads:               # turn arrows (OpenStreetMap turn:lanes; MUTCD 3B.20)
+    def paint_turn_arrows(fid, spec, pts, solids=()):
         tags = lane_tags(*seen[fid][:2]) if fid in seen else None
         if not tags or spec.kind != "paved" or fid in jinternal:
-            continue
+            return
         drv, nl = lane_layout(spec)
         lane_pts = offset_polyline(pts, driving_offset(spec)) if highway_shoulders(spec) else pts
-        for centre, t, kind_ in markings.arrows(tags, lane_pts, not spec.oneway, drv, nl, left_hand, country=line_country):
+        controls = ()
+        if str(line_country or "").upper() == "RU":
+            low, high = lane_pts[:, :2].min(0) - drv / 2, lane_pts[:, :2].max(0) + drv / 2
+            controls = [c for c in ru["controls"]
+                        if np.all(np.maximum(c["a"][:2], c["b"][:2]) >= low)
+                        and np.all(np.minimum(c["a"][:2], c["b"][:2]) <= high)]
+        is_ru = str(line_country or "").upper() == "RU"
+        if is_ru and spec.oneway and (spec.dir or 1) < 0:
+            lane_pts = lane_pts[::-1]
+        for centre, t, kind_ in markings.arrows(tags, lane_pts, not spec.oneway, drv, nl, left_hand,
+                                                country=line_country, controls=controls,
+                                                edges=ru["edges"].get(fid, ()) if is_ru else (),
+                                                speed_kmh=spec.kmh, solids=solids):
             corners, uv = markings.arrow_quad(centre, t, kind_, country=line_country, speed_kmh=spec.kmh)
             if (corners[:, 0].max() >= wexact[0] and corners[:, 0].min() < wexact[2]
                     and corners[:, 1].max() >= wexact[1] and corners[:, 1].min() < wexact[3]):
                 chunks.append({"m": markings.arrow_material(line_country), "w": 0.0, "tl": 4.0, "p": CENTRE["p"], "layer": "mark",
                                "poly": [[round(float(v), 3) for v in q] for q in corners],
                                "uvq": uv.tolist(), "n": []})
+    if str(line_country or "").upper() != "RU":
+        for fid, spec, pts, _ in roads:
+            paint_turn_arrows(fid, spec, pts)
     for tri in teeth:
         if skin_own(*tri[:2].mean(0)[:2]):
             chunks.append(mark_poly(tri))
@@ -14498,13 +14519,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     sh, defer_dashes=True, phase=phase) if fid not in jinternal or fid in whole else []    # inside a junction: none
         if fid in jinternal:                    # (a through road's piece between two close junctions: its lines only)
             ex = [e for e in ex if e[0].get("kind")]
-        if not ex:
-            continue
-        if fid in seen:
+        if ex and fid in seen:
             ex = section_lines(ex, *seen[fid][:2], spec, pts, frame, lon, left_hand, line_country, ws)
             if str(country or "").upper() == "SE":
                 ex = way_lines(ex, *seen[fid][:2], spec, pts, lon, left_hand, country, ws, sh)
         ex = rampmerges.trim(fid, ex, merge_layouts)
+        if str(line_country or "").upper() == "RU":
+            solids = [line for look, _, line in ex if look.get("kind") == "lane" and not look.get("dash")]
+            paint_turn_arrows(fid, spec, pts, solids)
+        if not ex:
+            continue
         # (every other road (ne) at its half width + CUT_MARGIN; edge lines not at a road it goes straight on in,
         # centre lines nor at its stems; French paint not at its continuations)
         ne = np.fromiter((f2 != fid for f2 in fids_l), bool, len(fids_l))
@@ -14597,7 +14621,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if walks is not None and gutter:     # gutters end where their curb turns
                 gcuts = jcuts.get((fid, side), [])
                 pieces = [cp for p in clip_polyline(line, *box) for cp, _ in junctions.apply_cuts(p, gcuts)]
-            elif walks is not None and jlines.get(fid):             # markings stop at the crosswalks
+            elif jlines.get(fid):                                   # markings stop at the crosswalks
                 pieces = [cp for p in clip_polyline(line, *box) for cp, _ in junctions.apply_cuts(p, jlines[fid])]
             else:
                 pieces = clip_polyline(line, *box)

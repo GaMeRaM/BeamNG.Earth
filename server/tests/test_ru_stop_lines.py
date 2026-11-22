@@ -45,6 +45,18 @@ class RussianMappedZebras(unittest.TestCase):
         self.assertEqual(zebras[0]['w'],4.0)
         self.assertAlmostEqual(np.mean(np.array(zebras[0]['n'])[:,0]),100.,places=2)
 
+    def test_wide_mapped_zebra_emits_pedestrian_arrows(self):
+        import secrossings
+        from test_secrossings import Frame, Infra
+        infra = Infra([("crossing", (10., 10.),
+                        {"highway": "crossing", "crossing": "marked", "width": "8 m"})])
+        nodes = secrossings.nodes(Frame(), [infra])
+        f = features([[(10., 100.), (200., 100.)]], ["tertiary"], widths=[(0, 10.)])
+        chunks = roads.build_tile(FRAME, 0, 0, [f], flat, country="RU", nodes=nodes,
+                                  signals=np.empty((0, 2)))
+        arrows = [c for c in chunks if c["m"] == "line_white" and len(c.get("poly", ())) == 3]
+        self.assertEqual(len(arrows), 6)
+
     def test_ru_nodes_use_same_eligibility_as_signs(self):
         import secrossings
         from test_secrossings import Frame,Infra

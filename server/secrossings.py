@@ -124,8 +124,15 @@ def nodes(frame, infra_list):
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([np.asarray(e), np.asarray(n)])
     crossings, lines, priority, zebras, signals, de, refuges, ru, ru_signs, ru_signals = [], [], [], [], [], [], [], [], [], []
+    ru_widths, ru_heads = {}, []
     for (cls, _, tag), p in zip(found, xy if found else ()):
         if cls == "crossing":
+            try:
+                width = float(str(tag.get("width", "")).removesuffix(" m").replace(",", "."))
+            except ValueError:
+                width = 0.
+            if 4.0 <= width <= 30.0:
+                ru_widths[tuple(map(float, p))] = width
             crossings.append((float(p[0]), float(p[1]), paint(tag)))
             import roadsigns
             ru.append((float(p[0]), float(p[1]), M15 if roadsigns.is_marked_crossing(
@@ -142,6 +149,9 @@ def nodes(frame, infra_list):
                 zebras.append((float(p[0]), float(p[1])))
         elif cls == "traffic_signals":
             signals.append((float(p[0]), float(p[1])))
+            mounting = tag.get("traffic_signals:mount", tag.get("support"))
+            if mounting in ("overhead", "gantry", "mast_arm", "pole", "side"):
+                ru_heads.append((np.asarray(p), mounting in ("overhead", "gantry", "mast_arm")))
         elif cls in ("give_way", "stop"):
             priority.append((float(p[0]), float(p[1]), float(cls == "stop")))
         if cls != "crossing" and tag.get("road_marking") == "stop_line":
@@ -151,7 +161,7 @@ def nodes(frame, infra_list):
         return any(math.hypot(z[0] - q[0], z[1] - q[1]) < SIGNALS_NEAR_M for q in signals)
     zebras = [z for z in zebras if not lit(z)]
     de = [(x, y, 0 if w and lit((x, y)) else w) for x, y, w in de]
-    return {"crossings": crossings, "ru_crossings": ru, "ru_signs": ru_signs, "ru_signal_crossings": ru_signals, "zebras": zebras, "de_crossings": de, "islands": refuges,
+    return {"crossings": crossings, "ru_crossings": ru, "ru_signs": ru_signs, "ru_signal_crossings": ru_signals, "ru_crossing_widths": ru_widths, "ru_signal_heads": ru_heads, "zebras": zebras, "de_crossings": de, "islands": refuges,
             "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
             "priority": np.array(priority, np.float64).reshape(-1, 3)}
 
@@ -178,7 +188,7 @@ def _squares(mid, u, n, half, z):
     return out
 
 
-def place(roads, found, on=None, min_width=None):
+def place(roads, found, on=None, min_width=None, widths=None):
     """(crosswalks [{"a", "b", "w"[, "paint": False]}], squares [(4, 3)], ramps {(fid, side): [(point, u, t0, t1)]}) of the
     crossing nodes in found (nodes) on the paved roads in roads [(fid, spec, centreline (k, 3), lon)]: square to the road
     from kerb to kerb, a crosswalk without paint standing for M16's band so the lines stop at it too. Crossing and cycle
@@ -218,6 +228,8 @@ def place(roads, found, on=None, min_width=None):
         long_ = M15_FAST_L if (spec.kmh or 0.0) > M15_FAST_KMH else M15_L
         if min_width is not None:
             long_ = max(long_, min_width)
+        if widths and (x, y) in widths:
+            long_ = widths[x, y]
         ramp_width = long_ if min_width is not None else M15_L
         for side in (1, -1):
             ramps.setdefault((fid, side), []).append((c.copy(), u, -ramp_width / 2, ramp_width / 2))
