@@ -1180,11 +1180,13 @@ class TrackerTest(unittest.TestCase):
             for _ in range(80):
                 tr.on_pose(conn, 1, 128.0, 128.0, loop, build, vel=(100.0, 0.0))
                 await asyncio.sleep(0.01)
-        asyncio.run(go())
+        # The scheduler orders submissions. Parallel worker start order can vary.
+        with mock.patch.object(roads.asyncsubmit, "submit", wraps=roads.asyncsubmit.submit) as submit:
+            asyncio.run(go())
         want = roads.wanted_tiles(128.0, 128.0, 100.0, 0.0)
-        self.assertEqual(set(built), want, "every wanted tile built once")
+        self.assertCountEqual(built, want, "every wanted tile built once")
         self.assertFalse([m for m in conn.sent if m["type"] == "roads_drop"], "the path ahead is not dropped")
-        first = built[:6]
+        first = [call.args[4:6] for call in submit.call_args_list[:6]]
         self.assertEqual(first[0], (0, 0), "the car's own tile first")
         self.assertTrue(all(k[0] >= 0 and abs(k[1]) <= 1 for k in first), f"then the path ahead: {first}")
 
