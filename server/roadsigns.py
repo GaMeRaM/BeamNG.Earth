@@ -78,6 +78,11 @@ def widest(sizes):
     return max(max(v) for v in sizes.values())
 
 
+def sizes_of(sys_row):
+    """{shape: [town, country, major road] m}: the shared sizes with the country's own over them (sign_systems.json)."""
+    return {**tables()[1]["sizes"]["default"], **sys_row.get("sizes", {})}
+
+
 def is_marked_crossing(tags, include_signals=False):
     """A mapped crossing eligible for signs; RU includes signalized crossings."""
     if not tags:
@@ -401,7 +406,7 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
              for k in mapcells.cells_for_bbox(float(b_la.min()), float(b_lo.min()), float(b_la.max()), float(b_lo.max()))]
     cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.0)
     poly, poly_off = speedsigns._outlines(context.pavements(frame, np.c_[clo, cla], left_hand))
-    sizes = tables()[1]["sizes"]["default"]
+    sizes = sizes_of(sys_row)
     poi = np.vstack([pois(frame, infra)] + portals)
     if len(poi):                                # (a bus station has its own plates: no stock stop post on its ground)
         import busstationkeep
@@ -422,7 +427,7 @@ def table(signs, z_ground, z_road, sys_row):
     """road_sign_mesh's rows of road_sign_place's, heights given: the signs of one pole stacked from the lowest up, the top one
     first in slot order, `gap_m` between them."""
     roles, systems, by_id = tables()
-    sizes = systems["sizes"]["default"]
+    sizes = sizes_of(sys_row)
     gap = float(systems["pole"]["gap_m"])
     width = np.zeros(len(signs))
     cells = []

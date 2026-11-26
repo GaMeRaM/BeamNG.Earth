@@ -31,7 +31,11 @@ def read_cell(cache, go, release, events, result):
         events.put(('build', os.getpid()))
         if not release.wait(15):
             raise TimeoutError('test producer was not released')
-        return items()
+        out = items()
+        out.source = np.array([1], np.uint8)
+        out.gsource = np.array([2], np.uint8)
+        out.hsource = np.array([3], np.uint8)
+        return out
 
     v._build = build
     events.put(('ready', os.getpid()))
@@ -66,6 +70,7 @@ class CellSharingTest(unittest.TestCase):
                 release.set()
                 results = [result.get(timeout=20) for _ in procs]
                 self.assertTrue(all(r == results[0] for r in results))
+                self.assertEqual(results[0][-3:], [[1], [2], [3]])
                 for p in procs:
                     p.join(20)
                     self.assertEqual(p.exitcode, 0)

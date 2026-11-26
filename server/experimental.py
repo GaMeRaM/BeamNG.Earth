@@ -42,12 +42,23 @@ FEATURES = (
                        # that toggle include the latest and what would be the final roads"): vanilla-style cut and fill
                        # slopes with rocks and wall-foot skirts (P1a), decks that follow the road's curve and bank
                        # (P1b) and exits off bridges as one deck with their road (P2b, "sheet": builds on P1b's decks),
-                       # the surface overlay layer with lifted markings (P1c) and the new sidewalks (P1d)
-                       "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "sheet", "BNE_SURFACE_V2": "on",
-                       "BNE_SIDEWALK_V2": "on",
+                       # (the surface overlay P1c and the new sidewalks P1d moved to their own toggles below, 2026-11-21:
+                       # the wide corpus (193 places) found the overlay alone buried the road surface 2+ cm under terrain
+                       # at Hong Kong and Chicago, and the sidewalks alone added kerb steps at Paris; the user: "Sure go
+                       # ahead" on splitting them out so Revamped roads keeps what clearly helps)
+                       "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "sheet",
                        # road surface v3 (2026-11-20: one continuous lane surface for motorways/trunks and their
                        # bridge decks; beats the sheet decks at all five probe sites, 0 m of parapet in a carriageway)
-                       "BNE_ROADSURF_V3": "surface"}, None),
+                       "BNE_ROADSURF_V3": "surface",
+                       # the road system rewrite (BNE_ROADSYS, bridgerewrite/DESIGN.md; the user, 2026-11-24: "make sure
+                       # the revamped roads toggle uses the updated rewritten roads"): decks from the road system's own
+                       # surface faces with the deck ends' hand-over (M4), the mapped road areas (area:highway) as the
+                       # carriageway edges and the OSM street tags' cross-sections (lanes, cycle, bus, parking strips)
+                       "BNE_ROADSYS": "surface", "BNE_ROADSYS_AREAS": "on", "BNE_ROADSYS_XSEC": "on"}, None),
+                       # (BNE_ROADSYS_TUNNELS, tunnel plan T1, stays out of this setting until its corpus gate passes:
+                       # 2026-11-25 it made 24 of 51 tunnel mouths and 15 of 66 road places worse on drivability)
+    ("expSurfaceOverlay", {"BNE_SURFACE_V2": "on"}, None),                # roadsurf: the second surface layer (P1c)
+    ("expNewSidewalks", {"BNE_SIDEWALK_V2": "on"}, None),                 # sidewalks_v2: town sidewalks (P1d, S5)
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled
@@ -58,6 +69,7 @@ FEATURES = (
     ("expGradeGuard", {"BNE_GRADE_GUARD": "on"}, None),                   # grading.GUARD_ON
     ("expPhotoSurface", {"BNE_PHOTO_SURFACE": "1"}, None),                # photosurface.ON
     ("expTerrainBumps", {"BNE_TERRAIN_BUMPS": "on"}, None),               # grading.TERRAIN_BUMPS_ON
+    ("expRoadFollow", {"BNE_ROAD_FOLLOW": "on"}, None),                   # grading.FOLLOW_ON
     ("expCliffWalls", {"BNE_CLIFF_WALLS": "on"}, None),                   # roads.CLIFF_WALLS_ON
     ("expTunnelLids", {"BNE_TUNNEL_LIDS": "on"}, None),                   # tunnellids.ON
     ("expSubseaTunnels", {"BNE_SUBSEA_RELAX": "on"}, None),               # subsea.RELAX
@@ -71,6 +83,8 @@ FEATURES = (
     ("expCanadaLidar", {"BNE_LIDARBC": "1", "BNE_HRDEM_NEAR": "1"}, None),     # dem.LIDARBC / HRDEM_NEAR
     ("expGenGround", {"BNE_GEN_GROUND": "on"}, None),                     # genground.ON
     ("expStaleRevisit", {"BNE_STALE_REVISIT": "on"}, None),               # revisit.STALE_ON (not a key: NOT_SWITCHES)
+    ("expWinter", {"BNE_WINTER": "on"}, None),                            # snow.WINTER / snowcover.ON (not a key)
+    ("expWetRoads", {"BNE_WET_ROADS": "on"}, None),                       # snow.WET_ROADS: rain's wet roads (not a key)
 )
 IDS = tuple(f[0] for f in FEATURES)
 # A setting that counts only in a file of this version or newer (settings.lua M.VERSION): the Road signs switch was on

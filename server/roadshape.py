@@ -16,7 +16,10 @@ a plain overpass is three members joined end to end.) Each of its decks gets (ea
   so the slab ran straight across a curving road;
 - skewed end lines along the road or railway it crosses near each end (BNE_DECK_SKEW, on with the switch): the end
   rows of its slab, its road surface and its parapets (roadmesh.ribbons), and the approach's end row (roadmesh.build's
-  deck-end weld);
+  deck-end weld); since earthfast 627 (the deck-end skew audit, 2026-11-25) only on a structure of SKEW_SPAN_MAX_M
+  or less (a viaduct's ends are square), along the road, railway or mapped waterway (WATERWAYS) it crosses within
+  SKEW_REACH_627_M, SKEW_MIN_DEG or more off square; where the US bridge inventory has a record of the structure
+  (nbiskew.py, NBI item 34: nbi_record) its skew decides (BNE_DECK_SKEW=498: the old rule);
 - buried ends: OVERLAP_M of its approach under a skirt that continues the slab and girders, its top SKIRT_TOP_M under
   the road at the abutment and SKIRT_DIP_M at the far end, its soffit up to a SKIRT_LIP_M lip (roadmesh.deck), in place
   of a step;
@@ -67,11 +70,29 @@ SKIRT_DIP_M = 0.45          # ... and at its far end (the design's 0.3-0.5 m)
 SKIRT_LIP_M = 0.3           # m of slab at its far end (the soffit pulled up to a lip)
 SKIRT_GRADE_MAX = 0.08      # the deck's end grade carried over the skirt at most
 
+# (earthfast 627, the deck-end skew audit 2026-11-25: every mapped bridge end of the 66-place corpus against NBI item
+# 34 (200 US ends) and the finest aerials: the 498 rule skewed every end with a crossing within SKEW_REACH_M, long
+# viaducts' too, 64 % right. A short structure's ends follow the line it crosses even where the abutment stands well
+# back from it (Maryland's 7.5 cm aerials: 15-21 m back, skewed), a viaduct's are square: the structure's length is
+# the one threshold kept (fitted on four states and scored on the fifth, rotating: 72 % held out, 78 % in sample; the
+# four-threshold fit with a set-back limit scored 77 % in sample but 67 % held out))
+SKEW_SPAN_MAX_M = 100.0     # m: a structure (its decks end to end) longer than this ends square (a viaduct)
+SKEW_SET_MAX_M = 1000.0     # m an end may stand off the crossed line's edge (no limit: see above)
+SKEW_MIN_DEG = 5.0          # a crossing nearer square than this: a square end
+SKEW_REACH_627_M = 80.0     # m along the structure from its end to the crossing it is the end of (627)
+# the mapped waterways a deck end may be the abutment of (OSM waterway=; ditches and brooks under a road are culverts)
+WATERWAYS = ("river", "stream", "canal", "drain")
+SKEW_627 = SKEW and os.environ.get("BNE_DECK_SKEW", "on") not in ("498",)   # (498: the old rule, for comparisons)
+
 PARAMS = np.array([CHORD_TOL_M, MAX_STEP_M, BLEND_MAX_M, dmath.cos(math.radians(APPROACH_DEG)), JOIN_M, OVERLAP_M,
-                   SKEW_REACH_M, dmath.sin(math.radians(SKEW_MIN_CROSS_DEG)), dmath.cos(math.radians(SKEW_MAX_DEG)),
+                   SKEW_REACH_627_M if SKEW_627 else SKEW_REACH_M, dmath.sin(math.radians(SKEW_MIN_CROSS_DEG)), dmath.cos(math.radians(SKEW_MAX_DEG)),
                    dmath.cos(math.radians(SKEW_BEND_DEG)), DEV_MIN_M, DEV_SHARE, dmath.cos(math.radians(AMBIG_DEG)),
-                   DIR_M, SKEW_NEAR_M], np.float64)
-VERSION = 505               # the earthfast kernels (498 on its branch; merged into try598 as 505)
+                   DIR_M, SKEW_NEAR_M]
+                  + ([SKEW_SPAN_MAX_M, SKEW_SET_MAX_M, dmath.cos(math.radians(SKEW_MIN_DEG))] if SKEW_627 else []),
+                  np.float64)
+VERSION = 627 if SKEW_627 else 505  # the earthfast kernels (498 on its branch; merged into try598 as 505; 627: the
+                                    # skew's abutment rule, waterways, the lines' half widths)
+SKEW_DUMP = os.environ.get("ROADSHAPE_SKEW_DUMP") or None     # (tools only: each deck end's skew numbers, JSON lines)
 
 
 def simple_members(members, got):
@@ -321,7 +342,7 @@ def deck_end_at(cell_fn, frame, xy, touch):
     return best[0], best[1], (tuple(float(v) for v in ring[0]), tuple(float(v) for v in ring[-1])), decks[best[0]][1]
 
 
-def shape_chain(comp, pool, zs, ground, simple_of=None):
+def shape_chain(comp, pool, zs, ground, simple_of=None, hw_of=None, water=(), frame=None):
     """{part key: shape} of the simple decks of a chain's solve: comp its parts' keys (its order), pool {key: (spec,
     xy, lon, level, ...)}, zs their heights (comp's order), ground the chain's ground {(fid, "g" | "r"): [lines]},
     simple_of(key) -> bool: is the deck simple (part_simple, the rule grading's bank_through reads too; None: none
@@ -341,14 +362,19 @@ def shape_chain(comp, pool, zs, ground, simple_of=None):
     got = structures.groups(members)
     simple = [simple_of is not None and bool(simple_of(k)) for k in comp]
     dup = [int(d) for d in got["dup"]]          # (one way kept twice under two part keys: never the other's joint)
-    glines = []                                 # (xy (k, 2), kind, fid) in the ground's keys' order
+    glines = []                                 # (xy (k, 2), kind, fid, half width) in the ground's keys' order
     for gk in sorted(ground, key=str):
         if len(gk) != 2 or gk[1] not in ("g", "r"):
             continue
+        hw = float((hw_of or {}).get(gk, 0.0)) if gk[1] == "g" else 0.0
         for ln in ground[gk]:
             ln = np.asarray(ln, np.float64)
             if ln.ndim == 2 and len(ln) >= 2:
-                glines.append((ln[:, :2], 0 if gk[1] == "g" else 1, str(gk[0])))
+                glines.append((ln[:, :2], 0 if gk[1] == "g" else 1, str(gk[0]), hw))
+    if SKEW_627:
+        for gk, rings, hw in sorted(water or (), key=lambda w: str(w[0])):     # (627: kind 3, crossed only)
+            for ln in rings:
+                glines.append((np.asarray(ln, np.float64)[:, :2], 3, str(gk[0]), float(hw)))
     out = {}
     for n, k in enumerate(comp):
         if not simple[n]:
@@ -358,28 +384,40 @@ def shape_chain(comp, pool, zs, ground, simple_of=None):
         if len(xy) < 2 or len(z) != len(xy) or not np.isfinite(z).all():
             continue
         lo, hi = xy.min(0) - NEAR_M, xy.max(0) + NEAR_M
-        lines, kinds, owns = [], [], []
-        for ln, kind, fid in glines:
+        lines, kinds, owns, hws = [], [], [], []
+        for ln, kind, fid, hw in glines:
             if (ln.max(0) < lo).any() or (ln.min(0) > hi).any():
                 continue
             lines.append(ln)
             kinds.append(kind)
             owns.append(1 if fid == str(k[0]) else 0)
+            hws.append(hw)
         for m, k2 in enumerate(comp):
             if m == n or dup[m] == n or dup[n] == m or dup[m] == dup[n]:
                 continue
             ln = np.asarray(pool[k2][1], np.float64)[:, :2]
-            if (ln.max(0) < lo).any() or (ln.min(0) > hi).any():
+            # (627: every deck of the chain, near or not: a structure's length is walked end to end over them)
+            if not SKEW_627 and ((ln.max(0) < lo).any() or (ln.min(0) > hi).any()):
                 continue
             lines.append(ln)
             kinds.append(2)
             owns.append(0)
+            hws.append(0.0)
         off = np.r_[0, np.cumsum([len(a) for a in lines])].astype(np.int64)
         pts = np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64)
-        sxy, sz, ends, ov, ooff = fast._ef.deck_shape(xy, z, pts, off, np.asarray(kinds, np.int64),
-                                                      np.asarray(owns, np.int64), PARAMS)
+        if SKEW_627:
+            rec = nbi_record(xy, frame)
+            sxy, sz, ends, ov, ooff = fast._ef.deck_shape(xy, z, pts, off, np.asarray(kinds, np.int64),
+                                                          np.asarray(owns, np.int64), PARAMS,
+                                                          np.asarray(hws, np.float64), rec,
+                                                          float(getattr(pool[k][0], "width", 0.0) or 0.0) / 2)
+        else:
+            sxy, sz, ends, ov, ooff = fast._ef.deck_shape(xy, z, pts, off, np.asarray(kinds, np.int64),
+                                                          np.asarray(owns, np.int64), PARAMS)
         sxy = np.asarray(sxy, np.float64).reshape(-1, 2)
-        ends = np.asarray(ends, np.float64).reshape(2, 8)
+        ends = np.asarray(ends, np.float64).reshape(2, -1)
+        if SKEW_DUMP and frame is not None:
+            _dump_ends(k, sxy, ends, frame, rec if SKEW_627 else None)
         ov = np.asarray(ov, np.float64).reshape(-1, 2)
         rec = {"xy": sxy, "z": np.asarray(sz, np.float64), "skew": [None, None], "ov": [None, None],
                "tan": [None, None], "bank": None}
@@ -394,6 +432,60 @@ def shape_chain(comp, pool, zs, ground, simple_of=None):
         rec["bank"] = deck_bank(pool[k][0], sxy, [lines[int(ends[e, 7])] if ends[e, 0] >= 0 else None for e in (0, 1)])
         out[k] = rec
     return out
+
+
+NBI_MATCH_M = 30.0          # m an inventory record's point may lie off a deck's line and still be its structure's
+
+
+def nbi_record(xy, frame):
+    """The inventory's record of the structure deck xy (k, 2) in frame is part of (nbiskew.py: NBI item 34's skew,
+    item 49's length), as deck_shape's nbi (skew deg or 99, length m, cos, sin) float64 (4,), or None (no table, none
+    within NBI_MATCH_M of the line). The nearest record to the line wins, the lower index on a tie: one answer for one
+    deck line whoever asks."""
+    import nbiskew
+    if frame is None:
+        return None
+    t = nbiskew.table()
+    if t is None:
+        return None
+    xy = np.asarray(xy, np.float64)[:, :2]
+    la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+    idx = t.near(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)), NBI_MATCH_M)
+    if not len(idx):
+        return None
+    e, n, _ = frame.geodetic_to_enu(t.lat[idx].astype(np.float64), t.lon[idx].astype(np.float64), np.zeros(len(idx)))
+    q = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
+    a, b = xy[:-1], xy[1:]
+    ab = b - a
+    l2 = np.maximum((ab * ab).sum(1), 1e-12)
+    best, bi = None, None
+    for j in range(len(idx)):
+        u = np.clip(((q[j] - a) * ab).sum(1) / l2, 0.0, 1.0)
+        dv = a + ab * u[:, None] - q[j]
+        d = float(np.min(np.sqrt((dv * dv).sum(1))))
+        if d <= NBI_MATCH_M and (best is None or d < best):
+            best, bi = d, int(idx[j])
+    if bi is None:
+        return None
+    sk = int(t.skew[bi])
+    r = math.radians(min(sk, 89))
+    return np.array([float(sk), float(t.length[bi]) / 10.0, dmath.cos(r), dmath.sin(r)], np.float64)
+
+
+def _dump_ends(k, sxy, ends, frame, rec):
+    """(tools: ROADSHAPE_SKEW_DUMP) each end of a shaped deck with its skew numbers, a JSON line."""
+    import json
+    sxy = np.asarray(sxy, np.float64)
+    lines = []
+    for e in (0, 1):
+        p = sxy[0] if e == 0 else sxy[-1]
+        q = sxy[1] if e == 0 else sxy[-2]
+        la, lo, _ = frame.enu_to_geodetic(np.array([p[0], q[0]]), np.array([p[1], q[1]]), np.zeros(2))
+        lines.append(json.dumps({"part": [str(k[0]), str(k[1])], "end": e, "lat": float(la[0]), "lon": float(lo[0]),
+                                 "lat_in": float(la[1]), "lon_in": float(lo[1]), "ends": [float(v) for v in ends[e]],
+                                 "nbi": None if rec is None else [float(v) for v in rec]}))
+    with open(SKEW_DUMP, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 BANK_CONTEXT_M = 150.0      # m of the road going on from each end of a deck its curve is read over (grading's stencil,
@@ -472,7 +564,7 @@ def mapped(rec, mp):
 # taken from the copy of the cell of its first point (the same copy whichever cells were read first), in a frame at the
 # cell's centre. Nothing built reads them: shadow_forks writes them as JSON beside the build; forkprobe.py checks them.
 FORK_VERSION = 513          # earthfast.fork_records
-FORKS_FORMAT = 2            # the records' JSON (shadow_forks' folder name)
+FORKS_FORMAT = 3            # the records' JSON (shadow_forks' folder name; 3: whole_or_sections)
 FORK_REACH_M = 400.0        # m along every arm from the node (the design's window: inputs within 400 m)
 FORK_DIR_M = 20.0           # m of an arm its direction is read over
 FORK_DEG = 40.0             # a fork's two arms turn at most this from the trunk (more: a junction)
@@ -590,7 +682,39 @@ def _segments_round(key, cell_fn, memo, rings, cell_segments, read_cells=None, i
     if read_cells is not None:
         read_cells.extend(keys)
     copies = {str(k): read(k) for k in keys}
-    return {pid: copies[c][0][pid] for c, pid in window.choose({c: pair[1] for c, pair in copies.items()})}
+    chosen = whole_or_sections(window.choose({c: pair[1] for c, pair in copies.items()}))
+    return {pid: copies[c][0][pid] for c, pid in chosen}
+
+
+def whole_or_sections(chosen):
+    """The window's (cell, part id) choices without a road read both whole and as its lane sections ("<road>~lanes
+    <a>-<b>", lanesections.split): one cell's copy of a merged highway can be split where another cell's is not (their
+    lane tags differ), and the choice is made per id, so both were kept and the road was there twice (found by the
+    road rewrite's PT3, 2026-11-22: 2-8 roads in each of four dense boxes). Its sections where they cover all of it,
+    else the whole road (lanesections.replaced_roads' rule). Every cell a section's copy lies in lies in the road's own
+    copy's cells, which the window reads, so every window that holds the road decides the same."""
+    sids = {pid.split("|", 1)[0] for _c, pid in chosen}
+    sections = {}
+    for sid in sids:
+        road, sep, span = sid.partition("~lanes")
+        if sep and road in sids:
+            a, _d, b = span.partition("-")
+            if a.isdigit() and b.isdigit():
+                sections.setdefault(road, []).append((int(a), int(b), sid))
+    if not sections:
+        return chosen
+    drop = set()
+    for road, spans in sections.items():
+        end = 0
+        for a, b, _sid in sorted(spans):
+            if a > end:
+                break
+            end = max(end, b)
+        if end >= 1000000000:
+            drop.add(road)
+        else:
+            drop.update(sid for _a, _b, sid in spans)
+    return [(c, pid) for c, pid in chosen if pid.split("|", 1)[0] not in drop]
 
 
 def cell_forks(key, cell_fn, memo=None):
@@ -843,6 +967,7 @@ def anchor_m(spec):
 # are not solved (P3's lattice cuts, later): today's. BNE_ROADSHAPE_SHADOW=1 keeps P3a's shadow (nothing built).
 PROFILE_BUILT = PROFILE and os.environ.get("BNE_ROADSHAPE_SHADOW", "") not in ("1", "on", "true")
 SURFACE_PROFILE = PROFILE_BUILT and os.environ.get("BNE_ROADSURF_V3") == "surface"
+ROBUST_PROFILE = SURFACE_PROFILE and os.environ.get("BNE_PROFILE_ROBUST") != "0"
 PIN_FULL_M = 150.0          # m from an abutment along its approach the solve's change is pinned in full ...
 PIN_REACH_M = 200.0         # ... faded out to nothing here (the solve's weight toward today's is full from PROF_D1_M)
 PIN_MIN_DZ_M = 0.001        # m: an approach moved less than this nowhere is not pinned
@@ -1091,7 +1216,7 @@ def _knots(xy, step):
     return np.stack([dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])], axis=1), t, s
 
 
-def _ground_lines(store, decks):
+def _ground_lines(store, decks, with_ids=False):
     """The ground road lines within reach of the decks' ends (each feature's longest copy over the cells read; sorted
     by content: (first point, last point, vertices) to 1 mm)."""
     import mapcells
@@ -1116,10 +1241,13 @@ def _ground_lines(store, decks):
                 old = best.get(kk)
                 if old is None or (L, ln.tobytes()) > (old[0], old[1].tobytes()):
                     best[kk] = (L, ln)
-    out = [v[1] for v in best.values()]
-    out.sort(key=lambda ln: (round(float(ln[0, 0]), 3), round(float(ln[0, 1]), 3), round(float(ln[-1, 0]), 3),
-                             round(float(ln[-1, 1]), 3), len(ln)))
-    return out
+    def sort_key(k):
+        ln = best[k][1]
+        return (round(float(ln[0, 0]), 3), round(float(ln[0, 1]), 3), round(float(ln[-1, 0]), 3),
+                round(float(ln[-1, 1]), 3), len(ln))
+    ordered = sorted(best, key=sort_key)
+    out = [best[k][1] for k in ordered]
+    return (out, [k[0] for k in ordered]) if with_ids else out
 
 
 def _cell_ground(store, key):
@@ -1202,13 +1330,31 @@ def _surface_forks(store, keys, decks, dz, specs):
     return sorted(set(out))
 
 
+def _profile_rail_heads(store, lines, crossings, indices, ids):
+    """Rail-head elevations in the chain frame where the rail mesh has a lattice height."""
+    import fast
+    import railprofile
+    import railways
+    elev = getattr(store, "profile_bed_elev", None)
+    if elev is None or not railprofile.ENABLED:
+        return {}
+    fast.require(562, "surface_rail_samples")
+    samples = fast._ef.surface_rail_samples(lines, [(i, c[2]) for i, c in zip(indices, crossings)], railways.STEP_M)
+    rails = [(ids[i], "rail", "ground", np.array([a, b])) for i, (a, b, _) in zip(indices, samples)]
+    frame = store.frame
+    key = ("beds", round(float(frame.lat0), 7), round(float(frame.lon0), 7))
+    beds = railprofile.beds(frame, key, store.cell_fn, railways.point_ground(frame, elev), rails)
+    return {j: float(z[0] + t * (z[1] - z[0]) + railways.RAIL_TOP_M)
+            for j, ((_, _, t), z) in enumerate(zip(samples, beds)) if np.isfinite(z).all()}
+
+
 def profile_chain(store, comp, parts, ground, reqs, short=False):
     """One chain's shadow profile record (a dict), or None (no deck). parts: {key: (spec, xy, z, lon, level)} as
     published (the level: the chain pool's)."""
     import time
     import fast
     import roads as roadsmod
-    fast.require(560 if SURFACE_PROFILE else PROFILE_KERNEL, "profile_solve")
+    fast.require(562 if ROBUST_PROFILE else 560 if SURFACE_PROFILE else PROFILE_KERNEL, "profile_solve")
     ef = fast._ef
     keys, seen = [], set()
     for k in comp:          # (one deck kept twice under two part keys, a copy per cell: once, the first key's)
@@ -1231,13 +1377,18 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
         on_surface = any(sp.kind == "paved" and sp.cls in roadsurf3.V3_CLASSES for sp in specs)
     decks = [np.asarray(parts[k][1], np.float64)[:, :2] for k in keys]
     dz = [np.asarray(parts[k][2], np.float64) for k in keys]
-    gl = _ground_lines(store, decks)
+    membership = []
+    if on_surface and ROBUST_PROFILE:
+        gl, ground_ids = _ground_lines(store, decks, with_ids=True)
+        membership = [([k[0] for k in keys], ground_ids)]
+    else:
+        gl = _ground_lines(store, decks)
     dxy, doff = _flat(decks)
     gxy, goff = _flat(gl) if gl else (np.zeros((0, 2)), [0])
     half = [float(sp.width) / 2 for sp in specs]
     anc = [anchor_m(sp) for sp in specs]
     prm = [PROF_JOIN_M, PROF_DIR_M, dmath.cos(math.radians(PROF_ON_DEG)), PROF_STEP_M, float(PROF_MAX_PTS)]
-    axy, aoff, ameta, joins, ends = ef.profile_members(dxy, doff, half, anc, gxy, goff, prm)
+    axy, aoff, ameta, joins, ends = ef.profile_members(dxy, doff, half, anc, gxy, goff, prm, *membership)
     t1 = time.perf_counter()
     nd = len(keys)
     axy = np.asarray(axy, np.float64).reshape(-1, 2)
@@ -1289,23 +1440,37 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             jn += [m, 1, int(to) // 2, int(to) % 2, 1]
         else:
             pins += [m, 1, 2 if reach == 0 else 1]     # (an anchor: z and z'; a stop short (a junction): z)
-    floors, fmeta = [], []
+    floors, fmeta, sources = [], [], []
+    removed = []
     if reqs and reqs.get("req"):
         lines = reqs["lines"]
         clear = float(reqs["clear"])
         idx = {k: i for i, k in enumerate(keys)}
         mask = ()
-        if on_surface and reqs.get("road_crossings"):
+        ground_ids = []
+        rail_ids = []
+        rail_heads = {}
+        if (on_surface or ROBUST_PROFILE) and reqs.get("road_crossings"):
             gl, cr, road_z, gi = reqs["road_crossings"]
             if gi is None:
                 gi = roadsmod.fast_crossing_ground(lines, gl)
             mask = ef.surface_road_floors(
                 [np.c_[np.asarray(ln)[[0, -1], :2], np.asarray(parts[k][2])[[0, -1]]] for k, ln in zip(comp, lines)],
-                [np.asarray(g)[[0, -1], :2] for g in gl],
+                [np.asarray(g)[:, :2] if ROBUST_PROFILE else np.asarray(g)[[0, -1], :2] for g in gl],
                 [(c[0], g, *c[2], z) for c, g, z in zip(cr, gi, road_z)])
+            if ROBUST_PROFILE:
+                ground_ids = [reqs["floor_ids"][i] for i in gi] if "floor_ids" in reqs else []
+        if ROBUST_PROFILE and reqs.get("rail_crossings"):
+            _, rl, rcr, ri, ids = reqs["rail_crossings"]
+            rail_ids = [ids[i] for i in ri]
+            if on_surface:
+                rail_heads = _profile_rail_heads(store, rl, rcr, ri, ids)
         for n, r in enumerate(reqs["req"]):
             if n < len(mask) and not mask[n]:
-                continue
+                if ROBUST_PROFILE and ground_ids:
+                    removed.append((ground_ids[n], str(comp[int(r[0])]), float(r[1])))
+                if on_surface:
+                    continue
             k = comp[int(r[0])] if int(r[0]) < len(comp) else None
             if k not in idx:
                 continue
@@ -1313,8 +1478,18 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
             p = (float(dnp.interp(float(r[1]), s, ln[:, 0])), float(dnp.interp(float(r[1]), s, ln[:, 1])))
             c = float(r[3]) if len(r) > 3 and r[3] is not None else clear
-            floors += [float(idx[k]), p[0], p[1], float(r[2]) + c]
-            fmeta.append((idx[k], p[0], p[1], float(r[2]), c))     # (the probes': the surface under, the clearance)
+            lower = float(r[2])
+            if ROBUST_PROFILE:
+                j = n - len(mask)
+                if j < 0:
+                    sources.append(("road", ground_ids[n] if ground_ids else None, lower))
+                elif j < len(rail_ids):
+                    sources.append(("rail", rail_ids[j], lower))
+                    lower = rail_heads.get(j, lower)
+                else:
+                    sources.append(("water", None, lower))
+            floors += [float(idx[k]), p[0], p[1], lower + c]
+            fmeta.append((idx[k], p[0], p[1], lower, c))     # (the probes': the surface under, the clearance)
     sprm = [PROF_LAMBDA, PROF_W_G, PROF_D0_M, PROF_D1_M, PROF_EPS_W, PROF_MU, PROF_SPLIT_GAP_M, PROF_SHEET_DZ_M,
             dmath.cos(math.radians(PROF_SHEET_DEG)), PROF_SHEET_REACH_M, PROF_AT_GRADE_M, PROF_DECK_GROUND_M,
             PROF_MAX_GRADE, PROF_GRADE_ADD, PROF_MARGIN, float(PROF_ROUNDS), PROF_ACTIVE_TOL, PROF_RELEASE_TOL,
@@ -1322,8 +1497,28 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
     surface = []
     if on_surface:
         surface = [_surface_forks(store, keys, decks, dz, specs)]
-    zsol, report, tried = ef.profile_solve(allxy, koff, kz_all, np.ascontiguousarray(kg_all), deck, half + [0.0] * len(ameta),
+        if ROBUST_PROFILE:
+            # A road represented by a ground member contributes a relative
+            # floor: its own height can change in this QP.
+            approach_ids = [keys[int(a[0])][0] for a in ameta]
+            ground_floors = [((fid or "") if kind == "road" else "", row[4])
+                             for (kind, fid, _), row in zip(sources, fmeta)]
+            deck_depth = roadsmod.DECK_FULL_DEPTH if depth is None else float(depth)
+            surface.extend((True, (approach_ids, ground_floors), deck_depth + 2.3))
+    elif ROBUST_PROFILE:
+        surface = [None, True]
+    approach_half = [half[int(a[0])] for a in ameta] if on_surface and ROBUST_PROFILE else [0.0] * len(ameta)
+    zsol, report, tried = ef.profile_solve(allxy, koff, kz_all, np.ascontiguousarray(kg_all), deck, half + approach_half,
                                     level, under, abut, jn, pins, floors, sprm, *surface)
+    # S4c appends fixed-width observation records after the S4b summary.
+    audit = {}
+    if ROBUST_PROFILE and report[0] == 0:
+        audit["deck_depth_m"] = roadsmod.DECK_FULL_DEPTH if depth is None else float(depth)
+        audit["surface_floors"] = on_surface
+        audit["floor_sources"] = sources
+        audit["attachments"] = removed
+        audit["relaxations"] = [report[i:i + 10] for i in range(17, len(report), 10)]
+        report = report[:17]
     t3 = time.perf_counter()
     la, lo, _ = store.frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], 0.0)
     status = _STATUS[int(report[0])] if 0 <= int(report[0]) < len(_STATUS) else "solver"
@@ -1352,4 +1547,4 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
             "report": [round(float(v), 4) for v in report], "joins": [jn[i:i + 5] for i in range(0, len(jn), 5)],
             "pins": [pins[i:i + 3] for i in range(0, len(pins), 3)], "floors": len(floors) // 4,
             "members": members, "timing": {"members_s": t1 - t0, "sample_s": t2 - t1, "solve_s": t3 - t2},
-            "_built": built, "_floors": fmeta}
+            "_built": built, "_floors": fmeta, **audit}

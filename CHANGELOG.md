@@ -1,5 +1,29 @@
 # История изменений
 
+## Следующий выпуск — погода, дороги и потоковая загрузка
+
+### Изменения upstream
+
+- **Погода управляется из игры.** По умолчанию используется реальная погода. Можно выбрать один из 15 пресетов или передать управление настройкам BeamNG. Осадки прекращаются под укрытиями, трафик реагирует на дождь, снег и туман. Грозы добавляют вспышки и гром с задержкой по расстоянию. Зимний снег, гололёд и оголение лиственных деревьев требуют режима Winter grip. Длительное намокание дорог и изменение сцепления включаются отдельно через Wet roads.
+- **Revamped roads использует новый расчёт полотна и мостов.** В эксперименте учитываются нанесённые на карту полосы и площади проезжей части, раздельные уровни, парные настилы и подходы к ним. Концы моста сохраняют привязку к исходному участку карты. Новый расчёт тоннелей требует отдельного флага `BNE_ROADSYS_TUNNELS=on` вместе с `BNE_ROADSYS=surface`. Качество зависит от полноты данных о границах, высотах и разметке уровней.
+- **Подгрузка на скорости и после телепорта.** Сервер заранее запрашивает базовые фотографии вдоль пути. Предварительный блок земли не должен заменять уже выровненный. Обработка изображений, ряд операций с рельефом и построение железнодорожных мешей перенесены в Rust. Новый планировщик рабочих процессов включается отдельно через `BNE_V2_HOST=on`. Ускорение в игре на этой сборке не измерялось.
+- **Природные объекты из карты.** Появились отдельные флаги `BNE_NATURAL_*` для нанесённых на карту деревьев и рядов, типов листвы, каменистых поверхностей, скал и глубин. Все выключены по умолчанию. Результат зависит от покрытия источников и наличия соответствующих тегов.
+- **Региональные знаки и данные.** Обновлены профили указателей и правила разметки в отдельных странах. Отрисовка фотографий и поиск доступных источников получили исправления при коротких и неполных ответах. Источник космоснимков EOX 2023 заменён на слой 2016 для резерва и морских участков.
+
+### Наши правки
+
+- Сохранены российские знаки, разметка перекрёстков и поддержка кириллицы в указателях. Импортированы новые региональные профили upstream.
+- Сохранены отмена устаревших дорожных задач, последовательная публикация тайлов и защита от подстановки блока, который ещё строится. Участки трамвая на мостах используют высоту дорожного полотна вместе с новым нативным генератором рельсов.
+- Сохранены общая сборка ячейки растительности для нескольких процессов и проверка итоговых позиций деревьев у дорог.
+
+### Кэш и совместимость
+
+Требуется полный комплект обновления с нативным модулем **636**. Базовые форматы планов и дорожных фактов **77.33**, ячеек деревьев **34**. Опытные режимы используют отдельные ключи. Часть производных данных перестроится при посещении участка. Исходные загрузки можно оставить.
+
+### Проверки
+
+Модули пересобираются для Linux и Windows. Полный Windows CI проверит упакованный EXE, генерацию мира и артефакты выпуска.
+
 ## 1.10.1-beta.107 — российские перекрёстки
 
 ### Изменения upstream
@@ -1248,6 +1272,49 @@ Windows CI [43243249130](https://github.com/GaMeRaM/BeamNG.Earth/actions/runs/43
 - Локально прошли 62 Python-модуля, 111 Lua-модулей и JavaScript-проверки. Проверена геометрия проблемных участков у Ревды и ЖД-путепровода. Windows CI прошёл интеграционные тесты и запуск готового EXE; серверный образ прошёл 102 теста. Полная проверка всех изменений в игре ещё требуется.
 
 [Изменения upstream между базами](https://github.com/TecnaGamer/BeamNG.Earth/compare/f2def1dc...4e62211c)
+
+## Unreleased
+
+### Added
+- **Weather controls**: a Weather page in the BeamNG.Earth settings and a Weather ring in the radial menu. Real
+  weather, one of 15 presets (Clear, Few clouds, Cloudy, Overcast, Drizzle, Rain, Heavy rain, Thunderstorm, Fog, Light
+  snow, Snow, Blizzard, Sleet, Freezing rain, Hail shower) or Off (the game's own Time & Weather controls); intensity,
+  how fast the weather changes, rain and snow on or off, rain visibility, the real clouds, fog, wind and rain each on
+  or off, and a limit on how thick fog can get.
+- **Traffic in bad weather**: AI traffic turns its headlights on in rain, snow and fog and drives a little slower
+  (slow enough to stop within the visible distance in thick fog); street lamps come on earlier under a dark stormy sky.
+- **Winter (Experimental): bare trees.** With Winter on, oaks, beeches, birches, aspens and poplars lose their leaves
+  tree by tree as winter comes (by the date and the latitude) and show their bare twigs near and far; some oaks and
+  young beeches keep their dead brown leaves, as they do in real woods. Evergreens stay green.
+- **BeamMP**: `G.WEATHER` takes the new presets and `real-host` (everyone gets the live weather where the
+  longest-joined player is). `real` (each player's own weather) stays the default.
+- **Lightning and thunder** in thunderstorms (the real ones where the weather data has them, and the Thunderstorm and
+  Hail presets): flashes, bolts, and the thunder after the flash by the distance (about 5 seconds per mile). Players
+  with the same weather in multiplayer see the same strikes. Thunder and rain recordings are CC0 from Freesound.org
+  (credited in CREDITS.md and on the settings page).
+- **Storm light**: under a thick cloud deck, in rain and in thunderstorms the day gets darker and the sun loses its
+  sharp shadows.
+- **Rain streaks** (off by default, on the Weather page): streaks of falling rain around you, lit by the sun, headlights and street lamps, leaning in the wind
+  and as you drive, so rain shows by day and in the distance.
+- **Wet look**: sidewalks, markings, bridges and buildings get darker and glossier in rain and dry slowly after it (with
+  the winter road conditions on, they follow the road condition). City street asphalt is not wet-looking yet.
+- **Rain sounds**: light, steady and heavy rain by the rain's strength, muffled under roofs and bridges and in tunnels,
+  and rain drumming on the roof in the driver's view.
+- Each of these can be switched off on the Weather page.
+
+### Fixed
+- Reduced the chance of the game's terrain texture cache (`temp/art/terrainmaterialcache` in BeamNG's user folder)
+  filling up with old ground photos: they now go with their session, and a one-time clean-up at the next start removes
+  the ones earlier versions left behind (several GB on long-time test machines).
+- Rain particles now stop above the cloud base. Rain audio no longer uses the particle emitter's name.
+- Reduced the chance of rain or snow showing in tunnels, parking structures and under bridges: they now fade out there.
+- Snow should now be visible: it used a texture made for the main menu that drew tiny dots; it now has its own flakes,
+  sized by the temperature (big wet flakes near freezing, small dry ones in the cold), and stops at roofs.
+- Light rain should be easier to see, and rain and snow thicken the air and turn the fog grey instead of the warm haze
+  that made a rainstorm look like a sandstorm at sunrise.
+- Reduced the chance of raindrops popping in and out at the edge of the rain around you, and of star-shaped splashes
+  hanging in the air.
+- Reduced the chance of rain staying on after switching the weather off, over the 3D map or in a mission.
 
 ## 1.10.1 beta (2026-11-15)
 

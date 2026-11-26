@@ -63,6 +63,21 @@ def paint(tags):
     return 0 if tags.get("crossing") in UNPAINTED else M15
 
 
+STRIPED = ("zebra", "ladder", "ladder:skewed", "ladder:paired", "yes")
+
+
+def marked(tags):
+    """Whether a crossing node's tags map a striped crossing (BNE_NODE_MARKINGS, drivefeat.mapped_marks: any country):
+    crossing:markings zebra / ladder (continental bars) / yes, or crossing=zebra, crossing_ref=zebra; never at signals
+    (their junctions' crosswalks are drawn as today)."""
+    if tags.get("crossing") == "traffic_signals" or tags.get("crossing:signals") == "yes":
+        return False
+    m = str(tags.get("crossing:markings", "")).lower()
+    if m:
+        return m in STRIPED
+    return tags.get("crossing") == "zebra" or tags.get("crossing_ref") == "zebra"
+
+
 DE_MARKED = ("zebra", "marked", "uncontrolled")     # crossing=: a marked crossing without signals
 
 
@@ -125,6 +140,7 @@ def nodes(frame, infra_list):
         xy = np.column_stack([np.asarray(e), np.asarray(n)])
     crossings, lines, priority, zebras, signals, de, refuges, ru, ru_signs, ru_signals = [], [], [], [], [], [], [], [], [], []
     ru_widths, ru_heads = {}, []
+    striped = []
     for (cls, _, tag), p in zip(found, xy if found else ()):
         if cls == "crossing":
             try:
@@ -147,6 +163,8 @@ def nodes(frame, infra_list):
                 refuges.append((float(p[0]), float(p[1])))
             if paint(tag) & M15 and tag.get("crossing") != "traffic_signals":
                 zebras.append((float(p[0]), float(p[1])))
+            if marked(tag):
+                striped.append((float(p[0]), float(p[1])))
         elif cls == "traffic_signals":
             signals.append((float(p[0]), float(p[1])))
             mounting = tag.get("traffic_signals:mount", tag.get("support"))
@@ -161,7 +179,7 @@ def nodes(frame, infra_list):
         return any(math.hypot(z[0] - q[0], z[1] - q[1]) < SIGNALS_NEAR_M for q in signals)
     zebras = [z for z in zebras if not lit(z)]
     de = [(x, y, 0 if w and lit((x, y)) else w) for x, y, w in de]
-    return {"crossings": crossings, "ru_crossings": ru, "ru_signs": ru_signs, "ru_signal_crossings": ru_signals, "ru_crossing_widths": ru_widths, "ru_signal_heads": ru_heads, "zebras": zebras, "de_crossings": de, "islands": refuges,
+    return {"crossings": crossings, "ru_crossings": ru, "ru_signs": ru_signs, "ru_signal_crossings": ru_signals, "ru_crossing_widths": ru_widths, "ru_signal_heads": ru_heads, "zebras": zebras, "striped": striped, "de_crossings": de, "islands": refuges,
             "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
             "priority": np.array(priority, np.float64).reshape(-1, 3)}
 

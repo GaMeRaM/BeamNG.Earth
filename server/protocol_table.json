@@ -9,6 +9,7 @@
     "cx": {"type": "num"},
     "cy": {"type": "num"},
     "heightmap": {"type": "str"},
+    "terrainTicket": {"type": "int", "optional": true, "doc": "ownership of this terrain delivery until the mod releases it"},
     "size": {"type": "int"},
     "squareSize": {"type": "num"},
     "zBase": {"type": "num"},
@@ -18,7 +19,8 @@
     "materials": {"type": "list", "optional": true, "doc": "--surface on (surface.py)"},
     "base": {"type": "str", "optional": true},
     "baseSize": {"type": "num", "optional": true, "doc": "--near-visual detail: the block's photo"},
-    "ter": {"type": "str", "optional": true, "doc": "the block as a .ter (swapped in, no import)"}
+    "ter": {"type": "str", "optional": true, "doc": "the block as a .ter (swapped in, no import)"},
+    "cover": {"type": "dict", "optional": true, "doc": "{far key: m}: the exact sink of each far tile across the block's edge against this block (Connection.far_cover; farfield.lua 'partial')"}
    }
   }
  },
@@ -26,12 +28,24 @@
   "pose.cam": ["x", "y", "z", "fx", "fy", "fz", "fovDeg", "h"],
   "weather.cover": ["total", "low", "mid", "high"],
   "weather.wind": ["ms", "fromDeg", "gustMs"],
-  "weather.aloft": ["ms", "fromDeg"]
+  "weather.aloft": ["ms", "fromDeg"],
+  "hello.snow": ["mode", "cover", "depth"],
+  "snow.snow": ["mode", "cover", "depth"]
  },
  "mod_to_server": {
   "vector_resource": {"fields": {"id": {"type": "str"}, "url": {"type": "str"}}},
+  "debug_map": {
+   "fields": {
+    "id": {"type": "int"},
+    "layer": {"type": "str"},
+    "s": {"type": "num"},
+    "w": {"type": "num"},
+    "n": {"type": "num"},
+    "e": {"type": "num"}
+   }
+  },
   "hello": {
-   "doc": "sessions: the session folders whose files the mod's objects still use (farfield.heldSessions; a restarted server keeps an earlier run's folder named here, docs/ROADMAP.md \"Robustness\" 3)",
+   "doc": "sessions: the session folders whose files the mod's objects still use (terrain deliveries, far tiles and road tiles; a restarted server keeps each earlier session still named here, docs/ROADMAP.md \"Robustness\" 3)",
    "fields": {
     "protocol": {"type": "int"},
     "format": {"type": "int"},
@@ -42,6 +56,8 @@
     "slotSession": {"type": "str", "optional": true, "doc": "a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session"},
     "slotsHeld": {"type": ["list", "dict"], "optional": true},
     "streamLease": {"type": "int", "optional": true},
+    "terrainHeld": {"type": ["list", "dict"], "optional": true, "doc": "complete surviving ticket snapshot on reconnect"},
+    "terrainFiles": {"type": "int", "optional": true},
     "leaseId": {"type": "str", "optional": true},
     "leaseSession": {"type": "str", "optional": true},
     "held": {"type": ["list", "dict"], "optional": true},
@@ -91,6 +107,13 @@
     "cy": {"type": "num"}
    }
   },
+  "terrain_release": {
+   "doc": "return terrain delivery tickets, or all of them after the extension destroyed its TerrainBlock",
+   "fields": {
+    "tickets": {"type": "list", "optional": true},
+    "unloaded": {"type": "bool", "optional": true}
+   }
+  },
   "commit_terrain": {
    "fields": {
     "anchorId": {"type": "int"},
@@ -126,7 +149,9 @@
     "slotsGone": {"type": ["list", "dict"], "optional": true, "doc": "pooled far-tile slots whose far_tile's object is gone: [[slot, serial], ...] (matslots.py)"},
     "foci": {"type": ["list", "dict"], "optional": true, "doc": "other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)"},
     "guardHold": {"type": "bool", "optional": true, "doc": "the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)"},
-    "deckWait": {"type": ["list", "dict"], "optional": true, "doc": "the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)"}
+    "deckWait": {"type": ["list", "dict"], "optional": true, "doc": "the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)"},
+    "frameMs": {"type": "num", "optional": true, "doc": "2026-11-22 (architecture v2 V1, additive): the mean wall time of the game's frames since the last pose (governor.lua frameWindow): BNE_V2_HOST's scheduler lowers its CPU target when it rises over the game's own baseline (sched.rs Adapt)"},
+    "frameMaxMs": {"type": "num", "optional": true, "doc": "... and the longest of them"}
    }
   },
   "cache": {
@@ -261,6 +286,12 @@
    "doc": "town signs (townentry.py; additive): the settings page's switch, sent after every hello and on a change",
    "fields": {
     "on": {"type": "bool"}
+   }
+  },
+  "snow_mode": {
+   "doc": "winter (BNE_WINTER, snowcover.py; additive): another snow state live, a debug preset or none / real (dev tools and tests; the server answers with 'snow' and textures what is shown again)",
+   "fields": {
+    "mode": {"type": "str"}
    }
   },
   "road_wear": {
@@ -511,6 +542,17 @@
  },
  "server_to_mod": {
   "vector_resource": {"fields": {"id": {"type": "str"}, "data": {"type": "str", "optional": true}, "error": {"type": "str", "optional": true}}},
+  "debug_map_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "layers": {"type": "list", "optional": true},
+    "legend": {"type": "list", "optional": true},
+    "features": {"type": "list", "optional": true},
+    "note": {"type": "str", "optional": true},
+    "enabled": {"type": "dict", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
   "server_list": {
    "fields": {
     "servers": {"type": "list", "optional": true},
@@ -749,6 +791,7 @@
   },
   "hello": {
    "fields": {
+    "cliffs": {"type": "dict", "optional": true},
     "runtimeProfiler": {"type": "int", "optional": true},
     "waterguard": {"type": "int", "optional": true},
     "protocol": {"type": "int"},
@@ -759,6 +802,7 @@
     "privacyRegion": {"type": "str"},
     "telemetryConsent": {"type": "int", "doc": "the welcome page's telemetry defaults"},
     "streamLease": {"type": "int", "optional": true},
+    "terrainFiles": {"type": "int", "optional": true},
     "leaseId": {"type": "str", "optional": true},
     "memoryTier": {"type": "str", "optional": true},
     "memoryNote": {"type": "str", "optional": true, "doc": "low-memory machines only (budget.TIER lean / emergency)"},
@@ -785,6 +829,7 @@
     "deshadow": {"type": "str", "optional": true, "doc": "--deshadow lambert|full only (the settings page shows it)"},
     "colormatch": {"type": "str", "optional": true, "doc": "--colormatch s2 only (likewise)"},
     "season": {"type": "str", "optional": true, "doc": "--season auto / fall (seasonlook.lua tints the leaves)"},
+    "snow": {"type": "dict", "optional": true, "doc": "BNE_WINTER only (snowcover.hello): {mode, cover 0..8, depth bin 0..6 for a preset}: winterlook.lua's snow layer look and the grass under snow"},
     "mapPort": {"type": "int", "optional": true, "doc": "the world map's tile endpoint on 127.0.0.1 (maptiles.py)"},
     "prewarm": {"type": "str", "optional": true, "doc": "the shape listing our shapes' materials (prewarm.py; with map data)"},
     "imageryCredits": {"type": "list", "optional": true, "doc": "the world map's credits for its view: [[credit, w, s, e, n] or [credit]] per imagery source, and the rest (weather, elevation); with imagery on only"},
@@ -921,6 +966,7 @@
   "far_retex": {
    "doc": "--colormatch / --deshadow: a shown (or held) tile's texture rendered again under a new name (additive, protocol 4; exercised by RetexMessagesTest, a session whose colour-match regions turn ready)",
    "fields": {
+    "replacement": {"type": "dict", "optional": true},
     "anchorId": {"type": "int"},
     "key": {"type": "str"},
     "texture": {"type": "str"}
@@ -950,6 +996,8 @@
     "elevM": {"type": "num"},
     "slTempC": {"type": "num"},
     "pressureHpa": {"type": "num"},
+    "capeJkg": {"type": "num"},
+    "lpi": {"type": "num", "optional": true},
     "utcOffsetS": {"type": "int", "optional": true},
     "tz": {"type": "str", "optional": true},
     "credit": {"type": "str"}
@@ -964,6 +1012,34 @@
     "lon": {"type": "num"},
     "h": {"type": "num"},
     "source": {"type": "str"}
+   }
+  },
+  "snow": {
+   "doc": "winter (BNE_WINTER; additive): the snow state changed live (snow_mode): hello.snow's object again (winterlook.lua)",
+   "fields": {
+    "snow": {"type": "dict"}
+   }
+  },
+  "snowstate": {
+   "doc": "winter W1 (snow.py, BNE_WINTER only; additive, protocol 4): the snow kernel's state at the player for the UTC hour t; ground [depth mm, bin 0..6, cover 0..8, wet, crust, SWE mm, hours since snow]; roads / bridges per plow class P0..P4 [condition, lane depth mm, pavement degC, edge condition, edge depth mm, grit 0/1, wheel tracks 0..1]; bands [z m, depth mm facing the pole, facing the equator, forest floor, hours since snow]; lake [freezing degree-days, ice mm, days below 0 degC]; winter.lua applies it",
+   "fields": {
+    "v": {"type": "int"},
+    "t": {"type": "int"},
+    "src": {"type": "str"},
+    "winter": {"type": "bool"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num"},
+    "elevM": {"type": "int"},
+    "cellElevM": {"type": "int"},
+    "regime": {"type": "int"},
+    "airC": {"type": "num"},
+    "surfC": {"type": "num"},
+    "ground": {"type": "list"},
+    "roads": {"type": "list"},
+    "bridges": {"type": "list"},
+    "bands": {"type": "list"},
+    "lake": {"type": "list"},
+    "credit": {"type": "str"}
    }
   },
   "block_base": {

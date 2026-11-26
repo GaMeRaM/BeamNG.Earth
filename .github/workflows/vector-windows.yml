@@ -118,6 +118,8 @@ jobs:
         run: python tools/run_tests.py test_abutment_pad test_gradesep test_bridgeattachments test_railways test_railprofile test_geotiles test_roadgeo test_fargeo test_osmfuel_tiles test_footbridges test_guardrails test_powerlines test_power_clearance test_vegetation test_building_overrides test_lamp_collision test_seacarve --par 2 --timeout 180 --logs build/road-integration-tests
       - name: Nonblocking tile publication and affinity
         run: python tools/run_tests.py test_tilepublish test_colormatch test_cpupin --par 2 --logs build/road-integration-tests
+      - name: Road system, winter and host regressions
+        run: python tools/run_tests.py test_roadsys test_natural test_season test_snow test_snowcover test_winterpacks test_v2host test_rail_flat_sep test_railstationmesh --par 2 --timeout 180 --logs build/road-integration-tests
       - name: Record tested dependency versions
         if: always()
         shell: bash

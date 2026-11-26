@@ -259,7 +259,9 @@ def search_ids(lat, lon, range_m, cache_dir, iface=None, timeout=30.0):
 # central Paris), so a region's list is short. Kept REGION_TTL_S, then asked again (a failed refresh keeps the old).
 REGION_DEG = 0.5
 REGION_TTL_S = 14 * 86400.0
-REGION_RETRY_S = 60.0          # shared across processes: an unavailable optional catalog must not delay every tile
+REGION_RETRY_S = 600.0          # a stale region list's failed refresh: asked again after this, doubling to a day
+_region_backoff = {}            # (i, j) -> netfetch.Backoff (under _region_lock)
+_region_lock = threading.Lock()
 REGION_PAGES = 20               # (the search is paged: /<page>, from 1, until an empty page)
 
 
@@ -323,6 +325,12 @@ def _region_ids_fetch(lat, lon, cache_dir, iface, timeout):
             return [int(v) for v in old]
     except (OSError, ValueError, TypeError):
         old = None
+    with _region_lock:      # (a stale list: the search asked again only after the backoff, not on every tile)
+        backoff = _region_backoff.get((i, j))
+        if backoff is None:
+            backoff = _region_backoff[(i, j)] = netfetch.Backoff(REGION_RETRY_S, 86400.0)
+        if old is not None and not backoff.due(time.monotonic()):
+            return [int(v) for v in old]
     ids = []
     try:
         for page in range(1, REGION_PAGES + 1):
@@ -338,8 +346,9 @@ def _region_ids_fetch(lat, lon, cache_dir, iface, timeout):
         # A retry marker is separate from the successful list: outages never become a cached empty region.
         with open(path + ".retry", "w"):
             pass
-        if old is not None:
-            log.warning("3dmr search %s,%s: %s (the cached list kept)", i, j, e)
+        if old is not None:     # (stale-if-error: logged once in a row, asked again after the backoff)
+            with _region_lock:
+                netfetch.refresh_failed(log, backoff, time.monotonic(), f"3dmr search {i},{j}", e)
             return [int(v) for v in old]
         log.warning("3dmr search %s,%s: %s", i, j, e)
         revisit.fault()
@@ -351,6 +360,8 @@ def _region_ids_fetch(lat, lon, cache_dir, iface, timeout):
     staging.replace(tmp, path)
     with contextlib.suppress(FileNotFoundError):
         os.unlink(path + ".retry")
+    with _region_lock:
+        backoff.ok()
     log.info("3dmr search %s,%s: %d models", i, j, len(ids))
     return ids
 
@@ -652,7 +663,7 @@ def _credit_position(path, cache_dir, model_id):
 def credited_near(lat, lon, range_m, cache_dir):
     if not enabled() or not cache_dir:
         return False
-    fast.require(557, "credited_model_near")
+    fast.require(576, "credited_model_near")
     return fast._ef.credited_model_near(_near_memo, lat, lon, range_m, cache_dir, _credit_position)
 
 

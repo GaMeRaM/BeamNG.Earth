@@ -526,6 +526,7 @@ class BathyKeptTest(unittest.TestCase):
             self.assertTrue(b.complete)
 
     def test_prefetch_points_queues_the_cells(self):
+        import glob
         import time
         with tempfile.TemporaryDirectory() as d:
             sc = seacarve.SeaCarver(BathyMapData(), d)
