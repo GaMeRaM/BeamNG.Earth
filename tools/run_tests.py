@@ -82,7 +82,8 @@ class Runner:
         # --durations was introduced in Python 3.12; the companion supports 3.10+.
         with open(os.path.join(self.logs, f"{m}.log"), "w", encoding="utf-8") as log:
             p = st["proc"] = subprocess.Popen(
-                [sys.executable, "-B", "-u", os.path.abspath(__file__), "--worker", m, str(self.timeout)], cwd=TESTS, env=dict(os.environ, PYTHONUNBUFFERED="1"),
+                [sys.executable, "-B", "-u", os.path.abspath(__file__), "--worker", m, str(self.timeout)], cwd=TESTS,
+                env=dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", PYTHONUTF8="1"),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                 start_new_session=os.name != "nt")      # its own process group: killpg reaches its children
             timer = threading.Timer(self.timeout, self.timed_out, (st,))
